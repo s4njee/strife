@@ -1,6 +1,7 @@
 import { useNavigate } from '@solidjs/router'
 import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
 import type { FolderItem } from '../api/types'
+import { ContextMenu, type ContextMenuAction } from './ContextMenu'
 import './FileTable.css'
 
 interface FileTableProps {
@@ -8,6 +9,15 @@ interface FileTableProps {
   loading: boolean
   error?: string
   onRetry: () => void
+  onRename?: (item: FolderItem) => void
+  onMove?: (items: FolderItem[]) => void
+  onTrash?: (items: FolderItem[]) => void
+}
+
+interface ContextMenuState {
+  x: number
+  y: number
+  items: FolderItem[]
 }
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -22,6 +32,7 @@ export function FileTable(props: FileTableProps) {
   const navigate = useNavigate()
   const [selectedIds, setSelectedIds] = createSignal<Set<string>>(new Set())
   const [anchorId, setAnchorId] = createSignal<string>()
+  const [contextMenu, setContextMenu] = createSignal<ContextMenuState>()
   let selectAllCheckbox: HTMLInputElement | undefined
   const sortedItems = createMemo(() =>
     [...props.items].sort((left, right) => {
@@ -101,6 +112,38 @@ export function FileTable(props: FileTableProps) {
     }
   }
 
+  const openContextMenu = (item: FolderItem, event: MouseEvent) => {
+    event.preventDefault()
+    let itemIds = selectedIds()
+    if (!itemIds.has(item.id)) {
+      itemIds = new Set([item.id])
+      setSelectedIds(itemIds)
+      setAnchorId(item.id)
+    }
+
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: sortedItems().filter((candidate) => itemIds.has(candidate.id)),
+    })
+  }
+
+  const runContextAction = (action: ContextMenuAction) => {
+    const state = contextMenu()
+    if (!state) return
+
+    if (action === 'open' && state.items.length === 1) {
+      openFolder(state.items[0])
+    } else if (action === 'rename' && state.items.length === 1) {
+      props.onRename?.(state.items[0])
+    } else if (action === 'move') {
+      props.onMove?.(state.items)
+    } else if (action === 'trash') {
+      props.onTrash?.(state.items)
+    }
+    setContextMenu(undefined)
+  }
+
   return (
     <div class="file-table-wrap">
       <Show when={selectedCount() > 0}>
@@ -164,6 +207,7 @@ export function FileTable(props: FileTableProps) {
                       }}
                       aria-selected={selectedIds().has(item.id)}
                       onClick={(event) => selectRow(item, event)}
+                      onContextMenu={(event) => openContextMenu(item, event)}
                       onDblClick={() => openFolder(item)}
                       data-kind={item.kind}
                     >
@@ -193,6 +237,17 @@ export function FileTable(props: FileTableProps) {
             </table>
           </Show>
         </Show>
+      </Show>
+      <Show when={contextMenu()}>
+        {(state) => (
+          <ContextMenu
+            x={state().x}
+            y={state().y}
+            items={state().items}
+            onAction={runContextAction}
+            onClose={() => setContextMenu(undefined)}
+          />
+        )}
       </Show>
     </div>
   )

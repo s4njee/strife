@@ -554,14 +554,25 @@ As a user, I want a right-click context menu on selected items with folder opera
 
 **Acceptance Criteria:**
 
-- [ ] Right-clicking a row (or selected rows) opens a context menu.
-- [ ] Menu items for folders: "Open", "Rename", "Move to…", "Move to Trash".
-- [ ] Menu items are contextually correct (e.g., "Open" only for folders in this milestone; files come later).
-- [ ] Clicking outside the menu or pressing Escape closes it.
-- [ ] The menu is positioned near the cursor and adjusts to stay within the viewport.
-- [ ] Menu renders correctly in both themes.
-- [ ] If multiple items are selected and you right-click one of them, the menu applies to the entire selection.
-- [ ] If you right-click a non-selected item, it selects only that item and opens the menu for it.
+- [x] Right-clicking a row (or selected rows) opens a context menu.
+- [x] Menu items for folders: "Open", "Rename", "Move to…", "Move to Trash".
+- [x] Menu items are contextually correct (e.g., "Open" only for folders in this milestone; files come later).
+- [x] Clicking outside the menu or pressing Escape closes it.
+- [x] The menu is positioned near the cursor and adjusts to stay within the viewport.
+- [x] Menu renders correctly in both themes.
+- [x] If multiple items are selected and you right-click one of them, the menu applies to the entire selection.
+- [x] If you right-click a non-selected item, it selects only that item and opens the menu for it.
+
+**Implementation report:** Added a cursor-positioned, viewport-clamped context menu with folder-aware Open, Rename, Move to…, and Move to Trash actions, plus outside-click and Escape dismissal. Browser checks confirmed single and multi-folder menus, selection preservation, replacement when right-clicking an unselected file, contextually absent file actions, and an eight-pixel viewport edge clamp.
+
+**New files:**
+
+- `apps/web/src/components/ContextMenu.css`
+- `apps/web/src/components/ContextMenu.tsx`
+
+**Modified files:**
+
+- `apps/web/src/components/FileTable.tsx`
 
 ---
 
