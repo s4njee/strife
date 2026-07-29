@@ -204,6 +204,41 @@ pub async fn mark_import_stable(
     set_import_entry_state(pool, entry_id, ImportEntryState::Stable).await
 }
 
+/// Checkpoints an entry immediately before its staged object is finalized.
+///
+/// # Errors
+///
+/// Returns the database error when the stable entry cannot be updated.
+pub async fn mark_importing(
+    pool: &PgPool,
+    entry_id: Uuid,
+) -> Result<ImportEntryRecord, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        UPDATE import_entries
+        SET state = 'importing', error_message = NULL, updated_at = now()
+        WHERE id = $1 AND state IN ('stable', 'importing')
+        RETURNING *
+        ",
+    )
+    .bind(entry_id)
+    .fetch_one(pool)
+    .await
+}
+
+/// Lists entries left at the durable importing checkpoint by an interruption.
+///
+/// # Errors
+///
+/// Returns the database error when interrupted entries cannot be queried.
+pub async fn list_importing_entries(pool: &PgPool) -> Result<Vec<ImportEntryRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        "SELECT * FROM import_entries WHERE state = 'importing' ORDER BY updated_at, id",
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// Returns an entry to discovery after its source changes during staging.
 ///
 /// # Errors

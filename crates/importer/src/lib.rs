@@ -27,6 +27,14 @@ pub struct ScanReport {
     pub special_entries_skipped: usize,
 }
 
+/// Outcome of replaying entries interrupted at the importing checkpoint.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RecoveryReport {
+    pub attempted: usize,
+    pub completed: usize,
+    pub failures: Vec<(Uuid, String)>,
+}
+
 /// One regular-file observation made by the scanner.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiscoveredFile {
@@ -294,6 +302,7 @@ async fn import_entry_inner(
     };
     let checksum = checksum_object(storage, staging_key).await?;
     let mime_type = storage.detect_mime(staging_key).await?;
+    strife_db::mark_importing(pool, entry.id).await?;
     let original_key = StorageKey::original(entry.id);
     storage.move_object(staging_key, original_key).await?;
 
@@ -342,6 +351,41 @@ async fn import_entry_inner(
         .with_context(|| format!("remove imported source {}", source_path.display()))?;
     prune_empty_source_directories(watch_root, source_path.parent()).await;
     Ok(Some(node))
+}
+
+/// Replays all entries that were durably checkpointed as importing before a
+/// service interruption. One failure does not prevent recovery of later files.
+///
+/// # Errors
+///
+/// Returns an error only when the interrupted-entry list cannot be loaded.
+pub async fn recover_interrupted_imports(
+    pool: &PgPool,
+    storage: &dyn StorageBackend,
+    watch_root: &Path,
+    destination_folder_id: Uuid,
+    guard: DiskGuard,
+) -> Result<RecoveryReport> {
+    let entries = strife_db::list_importing_entries(pool).await?;
+    let mut report = RecoveryReport::default();
+    for entry in entries {
+        report.attempted += 1;
+        match import_entry(
+            pool,
+            storage,
+            watch_root,
+            destination_folder_id,
+            &entry,
+            guard,
+        )
+        .await
+        {
+            Ok(Some(_)) => report.completed += 1,
+            Ok(None) => {}
+            Err(error) => report.failures.push((entry.id, error.to_string())),
+        }
+    }
+    Ok(report)
 }
 
 async fn checksum_object(storage: &dyn StorageBackend, key: StorageKey) -> Result<String> {

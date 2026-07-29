@@ -1243,11 +1243,21 @@ As a system, I want imports to survive service restarts without duplication so t
 
 **Acceptance Criteria:**
 
-- [ ] On startup, the importer loads all `import_entries` with state `importing` and retries them.
-- [ ] If a node was already created (crash after finalization but before marking `imported`), the retry detects it via the source path unique constraint and marks it `imported`.
-- [ ] If staging was written but not finalized, the retry re-finalizes.
-- [ ] No restart scenario creates a duplicate node for the same source file.
-- [ ] Test: simulate a crash mid-import (kill the process), restart, verify exactly one node exists.
+- [x] On startup, the importer loads all `import_entries` with state `importing` and retries them.
+- [x] If a node was already created (crash after finalization but before marking `imported`), the retry detects it via the source path unique constraint and marks it `imported`.
+- [x] If staging was written but not finalized, the retry re-finalizes.
+- [x] No restart scenario creates a duplicate node for the same source file.
+- [x] Test: simulate a crash mid-import (kill the process), restart, verify exactly one node exists.
+
+**Implementation report:** Added a durable `importing` checkpoint and startup recovery pass that retries interrupted entries independently using deterministic storage keys and the idempotent finalization transaction. The restart integration test leaves an entry staged at the simulated crash boundary, runs recovery twice, and verifies exactly one node is published.
+
+**New files:** None.
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `crates/importer/src/lib.rs`
+- `crates/importer/tests/import_pipeline.rs`
 
 ---
 

@@ -1,7 +1,10 @@
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_db::{DEFAULT_IMPORT_SOURCE_ID, MIGRATOR, ROOT_NODE_ID, list_pending_entries};
-use strife_importer::{PostgresDiscoverySink, ScanOptions, import_entry, scan_directory};
-use strife_storage::{DiskGuard, LocalFsBackend};
+use strife_importer::{
+    PostgresDiscoverySink, ScanOptions, import_entry, recover_interrupted_imports, scan_directory,
+    stage_import_entry,
+};
+use strife_storage::{DiskGuard, LocalFsBackend, StorageBackend, StorageKey};
 use uuid::Uuid;
 
 async fn test_pool() -> Option<PgPool> {
@@ -160,6 +163,93 @@ async fn imports_a_tree_once_with_hierarchy_checksums_and_jobs() {
         .expect("count entries after repeat scan"),
         5
     );
+
+    tokio::fs::remove_dir_all(&watch_root)
+        .await
+        .expect("remove watch fixture");
+    tokio::fs::remove_dir_all(&storage_root)
+        .await
+        .expect("remove storage fixture");
+}
+
+#[tokio::test]
+async fn startup_replays_an_interrupted_staged_entry_exactly_once() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL integration test");
+        return;
+    };
+    let fixture = format!("restart-{}", Uuid::new_v4());
+    let watch_root = std::env::temp_dir().join(format!("strife-watch-{fixture}"));
+    let storage_root = std::env::temp_dir().join(format!("strife-storage-{fixture}"));
+    tokio::fs::create_dir_all(&watch_root)
+        .await
+        .expect("create watch root");
+    tokio::fs::write(watch_root.join(format!("{fixture}.txt")), b"resume me")
+        .await
+        .expect("write source");
+    let sink = PostgresDiscoverySink::new(&pool);
+    scan_directory(
+        &watch_root,
+        DEFAULT_IMPORT_SOURCE_ID,
+        ScanOptions::default(),
+        &sink,
+    )
+    .await
+    .expect("discover source");
+    let entry = list_pending_entries(&pool, DEFAULT_IMPORT_SOURCE_ID)
+        .await
+        .expect("load entry")
+        .into_iter()
+        .find(|entry| entry.source_path == format!("{fixture}.txt"))
+        .expect("fixture entry");
+    let storage = LocalFsBackend::new(&storage_root)
+        .await
+        .expect("create storage");
+
+    stage_import_entry(&pool, &storage, &watch_root, &entry)
+        .await
+        .expect("write durable staging");
+    strife_db::mark_importing(&pool, entry.id)
+        .await
+        .expect("checkpoint importing");
+    assert!(
+        storage
+            .exists(StorageKey::staging(entry.id))
+            .await
+            .expect("inspect staged object")
+    );
+
+    let report = recover_interrupted_imports(
+        &pool,
+        &storage,
+        &watch_root,
+        ROOT_NODE_ID,
+        DiskGuard::new(100).expect("valid guard"),
+    )
+    .await
+    .expect("recover interrupted import");
+    assert_eq!(report.attempted, 1);
+    assert_eq!(report.completed, 1);
+    assert!(report.failures.is_empty());
+    let duplicate_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM nodes WHERE parent_id = $1 AND name = $2 AND kind = 'file'",
+    )
+    .bind(ROOT_NODE_ID)
+    .bind(format!("{fixture}.txt"))
+    .fetch_one(&pool)
+    .await
+    .expect("count result nodes");
+    assert_eq!(duplicate_count, 1);
+    let repeat = recover_interrupted_imports(
+        &pool,
+        &storage,
+        &watch_root,
+        ROOT_NODE_ID,
+        DiskGuard::new(100).expect("valid guard"),
+    )
+    .await
+    .expect("repeat recovery");
+    assert_eq!(repeat.attempted, 0);
 
     tokio::fs::remove_dir_all(&watch_root)
         .await
