@@ -1,0 +1,164 @@
+.file-table-wrap {
+  min-height: 28rem;
+  overflow: auto;
+}
+
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+}
+
+.file-table th,
+.file-table td {
+  height: 2.65rem;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--color-border-row);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.file-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 2.4rem;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.file-table__row:nth-child(even) {
+  background: color-mix(in oklab, var(--color-surface-raised) 40%, transparent);
+}
+
+.file-table__row:hover {
+  background: var(--color-surface-raised);
+}
+
+.file-table__row[data-kind='folder'] {
+  cursor: default;
+}
+
+.file-table__check,
+.file-table__icon {
+  width: 2.5rem;
+  padding-right: 0 !important;
+}
+
+.file-table__check input {
+  width: 0.875rem;
+  height: 0.875rem;
+  accent-color: var(--color-accent);
+}
+
+.file-table__icon svg,
+.file-table-state svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: var(--color-text-muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.file-table__name {
+  width: 45%;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.file-table__kind {
+  color: var(--color-text-tertiary);
+}
+
+.file-table-state {
+  display: grid;
+  min-height: 28rem;
+  place-content: center;
+  justify-items: center;
+  padding: var(--space-8);
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.file-table-state strong {
+  color: var(--color-text-primary);
+}
+
+.file-table-state p {
+  margin: var(--space-2) 0 var(--space-4);
+  font-size: var(--font-size-md);
+}
+
+.file-table-state button {
+  border: 1px solid var(--color-border-raised);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface-input);
+  cursor: pointer;
+}
+
+.file-table-state--empty {
+  gap: var(--space-3);
+}
+
+.file-table-state--empty svg {
+  width: 2rem;
+  height: 2rem;
+  stroke: var(--color-text-faint);
+}
+
+.file-table-skeleton {
+  display: grid;
+  gap: 1px;
+  padding-top: 2.4rem;
+}
+
+.file-table-skeleton__row {
+  display: grid;
+  grid-template-columns: 45% 12% 12% 18%;
+  gap: var(--space-6);
+  align-items: center;
+  height: 2.65rem;
+  padding: 0 var(--space-4) 0 6rem;
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.file-table-skeleton__row span {
+  height: 0.55rem;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-raised) 25%,
+    var(--color-surface-input) 50%,
+    var(--color-surface-raised) 75%
+  );
+  background-size: 200% 100%;
+  animation: file-table-shimmer 1.25s infinite linear;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes file-table-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}

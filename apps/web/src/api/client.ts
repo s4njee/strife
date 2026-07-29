@@ -2,6 +2,8 @@ import type {
   ApiReadiness,
   DependencyStatus,
   FolderAncestor,
+  FolderChildrenResponse,
+  FolderItem,
   ReadinessResponse,
 } from './types'
 
@@ -88,6 +90,43 @@ export async function getFolderAncestors(
   return body
 }
 
+export async function getFolderChildren(
+  folderId: string,
+  signal?: AbortSignal,
+): Promise<FolderChildrenResponse> {
+  let response: Response
+
+  try {
+    response = await fetch(`/api/folders/${folderId}/children?limit=100`, {
+      headers: { Accept: 'application/json' },
+      signal,
+    })
+  } catch (error) {
+    throw new ApiClientError('The folder contents could not be loaded.', {
+      cause: error,
+    })
+  }
+
+  if (!response.ok) {
+    throw new ApiClientError(
+      `The folder contents request failed (${response.status}).`,
+    )
+  }
+
+  const body: unknown = await response.json()
+  if (!isFolderChildrenResponse(body)) {
+    throw new ApiClientError('The folder contents response was invalid.')
+  }
+
+  return {
+    items: body.items.map((item) => ({
+      ...item,
+      size_bytes: item.size_bytes ?? null,
+    })),
+    next_cursor: body.next_cursor,
+  }
+}
+
 function isReadinessResponse(value: unknown): value is ReadinessResponse {
   if (!isRecord(value)) return false
 
@@ -109,6 +148,31 @@ function isFolderAncestor(value: unknown): value is FolderAncestor {
     isRecord(value) &&
     typeof value.id === 'string' &&
     typeof value.name === 'string'
+  )
+}
+
+function isFolderChildrenResponse(
+  value: unknown,
+): value is FolderChildrenResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.every(isFolderItem) &&
+    (value.next_cursor === null || typeof value.next_cursor === 'string')
+  )
+}
+
+function isFolderItem(value: unknown): value is FolderItem {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    (value.kind === 'folder' || value.kind === 'file') &&
+    (value.size_bytes === undefined ||
+      value.size_bytes === null ||
+      typeof value.size_bytes === 'number') &&
+    typeof value.created_at === 'string' &&
+    typeof value.updated_at === 'string'
   )
 }
 

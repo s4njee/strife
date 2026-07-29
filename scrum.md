@@ -496,14 +496,27 @@ As a user, I want a dense table displaying folder contents with columns for name
 
 **Acceptance Criteria:**
 
-- [ ] A `<FileTable>` component renders children of the current folder in a table.
-- [ ] Columns: checkbox (selection), icon (folder/file), Name, Kind, Size (formatted: KB/MB/GB), Date Modified.
-- [ ] Folders are listed before files by default.
-- [ ] Double-clicking a folder row navigates into it.
-- [ ] Empty folder shows a centered empty state message: "This folder is empty".
-- [ ] Loading state shows a skeleton/shimmer animation.
-- [ ] Error state shows a retry button with an error message.
-- [ ] Rows have hover highlighting and alternating row shading in both themes.
+- [x] A `<FileTable>` component renders children of the current folder in a table.
+- [x] Columns: checkbox (selection), icon (folder/file), Name, Kind, Size (formatted: KB/MB/GB), Date Modified.
+- [x] Folders are listed before files by default.
+- [x] Double-clicking a folder row navigates into it.
+- [x] Empty folder shows a centered empty state message: "This folder is empty".
+- [x] Loading state shows a skeleton/shimmer animation.
+- [x] Error state shows a retry button with an error message.
+- [x] Rows have hover highlighting and alternating row shading in both themes.
+
+**Implementation report:** Added a dense folder-contents table with checkbox/icon/name/kind/size/date columns, folder-first ordering, formatted sizes and dates, folder double-click navigation, and explicit shimmer, retryable error, and empty states. Browser checks covered loading-to-empty behavior plus representative hosted-preview folder/file rows, including a 2.5 MB file and successful routed folder opening.
+
+**New files:**
+
+- `apps/web/src/components/FileTable.css`
+- `apps/web/src/components/FileTable.tsx`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 

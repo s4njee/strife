@@ -1,8 +1,9 @@
 import { useParams } from '@solidjs/router'
 import { createResource, Show, type JSX } from 'solid-js'
-import { getFolderAncestors } from '../api/client'
-import type { FolderAncestor } from '../api/types'
+import { getFolderAncestors, getFolderChildren } from '../api/client'
+import type { FolderAncestor, FolderItem } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
+import { FileTable } from '../components/FileTable'
 
 const ROOT_FOLDER_ID = '00000000-0000-0000-0000-000000000001'
 
@@ -11,6 +12,7 @@ interface WorkspaceViewProps {
   title: string
   description: string
   breadcrumb?: JSX.Element
+  children?: JSX.Element
 }
 
 function WorkspaceView(props: WorkspaceViewProps) {
@@ -22,7 +24,7 @@ function WorkspaceView(props: WorkspaceViewProps) {
         <h1>{props.title}</h1>
         <p class="workspace-view__description">{props.description}</p>
       </header>
-      <div class="workspace-view__surface" />
+      <div class="workspace-view__surface">{props.children}</div>
     </section>
   )
 }
@@ -35,7 +37,9 @@ export function RootFolderView() {
       eyebrow="Library"
       title="All Files"
       description="Everything stored in your Strife drive."
-    />
+    >
+      <FolderContents folderId={ROOT_FOLDER_ID} />
+    </WorkspaceView>
   )
 }
 
@@ -66,9 +70,61 @@ export function FolderView() {
       eyebrow="Folder"
       title={title()}
       description="Browse this folder's contents."
+    >
+      <FolderContents folderId={params.id} />
+    </WorkspaceView>
+  )
+}
+
+function FolderContents(props: { folderId: string }) {
+  const [children, { refetch }] = createResource(
+    () =>
+      import.meta.env.VITE_STATIC_PREVIEW === 'true' ? false : props.folderId,
+    (folderId) => getFolderChildren(folderId),
+  )
+  const items = () =>
+    import.meta.env.VITE_STATIC_PREVIEW === 'true'
+      ? previewItems
+      : (children()?.items ?? [])
+
+  return (
+    <FileTable
+      items={items()}
+      loading={children.loading}
+      error={
+        children.error instanceof Error ? children.error.message : undefined
+      }
+      onRetry={() => void refetch()}
     />
   )
 }
+
+const previewItems: FolderItem[] = [
+  {
+    id: '20000000-0000-0000-0000-000000000001',
+    name: 'Family Photos',
+    kind: 'folder',
+    size_bytes: null,
+    created_at: '2026-07-01T14:30:00Z',
+    updated_at: '2026-07-27T18:42:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000002',
+    name: 'Projects',
+    kind: 'folder',
+    size_bytes: null,
+    created_at: '2026-06-14T11:12:00Z',
+    updated_at: '2026-07-26T09:18:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000003',
+    name: 'Home inventory.pdf',
+    kind: 'file',
+    size_bytes: 2_480_000,
+    created_at: '2026-07-18T20:05:00Z',
+    updated_at: '2026-07-18T20:05:00Z',
+  },
+]
 
 export function FavoritesView() {
   return (
