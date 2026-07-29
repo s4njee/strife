@@ -97,6 +97,20 @@ pub struct UpsertImportEntry<'a> {
     pub source_modified_at: DateTime<Utc>,
 }
 
+/// Data required to atomically publish one staged watched-folder file.
+pub struct FinalizeImport<'a> {
+    pub entry_id: Uuid,
+    pub destination_folder_id: Uuid,
+    pub directory_names: &'a [String],
+    pub display_name: &'a str,
+    pub original_storage_key: Uuid,
+    pub byte_size: i64,
+    pub mime_type: &'a str,
+    pub checksum_sha256: &'a str,
+    pub source_created_at: Option<DateTime<Utc>>,
+    pub source_modified_at: DateTime<Utc>,
+}
+
 /// Fetches an import source by identifier.
 ///
 /// # Errors
@@ -272,6 +286,156 @@ pub async fn mark_import_failed(
     .await
 }
 
+/// Atomically recreates source folders, publishes a file/object, enqueues
+/// metadata extraction, and completes its import entry.
+///
+/// Matching active folders are reused. Any matching file or final file-name
+/// collision fails the entire transaction.
+///
+/// # Errors
+///
+/// Returns `NotFound`, `NotReady`, or `NameConflict` for expected import
+/// failures, and `Database` for other persistence errors.
+pub async fn finalize_import(
+    pool: &PgPool,
+    input: FinalizeImport<'_>,
+) -> Result<NodeRecord, FinalizeImportError> {
+    let mut transaction = pool.begin().await?;
+    let entry = sqlx::query_as::<_, ImportEntryRecord>(
+        "SELECT * FROM import_entries WHERE id = $1 FOR UPDATE",
+    )
+    .bind(input.entry_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(FinalizeImportError::NotFound)?;
+    if entry.state == ImportEntryState::Imported {
+        let node_id = entry.resulting_node_id.ok_or_else(|| {
+            sqlx::Error::Protocol("imported entry has no resulting node".to_owned())
+        })?;
+        let node = load_node_in_transaction(&mut transaction, node_id)
+            .await?
+            .ok_or(FinalizeImportError::NotFound)?;
+        transaction.commit().await?;
+        return Ok(node);
+    }
+    if entry.state != ImportEntryState::Stable && entry.state != ImportEntryState::Importing {
+        return Err(FinalizeImportError::NotReady);
+    }
+    ensure_import_destination(&mut transaction, input.destination_folder_id).await?;
+
+    let mut parent_id = input.destination_folder_id;
+    for name in input.directory_names {
+        parent_id = find_or_create_import_folder(&mut transaction, parent_id, name).await?;
+    }
+    let node = sqlx::query_as::<_, NodeRecord>(
+        r"
+        INSERT INTO nodes (
+            id, parent_id, name, kind, source_created_at, source_modified_at
+        )
+        VALUES ($1, $2, $3, 'file', $4, $5)
+        RETURNING
+            id, parent_id, name, kind, lifecycle_state, source_created_at,
+            source_modified_at, created_at, updated_at
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(parent_id)
+    .bind(input.display_name)
+    .bind(input.source_created_at)
+    .bind(input.source_modified_at)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(map_import_finalize_error)?;
+    insert_finalized_object(
+        &mut transaction,
+        node.id,
+        input.original_storage_key,
+        input.byte_size,
+        input.mime_type,
+        input.checksum_sha256,
+    )
+    .await?;
+    enqueue_metadata_job(&mut transaction, node.id).await?;
+    sqlx::query(
+        r"
+        UPDATE import_entries
+        SET state = 'imported', resulting_node_id = $2, source_checksum = $3,
+            error_message = NULL, updated_at = now()
+        WHERE id = $1
+        ",
+    )
+    .bind(input.entry_id)
+    .bind(node.id)
+    .bind(input.checksum_sha256)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(node)
+}
+
+async fn ensure_import_destination(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    folder_id: Uuid,
+) -> Result<(), FinalizeImportError> {
+    let exists: bool = sqlx::query_scalar(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM nodes
+            WHERE id = $1 AND kind = 'folder' AND lifecycle_state = 'active'
+        )
+        ",
+    )
+    .bind(folder_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(FinalizeImportError::NotFound)
+    }
+}
+
+async fn find_or_create_import_folder(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    parent_id: Uuid,
+    name: &str,
+) -> Result<Uuid, FinalizeImportError> {
+    let existing: Option<(Uuid, NodeKind)> = sqlx::query_as(
+        r"
+        SELECT id, kind FROM nodes
+        WHERE parent_id = $1 AND name = $2 AND lifecycle_state = 'active'
+        ",
+    )
+    .bind(parent_id)
+    .bind(name)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    match existing {
+        Some((id, NodeKind::Folder)) => Ok(id),
+        Some((_, NodeKind::File)) => Err(FinalizeImportError::NameConflict),
+        None => sqlx::query_scalar(
+            "INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'folder') RETURNING id",
+        )
+        .bind(Uuid::new_v4())
+        .bind(parent_id)
+        .bind(name)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(map_import_finalize_error),
+    }
+}
+
+fn map_import_finalize_error(error: sqlx::Error) -> FinalizeImportError {
+    if error
+        .as_database_error()
+        .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+    {
+        FinalizeImportError::NameConflict
+    } else {
+        FinalizeImportError::Database(error)
+    }
+}
+
 /// Typed representation of a row in `nodes`.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct NodeRecord {
@@ -376,6 +540,19 @@ pub enum FinalizeUploadError {
     NotActive,
     #[error("upload session has incomplete bytes")]
     Incomplete,
+    #[error("an active sibling already has this name")]
+    NameConflict,
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+}
+
+/// Expected failures while atomically publishing a watched-folder import.
+#[derive(Debug, thiserror::Error)]
+pub enum FinalizeImportError {
+    #[error("import entry or destination folder was not found")]
+    NotFound,
+    #[error("import entry is not ready for finalization")]
+    NotReady,
     #[error("an active sibling already has this name")]
     NameConflict,
     #[error(transparent)]

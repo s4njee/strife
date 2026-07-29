@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use strife_db::{ImportEntryRecord, UpsertImportEntry};
+use strife_db::{FinalizeImport, ImportEntryRecord, NodeRecord, UpsertImportEntry};
 use strife_storage::{DiskGuard, StorageBackend, StorageKey};
 use tracing::debug;
 use uuid::Uuid;
@@ -132,6 +133,7 @@ pub async fn scan_directory(
                     .modified()
                     .with_context(|| format!("read modification time for {}", path.display()))?
                     .into();
+                let modified_at = normalize_timestamp(modified_at);
                 sink.upsert(&DiscoveredFile {
                     source_id,
                     relative_path,
@@ -170,12 +172,28 @@ pub async fn stream_if_stable(
     expected_size: u64,
     expected_modified_at: DateTime<Utc>,
 ) -> Result<StabilityOutcome> {
+    stream_if_stable_to(
+        storage,
+        source_path,
+        expected_size,
+        expected_modified_at,
+        StorageKey::staging(Uuid::new_v4()),
+    )
+    .await
+}
+
+async fn stream_if_stable_to(
+    storage: &dyn StorageBackend,
+    source_path: &Path,
+    expected_size: u64,
+    expected_modified_at: DateTime<Utc>,
+    staging_key: StorageKey,
+) -> Result<StabilityOutcome> {
     let before = snapshot_regular_file(source_path).await?;
     if before != (expected_size, expected_modified_at) {
         return Ok(StabilityOutcome::Changed);
     }
 
-    let staging_key = StorageKey::staging(Uuid::new_v4());
     let file = tokio::fs::File::open(source_path)
         .await
         .with_context(|| format!("open import source {}", source_path.display()))?;
@@ -209,11 +227,12 @@ pub async fn stage_import_entry(
         anyhow::bail!("import source path must remain below the watch root");
     }
     let expected_size = u64::try_from(entry.source_size).context("negative import file size")?;
-    let outcome = stream_if_stable(
+    let outcome = stream_if_stable_to(
         storage,
         &watch_root.join(relative),
         expected_size,
         entry.source_modified_at,
+        StorageKey::staging(entry.id),
     )
     .await?;
     match outcome {
@@ -227,6 +246,133 @@ pub async fn stage_import_entry(
     Ok(outcome)
 }
 
+/// Imports one discovered entry through capacity validation, stable staging,
+/// content inspection, transactional publication, and source cleanup.
+///
+/// # Errors
+///
+/// Returns an error when the capacity guard, source validation, storage,
+/// database finalization, or post-commit source cleanup fails. Actionable
+/// failures are persisted on the import entry.
+pub async fn import_entry(
+    pool: &PgPool,
+    storage: &dyn StorageBackend,
+    watch_root: &Path,
+    destination_folder_id: Uuid,
+    entry: &ImportEntryRecord,
+    guard: DiskGuard,
+) -> Result<Option<NodeRecord>> {
+    let result = import_entry_inner(
+        pool,
+        storage,
+        watch_root,
+        destination_folder_id,
+        entry,
+        guard,
+    )
+    .await;
+    if let Err(error) = &result {
+        let _ = strife_db::mark_import_failed(pool, entry.id, &error.to_string()).await;
+    }
+    result
+}
+
+async fn import_entry_inner(
+    pool: &PgPool,
+    storage: &dyn StorageBackend,
+    watch_root: &Path,
+    destination_folder_id: Uuid,
+    entry: &ImportEntryRecord,
+    guard: DiskGuard,
+) -> Result<Option<NodeRecord>> {
+    let byte_size = u64::try_from(entry.source_size).context("negative import file size")?;
+    ensure_import_capacity(storage, byte_size, guard).await?;
+    let StabilityOutcome::Stable { staging_key } =
+        stage_import_entry(pool, storage, watch_root, entry).await?
+    else {
+        return Ok(None);
+    };
+    let checksum = checksum_object(storage, staging_key).await?;
+    let mime_type = storage.detect_mime(staging_key).await?;
+    let original_key = StorageKey::original(entry.id);
+    storage.move_object(staging_key, original_key).await?;
+
+    let relative = Path::new(&entry.source_path);
+    let display_name = relative
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .context("import file name is not valid UTF-8")?;
+    let directory_names = relative
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .filter_map(|component| component.as_os_str().to_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let source_path = watch_root.join(relative);
+    let source_created_at = tokio::fs::symlink_metadata(&source_path)
+        .await
+        .ok()
+        .and_then(|metadata| metadata.created().ok())
+        .map(Into::into);
+    let finalized = strife_db::finalize_import(
+        pool,
+        FinalizeImport {
+            entry_id: entry.id,
+            destination_folder_id,
+            directory_names: &directory_names,
+            display_name,
+            original_storage_key: original_key.id(),
+            byte_size: entry.source_size,
+            mime_type: &mime_type,
+            checksum_sha256: &checksum,
+            source_created_at,
+            source_modified_at: entry.source_modified_at,
+        },
+    )
+    .await;
+    let node = match finalized {
+        Ok(node) => node,
+        Err(error) => {
+            storage.delete(original_key).await?;
+            return Err(error.into());
+        }
+    };
+    tokio::fs::remove_file(&source_path)
+        .await
+        .with_context(|| format!("remove imported source {}", source_path.display()))?;
+    prune_empty_source_directories(watch_root, source_path.parent()).await;
+    Ok(Some(node))
+}
+
+async fn checksum_object(storage: &dyn StorageBackend, key: StorageKey) -> Result<String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut reader = storage.get_stream(key).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+async fn prune_empty_source_directories(root: &Path, start: Option<&Path>) {
+    let mut current = start.map(Path::to_path_buf);
+    while let Some(directory) = current {
+        if directory == root || !directory.starts_with(root) {
+            break;
+        }
+        match tokio::fs::remove_dir(&directory).await {
+            Ok(()) => current = directory.parent().map(Path::to_path_buf),
+            Err(_) => break,
+        }
+    }
+}
+
 async fn snapshot_regular_file(path: &Path) -> Result<(u64, DateTime<Utc>)> {
     let metadata = tokio::fs::symlink_metadata(path)
         .await
@@ -238,7 +384,11 @@ async fn snapshot_regular_file(path: &Path) -> Result<(u64, DateTime<Utc>)> {
         .modified()
         .with_context(|| format!("read modification time for {}", path.display()))?
         .into();
-    Ok((metadata.len(), modified))
+    Ok((metadata.len(), normalize_timestamp(modified)))
+}
+
+fn normalize_timestamp(value: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp_micros(value.timestamp_micros()).unwrap_or(value)
 }
 
 fn is_hidden(path: &Path) -> bool {

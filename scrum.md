@@ -1214,13 +1214,26 @@ As a system, I want stable files processed through the same checksum/finalizatio
 
 **Acceptance Criteria:**
 
-- [ ] For each stable entry, the importer: checks disk guard (90%), checks name conflict at the destination, streams the file into staging via `StorageBackend`, computes SHA-256 during streaming, detects MIME, and atomically finalizes (creates node, file_object, marks entry as `imported`).
-- [ ] Source filesystem timestamps are preserved on the created node.
-- [ ] Hierarchy is preserved: if the source is `watch_path/photos/2024/img.jpg`, create folders `photos` and `2024` under the destination before importing `img.jpg`.
-- [ ] Folder creation reuses existing folders if they already exist (no conflict on pre-existing matching folder).
-- [ ] On conflict (duplicate file name), the entry is marked `failed` with a clear error message; it does **not** block other imports.
-- [ ] On completion, a metadata extraction job is enqueued and the source file is removed; empty source directories are pruned.
-- [ ] Tests: import a tree of 5 files across 3 directories; verify nodes, hierarchy, checksums, and no duplicates.
+- [x] For each stable entry, the importer: checks disk guard (90%), checks name conflict at the destination, streams the file into staging via `StorageBackend`, computes SHA-256 during streaming, detects MIME, and atomically finalizes (creates node, file_object, marks entry as `imported`).
+- [x] Source filesystem timestamps are preserved on the created node.
+- [x] Hierarchy is preserved: if the source is `watch_path/photos/2024/img.jpg`, create folders `photos` and `2024` under the destination before importing `img.jpg`.
+- [x] Folder creation reuses existing folders if they already exist (no conflict on pre-existing matching folder).
+- [x] On conflict (duplicate file name), the entry is marked `failed` with a clear error message; it does **not** block other imports.
+- [x] On completion, a metadata extraction job is enqueued and the source file is removed; empty source directories are pruned.
+- [x] Tests: import a tree of 5 files across 3 directories; verify nodes, hierarchy, checksums, and no duplicates.
+
+**Implementation report:** Implemented the watched-file ingestion pipeline with the shared disk guard, deterministic staging/original keys, streaming SHA-256, content MIME detection, and transactional folder/node/object/job/entry publication. Relative hierarchy and source timestamps are preserved, existing folders are reused, conflicts become persistent entry failures, and sources plus empty inbox directories are removed only after commit.
+
+**New files:**
+
+- `crates/importer/tests/import_pipeline.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `crates/db/src/lib.rs`
+- `crates/importer/Cargo.toml`
+- `crates/importer/src/lib.rs`
 
 ---
 

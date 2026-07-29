@@ -1934,6 +1934,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "sha2 0.10.9",
  "sqlx",
  "strife-db",
  "strife-storage",
