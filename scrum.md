@@ -728,9 +728,21 @@ As a developer, I want the `file_objects` table linked to `nodes` so that upload
 
 **Acceptance Criteria:**
 
-- [ ] Migration creates `file_objects` with columns: `id` (UUID PK), `node_id` (FK to `nodes`, unique for finalized objects), `storage_key` (text, not null), `byte_size` (bigint, not null), `mime_type` (text), `checksum_sha256` (text), `upload_state` (enum: `staging` | `finalized`), `created_at`, `updated_at`.
-- [ ] A constraint ensures a finalized node has exactly one finalized `file_object`.
-- [ ] DB query functions: `create_file_object`, `finalize_file_object`, `get_file_object_by_node_id`.
+- [x] Migration creates `file_objects` with columns: `id` (UUID PK), `node_id` (FK to `nodes`, unique for finalized objects), `storage_key` (text, not null), `byte_size` (bigint, not null), `mime_type` (text), `checksum_sha256` (text), `upload_state` (enum: `staging` | `finalized`), `created_at`, `updated_at`.
+- [x] A constraint ensures a finalized node has exactly one finalized `file_object`.
+- [x] DB query functions: `create_file_object`, `finalize_file_object`, `get_file_object_by_node_id`.
+
+**Implementation report:** Added the `file_objects` migration, typed staged/finalized records, and create/finalize/get database queries with nonnegative-size and finalized-node constraints. A live PostgreSQL integration test confirms staged-to-finalized transitions and database rejection of a second finalized object for the same node.
+
+**New files:**
+
+- `crates/db/migrations/0003_file_objects.down.sql`
+- `crates/db/migrations/0003_file_objects.up.sql`
+- `crates/db/tests/file_objects.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
 
 ---
 

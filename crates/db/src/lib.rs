@@ -28,6 +28,14 @@ pub enum LifecycleState {
     Deleted,
 }
 
+/// Persistence state for a managed file object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "file_upload_state", rename_all = "lowercase")]
+pub enum FileUploadState {
+    Staging,
+    Finalized,
+}
+
 /// Typed representation of a row in `nodes`.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct NodeRecord {
@@ -38,6 +46,20 @@ pub struct NodeRecord {
     pub lifecycle_state: LifecycleState,
     pub source_created_at: Option<DateTime<Utc>>,
     pub source_modified_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Typed representation of a row in `file_objects`.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct FileObjectRecord {
+    pub id: Uuid,
+    pub node_id: Option<Uuid>,
+    pub storage_key: String,
+    pub byte_size: i64,
+    pub mime_type: Option<String>,
+    pub checksum_sha256: Option<String>,
+    pub upload_state: FileUploadState,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -86,6 +108,112 @@ pub async fn ping(pool: &PgPool) -> Result<(), sqlx::Error> {
         .await?;
 
     Ok(())
+}
+
+/// Creates a staged managed file object.
+///
+/// # Errors
+///
+/// Returns the database error when the object cannot be inserted.
+pub async fn create_file_object(
+    pool: &PgPool,
+    storage_key: Uuid,
+    byte_size: i64,
+    mime_type: Option<&str>,
+    checksum_sha256: Option<&str>,
+) -> Result<FileObjectRecord, sqlx::Error> {
+    sqlx::query_as::<_, FileObjectRecord>(
+        r"
+        INSERT INTO file_objects (
+            id, storage_key, byte_size, mime_type, checksum_sha256, upload_state
+        )
+        VALUES ($1, $2, $3, $4, $5, 'staging')
+        RETURNING
+            id,
+            node_id,
+            storage_key,
+            byte_size,
+            mime_type,
+            checksum_sha256,
+            upload_state,
+            created_at,
+            updated_at
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(storage_key.simple().to_string())
+    .bind(byte_size)
+    .bind(mime_type)
+    .bind(checksum_sha256)
+    .fetch_one(pool)
+    .await
+}
+
+/// Attaches a staged object to a node and marks it finalized.
+///
+/// # Errors
+///
+/// Returns `RowNotFound` for an unavailable staged object or the database error
+/// when the node is invalid or already owns a finalized object.
+pub async fn finalize_file_object(
+    pool: &PgPool,
+    file_object_id: Uuid,
+    node_id: Uuid,
+) -> Result<FileObjectRecord, sqlx::Error> {
+    sqlx::query_as::<_, FileObjectRecord>(
+        r"
+        UPDATE file_objects
+        SET node_id = $2, upload_state = 'finalized', updated_at = now()
+        WHERE id = $1
+          AND upload_state = 'staging'
+        RETURNING
+            id,
+            node_id,
+            storage_key,
+            byte_size,
+            mime_type,
+            checksum_sha256,
+            upload_state,
+            created_at,
+            updated_at
+        ",
+    )
+    .bind(file_object_id)
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(sqlx::Error::RowNotFound)
+}
+
+/// Fetches the finalized managed object attached to a node.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn get_file_object_by_node_id(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Option<FileObjectRecord>, sqlx::Error> {
+    sqlx::query_as::<_, FileObjectRecord>(
+        r"
+        SELECT
+            id,
+            node_id,
+            storage_key,
+            byte_size,
+            mime_type,
+            checksum_sha256,
+            upload_state,
+            created_at,
+            updated_at
+        FROM file_objects
+        WHERE node_id = $1
+          AND upload_state = 'finalized'
+        ",
+    )
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Fetches an active or inactive node by its identifier.
