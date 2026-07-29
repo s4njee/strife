@@ -1,8 +1,14 @@
 import { useParams } from '@solidjs/router'
-import { createResource, createSignal, For, Show, type JSX } from 'solid-js'
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  Show,
+  type JSX,
+} from 'solid-js'
 import {
   createFolder,
-  getActiveUploads,
   getFolderAncestors,
   getFolderChildren,
   moveFolders,
@@ -17,8 +23,9 @@ import { FolderUploadControl } from '../components/FolderUploadControl'
 import { MoveFolderDialog } from '../components/MoveFolderDialog'
 import { RenameFolderDialog } from '../components/RenameFolderDialog'
 import '../components/UploadDropZone.css'
+import { useUploads } from '../uploads/UploadContext'
 import { collectDroppedFiles } from '../uploads/dropFiles'
-import { uploadFiles, type FolderUploadResult } from '../uploads/folderUpload'
+import type { FolderUploadResult } from '../uploads/folderUpload'
 
 const ROOT_FOLDER_ID = '00000000-0000-0000-0000-000000000001'
 
@@ -99,14 +106,16 @@ function FolderContents(props: { folderId: string }) {
   const [staticItems, setStaticItems] = createSignal(previewItems)
   const [dragDepth, setDragDepth] = createSignal(0)
   const [dropResults, setDropResults] = createSignal<FolderUploadResult[]>([])
+  const uploads = useUploads()
   const [children, { mutate, refetch }] = createResource(
     () => (staticPreview ? false : props.folderId),
     (folderId) => getFolderChildren(folderId),
   )
-  const [activeUploads] = createResource(
-    () => (staticPreview ? false : props.folderId),
-    (folderId) => getActiveUploads(folderId),
-  )
+  createEffect(() => {
+    if (!staticPreview) {
+      void uploads.discover(props.folderId, () => void refetch())
+    }
+  })
   const items = () =>
     staticPreview ? staticItems() : (children()?.items ?? [])
 
@@ -187,9 +196,12 @@ function FolderContents(props: { folderId: string }) {
     setDragDepth(0)
     const candidates = await collectDroppedFiles(event.dataTransfer!)
     if (candidates.length === 0) return
-    const results = await uploadFiles(candidates, props.folderId)
+    const results = await uploads.start(
+      candidates,
+      props.folderId,
+      () => void refetch(),
+    )
     setDropResults(results)
-    if (results.some((result) => result.node)) await refetch()
   }
 
   const dropFailures = () => dropResults().filter((result) => result.error)
@@ -208,7 +220,6 @@ function FolderContents(props: { folderId: string }) {
       <Show when={dragDepth() > 0}>
         <div class="upload-drop-overlay">Drop files or folders to upload</div>
       </Show>
-      <span hidden data-resumable-upload-count={activeUploads()?.length ?? 0} />
       <div class="folder-toolbar">
         <FileUploadControl
           folderId={props.folderId}

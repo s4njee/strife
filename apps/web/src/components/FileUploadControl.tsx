@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import { uploadFiles } from '../uploads/folderUpload'
+import { useUploads } from '../uploads/UploadContext'
 
 interface FileUploadControlProps {
   folderId: string
@@ -8,6 +8,7 @@ interface FileUploadControlProps {
 
 export function FileUploadControl(props: FileUploadControlProps) {
   let input!: HTMLInputElement
+  const uploads = useUploads()
   const [uploading, setUploading] = createSignal(false)
 
   const handleSelection = async () => {
@@ -15,12 +16,12 @@ export function FileUploadControl(props: FileUploadControlProps) {
     input.value = ''
     if (files.length === 0) return
     setUploading(true)
-    const results = await uploadFiles(
+    await uploads.start(
       files.map((file) => ({ file, relativePath: file.name })),
       props.folderId,
+      props.onComplete,
     )
     setUploading(false)
-    if (results.some((result) => result.node)) await props.onComplete()
   }
 
   return (

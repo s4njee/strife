@@ -1,8 +1,6 @@
 import { For, Show, createSignal } from 'solid-js'
-import {
-  uploadFolderFiles,
-  type FolderUploadResult,
-} from '../uploads/folderUpload'
+import { useUploads } from '../uploads/UploadContext'
+import type { FolderUploadResult } from '../uploads/folderUpload'
 import './FolderUploadControl.css'
 
 interface FolderUploadControlProps {
@@ -12,6 +10,7 @@ interface FolderUploadControlProps {
 
 export function FolderUploadControl(props: FolderUploadControlProps) {
   let input!: HTMLInputElement
+  const uploads = useUploads()
   const [uploading, setUploading] = createSignal(false)
   const [results, setResults] = createSignal<FolderUploadResult[]>([])
 
@@ -23,10 +22,16 @@ export function FolderUploadControl(props: FolderUploadControlProps) {
 
     setUploading(true)
     setResults([])
-    const completed = await uploadFolderFiles(files, props.folderId)
+    const completed = await uploads.start(
+      files.map((file) => ({
+        file,
+        relativePath: file.webkitRelativePath || file.name,
+      })),
+      props.folderId,
+      props.onComplete,
+    )
     setResults(completed)
     setUploading(false)
-    if (completed.some((result) => result.node)) await props.onComplete()
   }
 
   const succeeded = () => results().filter((result) => result.node).length

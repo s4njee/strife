@@ -6,10 +6,10 @@ import {
   getFolderChildren,
   uploadFileChunk,
 } from '../api/client'
-import type { FolderItem } from '../api/types'
+import type { FolderItem, UploadByteRange } from '../api/types'
 
 const configuredChunkSize = Number(import.meta.env.VITE_UPLOAD_CHUNK_SIZE_BYTES)
-const DEFAULT_CHUNK_SIZE =
+export const DEFAULT_CHUNK_SIZE =
   Number.isSafeInteger(configuredChunkSize) && configuredChunkSize > 0
     ? configuredChunkSize
     : 1024 * 1024
@@ -26,10 +26,27 @@ export interface FolderUploadResult {
   error?: string
 }
 
+export interface UploadEvents {
+  onSession?: (
+    sessionId: string,
+    candidate: UploadCandidate,
+    parentId: string,
+  ) => void | Promise<void>
+  onProgress?: (
+    sessionId: string,
+    receivedBytes: number,
+    totalBytes: number,
+  ) => void
+  onComplete?: (sessionId: string, node: FolderItem) => void | Promise<void>
+  onError?: (sessionId: string | undefined, path: string, error: string) => void
+  signal?: (sessionId: string) => AbortSignal | undefined
+}
+
 export async function uploadFolderFiles(
   files: File[],
   targetFolderId: string,
   chunkSize = DEFAULT_CHUNK_SIZE,
+  events?: UploadEvents,
 ): Promise<FolderUploadResult[]> {
   return uploadFiles(
     files.map((file) => ({
@@ -38,6 +55,7 @@ export async function uploadFolderFiles(
     })),
     targetFolderId,
     chunkSize,
+    events,
   )
 }
 
@@ -45,6 +63,7 @@ export async function uploadFiles(
   candidates: UploadCandidate[],
   targetFolderId: string,
   chunkSize = DEFAULT_CHUNK_SIZE,
+  events?: UploadEvents,
 ): Promise<FolderUploadResult[]> {
   const folderCache = new Map<string, string>()
   const results = new Array<FolderUploadResult>(candidates.length)
@@ -59,6 +78,7 @@ export async function uploadFiles(
         targetFolderId,
         folderCache,
         chunkSize,
+        events,
       )
     }
   }
@@ -76,8 +96,10 @@ async function uploadCandidate(
   targetFolderId: string,
   folderCache: Map<string, string>,
   chunkSize: number,
+  events?: UploadEvents,
 ): Promise<FolderUploadResult> {
   const { file, relativePath: path } = candidate
+  let sessionId: string | undefined
   try {
     const segments = path.split('/').filter(Boolean)
     segments.pop()
@@ -86,10 +108,15 @@ async function uploadCandidate(
       segments,
       folderCache,
     )
-    const node = await uploadOneFile(file, parentId, chunkSize)
+    const session = await createUploadSession(parentId, file)
+    sessionId = session.session_id
+    await events?.onSession?.(sessionId, candidate, parentId)
+    const node = await resumeFileUpload(file, sessionId, [], chunkSize, events)
     return { path, node }
   } catch (error) {
-    return { path, error: uploadErrorMessage(error) }
+    const message = uploadErrorMessage(error)
+    events?.onError?.(sessionId, path, message)
+    return { path, error: message }
   }
 }
 
@@ -141,21 +168,54 @@ async function findFolder(
   )
 }
 
-async function uploadOneFile(
+export async function resumeFileUpload(
   file: File,
-  parentId: string,
+  sessionId: string,
+  receivedRanges: UploadByteRange[],
   chunkSize: number,
+  events?: UploadEvents,
 ): Promise<FolderItem> {
-  const session = await createUploadSession(parentId, file)
-  for (let start = 0; start < file.size; start += chunkSize) {
-    await uploadFileChunk(
-      session.session_id,
-      file.slice(start, Math.min(start + chunkSize, file.size)),
-      start,
-      file.size,
-    )
+  let receivedBytes = receivedRanges.reduce(
+    (total, range) => total + range.end - range.start + 1,
+    0,
+  )
+  for (const missing of missingRanges(file.size, receivedRanges)) {
+    for (let start = missing.start; start <= missing.end; start += chunkSize) {
+      const endExclusive = Math.min(start + chunkSize, missing.end + 1)
+      const bytes = file.slice(start, endExclusive)
+      await uploadFileChunk(
+        sessionId,
+        bytes,
+        start,
+        file.size,
+        events?.signal?.(sessionId),
+      )
+      receivedBytes += bytes.size
+      events?.onProgress?.(sessionId, receivedBytes, file.size)
+    }
   }
-  return finalizeUpload(session.session_id)
+  const node = await finalizeUpload(sessionId, events?.signal?.(sessionId))
+  await events?.onComplete?.(sessionId, node)
+  return node
+}
+
+export function missingRanges(
+  totalBytes: number,
+  receivedRanges: UploadByteRange[],
+): UploadByteRange[] {
+  if (totalBytes === 0) return []
+  const sorted = [...receivedRanges].sort(
+    (left, right) => left.start - right.start,
+  )
+  const missing: UploadByteRange[] = []
+  let cursor = 0
+  for (const range of sorted) {
+    if (range.start > cursor)
+      missing.push({ start: cursor, end: range.start - 1 })
+    cursor = Math.max(cursor, range.end + 1)
+  }
+  if (cursor < totalBytes) missing.push({ start: cursor, end: totalBytes - 1 })
+  return missing
 }
 
 function uploadErrorMessage(error: unknown): string {

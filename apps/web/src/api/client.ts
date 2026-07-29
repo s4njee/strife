@@ -320,12 +320,14 @@ export async function uploadFileChunk(
   bytes: Blob,
   start: number,
   total: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const end = start + bytes.size - 1
   const response = await fetch(`/api/uploads/${sessionId}`, {
     method: 'PATCH',
     headers: { 'Content-Range': `bytes ${start}-${end}/${total}` },
     body: bytes,
+    signal,
   })
   if (!response.ok) {
     const errorBody = await readErrorBody(response)
@@ -336,10 +338,14 @@ export async function uploadFileChunk(
   }
 }
 
-export async function finalizeUpload(sessionId: string): Promise<FolderItem> {
+export async function finalizeUpload(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<FolderItem> {
   const response = await fetch(`/api/uploads/${sessionId}/finalize`, {
     method: 'POST',
     headers: { Accept: 'application/json' },
+    signal,
   })
   if (!response.ok) {
     const errorBody = await readErrorBody(response)
@@ -353,6 +359,20 @@ export async function finalizeUpload(sessionId: string): Promise<FolderItem> {
     throw new ApiClientError('The finalized upload response was invalid.')
   }
   return { ...body, size_bytes: body.size_bytes ?? null }
+}
+
+export async function cancelUpload(sessionId: string): Promise<void> {
+  const response = await fetch(`/api/uploads/${sessionId}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok && response.status !== 404) {
+    throw new ApiClientError(
+      `Upload cancellation failed (${response.status}).`,
+      {
+        status: response.status,
+      },
+    )
+  }
 }
 
 async function requestUploadSessions(

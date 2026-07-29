@@ -1047,13 +1047,31 @@ As a user, I want to see upload progress, resume after a reload, and cancel uplo
 
 **Acceptance Criteria:**
 
-- [ ] A persistent upload progress panel (bottom of the screen or a drawer) shows all active uploads with: file name, progress bar (percentage), bytes uploaded / total, estimated time remaining, and a cancel button.
-- [ ] On page load, the app queries `GET /api/uploads?folder_id=...` for active sessions and resumes them automatically.
-- [ ] Resuming: the app reads `received_ranges` from the session, identifies missing byte ranges, and uploads only those ranges.
-- [ ] Clicking "Cancel" calls `DELETE /api/uploads/:session_id` and removes the item from the progress panel.
-- [ ] When an upload completes, the file appears in the table immediately (optimistic update or refetch).
-- [ ] Conflict errors are displayed inline per-file in the progress panel.
-- [ ] The progress panel survives navigation between folders (it's outside the route content area).
+- [x] A persistent upload progress panel (bottom of the screen or a drawer) shows all active uploads with: file name, progress bar (percentage), bytes uploaded / total, estimated time remaining, and a cancel button.
+- [x] On page load, the app queries `GET /api/uploads?folder_id=...` for active sessions and resumes them automatically.
+- [x] Resuming: the app reads `received_ranges` from the session, identifies missing byte ranges, and uploads only those ranges.
+- [x] Clicking "Cancel" calls `DELETE /api/uploads/:session_id` and removes the item from the progress panel.
+- [x] When an upload completes, the file appears in the table immediately (optimistic update or refetch).
+- [x] Conflict errors are displayed inline per-file in the progress panel.
+- [x] The progress panel survives navigation between folders (it's outside the route content area).
+
+**Implementation report:** Added a route-independent upload context and persistent panel with per-file progress, byte totals, ETA, cancel/resume controls, inline failures, immediate folder refresh, and IndexedDB-backed source retention for automatic reload recovery. Browser tests verified the panel across navigation, real cancellation, and a resumed 23-byte upload that preserved received range `0–5`, sent only `6–22`, completed, and appeared immediately in the table.
+
+**New files:**
+
+- `apps/web/src/components/UploadProgressPanel.css`
+- `apps/web/src/components/UploadProgressPanel.tsx`
+- `apps/web/src/uploads/UploadContext.tsx`
+- `apps/web/src/uploads/uploadPersistence.ts`
+
+**Modified files:**
+
+- `apps/web/src/App.tsx`
+- `apps/web/src/api/client.ts`
+- `apps/web/src/components/FileUploadControl.tsx`
+- `apps/web/src/components/FolderUploadControl.tsx`
+- `apps/web/src/uploads/folderUpload.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 

@@ -1,0 +1,98 @@
+.upload-panel {
+  position: fixed;
+  z-index: 40;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  width: min(24rem, calc(100vw - var(--space-8)));
+  max-height: min(32rem, calc(100vh - var(--space-8)));
+  border: 1px solid var(--color-border-raised);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+  overflow: hidden;
+}
+
+.upload-panel > header,
+.upload-panel__summary,
+.upload-panel__meta,
+.upload-panel__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.upload-panel > header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.upload-panel > header span {
+  color: var(--color-text-muted);
+  font: var(--font-weight-medium) var(--font-size-xs) / 1 var(--font-mono);
+}
+
+.upload-panel__items {
+  max-height: 27rem;
+  overflow: auto;
+}
+
+.upload-panel__item {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.upload-panel__item:last-child {
+  border-bottom: 0;
+}
+
+.upload-panel__summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-panel__summary span,
+.upload-panel__meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.upload-panel progress {
+  width: 100%;
+  height: 0.4rem;
+  margin: var(--space-2) 0;
+  accent-color: var(--color-accent);
+}
+
+.upload-panel__item[data-state='error'] progress {
+  accent-color: var(--color-error);
+}
+
+.upload-panel__error {
+  margin: var(--space-2) 0 0;
+  color: var(--color-error);
+  font-size: var(--font-size-xs);
+}
+
+.upload-panel__actions {
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+.upload-panel__actions button {
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-input);
+  cursor: pointer;
+}
+
+.upload-panel__file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+}
