@@ -590,6 +590,33 @@ pub async fn list_children(pool: &PgPool, parent_id: Uuid) -> Result<Vec<NodeRec
     .await
 }
 
+/// Checks for an active child with an exact display name.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn active_child_name_exists(
+    pool: &PgPool,
+    parent_id: Uuid,
+    name: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1
+            FROM nodes
+            WHERE parent_id = $1
+              AND name = $2
+              AND lifecycle_state = 'active'
+        )
+        ",
+    )
+    .bind(parent_id)
+    .bind(name)
+    .fetch_one(pool)
+    .await
+}
+
 /// Lists one page of active children after an optional opaque node cursor.
 ///
 /// # Errors

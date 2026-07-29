@@ -1,11 +1,13 @@
 pub mod config;
 pub mod folders;
 pub mod health;
+pub mod uploads;
 
 use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 
@@ -13,6 +15,7 @@ use anyhow::{Context, Result, bail};
 use config::Config;
 use health::LiveDependencyChecker;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use strife_storage::LocalFsBackend;
 use tokio::{net::TcpListener, time::timeout};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -61,7 +64,18 @@ pub async fn run(config: Config) -> Result<()> {
         config.storage_root.clone(),
         config.tika_url.clone(),
     );
-    let app = health::router(dependencies).merge(folders::router(pool));
+    let storage = Arc::new(
+        LocalFsBackend::new(&config.storage_root)
+            .await
+            .context("failed to initialize managed storage namespaces")?,
+    );
+    let upload_ttl = chrono::Duration::hours(
+        i64::try_from(config.upload_session_ttl_hours)
+            .context("UPLOAD_SESSION_TTL_HOURS is too large")?,
+    );
+    let app = health::router(dependencies)
+        .merge(folders::router(pool.clone()))
+        .merge(uploads::router(pool, storage, upload_ttl, 90));
 
     axum::serve(listener, app)
         .await

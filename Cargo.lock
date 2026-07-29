@@ -1852,6 +1852,7 @@ name = "strife-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "fs2",
@@ -1861,6 +1862,7 @@ dependencies = [
  "sqlx",
  "strife-db",
  "strife-domain",
+ "strife-storage",
  "tokio",
  "tower",
  "tracing",

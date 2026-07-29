@@ -10,6 +10,7 @@ pub struct Config {
     pub storage_root: PathBuf,
     pub listen_addr: SocketAddr,
     pub tika_url: String,
+    pub upload_session_ttl_hours: u64,
 }
 
 impl Config {
@@ -26,12 +27,20 @@ impl Config {
             .context("LISTEN_ADDR must be a socket address such as 127.0.0.1:3000")?;
         let tika_url = required("TIKA_URL")?;
         validate_http_url("TIKA_URL", &tika_url)?;
+        let upload_session_ttl_hours = env::var("UPLOAD_SESSION_TTL_HOURS")
+            .unwrap_or_else(|_| "24".to_owned())
+            .parse::<u64>()
+            .context("UPLOAD_SESSION_TTL_HOURS must be a positive integer")?;
+        if upload_session_ttl_hours == 0 {
+            bail!("UPLOAD_SESSION_TTL_HOURS must be greater than zero");
+        }
 
         Ok(Self {
             database_url,
             storage_root,
             listen_addr,
             tika_url,
+            upload_session_ttl_hours,
         })
     }
 }

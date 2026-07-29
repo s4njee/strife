@@ -776,12 +776,28 @@ As an API client, I want `POST /api/uploads` to create an upload session so that
 
 **Acceptance Criteria:**
 
-- [ ] `POST /api/uploads` accepts `{ "folder_id": UUID, "name": string, "size": number | null, "source_created_at": string | null, "source_modified_at": string | null }`.
-- [ ] Validates: folder exists and is active, no sibling name conflict among active nodes **and** other active upload sessions, disk usage is below 90% (or below 90% + declared size if size is known).
-- [ ] Creates a staging storage key and an `upload_sessions` row.
-- [ ] Returns `201` with `{ "session_id": UUID, "staging_key": string }`.
-- [ ] Returns `409` on name conflict, `507` on disk full, `404` if folder doesn't exist.
-- [ ] Session expires after a configurable TTL (default: 24 hours).
+- [x] `POST /api/uploads` accepts `{ "folder_id": UUID, "name": string, "size": number | null, "source_created_at": string | null, "source_modified_at": string | null }`.
+- [x] Validates: folder exists and is active, no sibling name conflict among active nodes **and** other active upload sessions, disk usage is below 90% (or below 90% + declared size if size is known).
+- [x] Creates a staging storage key and an `upload_sessions` row.
+- [x] Returns `201` with `{ "session_id": UUID, "staging_key": string }`.
+- [x] Returns `409` on name conflict, `507` on disk full, `404` if folder doesn't exist.
+- [x] Session expires after a configurable TTL (default: 24 hours).
+
+**Implementation report:** Added upload initiation with active-folder/name validation, UUID staging keys, projected capacity enforcement, source timestamp capture, and configurable 24-hour session expiry. Live PostgreSQL API tests with a mock storage backend verify creation plus duplicate-name, missing-folder, and insufficient-storage responses.
+
+**New files:**
+
+- `crates/api/src/uploads.rs`
+- `crates/api/tests/uploads_api.rs`
+
+**Modified files:**
+
+- `.env.example`
+- `Cargo.lock`
+- `crates/api/Cargo.toml`
+- `crates/api/src/config.rs`
+- `crates/api/src/lib.rs`
+- `crates/db/src/lib.rs`
 
 ---
 
