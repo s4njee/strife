@@ -2,6 +2,8 @@
 
 ![Strife files browser design](screenshot.png)
 
+[Open the hosted SolidJS frontend preview](https://s4njee.github.io/strife/).
+
 ## 1. Product Definition
 
 Strife v1 is a single-user, self-hosted cloud drive for a private home LAN. It provides durable file and folder management, resumable browser uploads, watched-folder imports, rich metadata extraction, and on-demand previews through a SolidJS interface backed by Axum and PostgreSQL.
