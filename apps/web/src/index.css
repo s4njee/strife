@@ -23,8 +23,16 @@ body,
 #root {
   display: grid;
   min-height: 100vh;
-  text-align: center;
   transition:
     color var(--transition-fast),
     background-color var(--transition-fast);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
 }

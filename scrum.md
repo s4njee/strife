@@ -434,12 +434,29 @@ As a user, I want a sidebar showing "All Files", "Favorites", and "Trash" naviga
 
 **Acceptance Criteria:**
 
-- [ ] A `<Sidebar>` component renders navigation links: "All Files" (root), "Favorites", "Trash".
-- [ ] The active item is visually highlighted based on the current route.
-- [ ] Sidebar includes a storage usage summary area (placeholder value for now — real data comes in Epic 6).
-- [ ] Sidebar renders correctly in both dark and light themes.
-- [ ] The sidebar is a fixed-width panel on the left; the main content area fills the remaining width.
-- [ ] SolidJS Router is configured with routes: `/` (root folder), `/folder/:id`, `/favorites`, `/trash`.
+- [x] A `<Sidebar>` component renders navigation links: "All Files" (root), "Favorites", "Trash".
+- [x] The active item is visually highlighted based on the current route.
+- [x] Sidebar includes a storage usage summary area (placeholder value for now — real data comes in Epic 6).
+- [x] Sidebar renders correctly in both dark and light themes.
+- [x] The sidebar is a fixed-width panel on the left; the main content area fills the remaining width.
+- [x] SolidJS Router is configured with routes: `/` (root folder), `/folder/:id`, `/favorites`, `/trash`.
+
+**Implementation report:** Replaced the foundation screen with a routed SolidJS application shell, fixed-width navigation sidebar, active All Files/Favorites/Trash states, storage placeholder, and flexible workspace views. Added the current Solid Router and browser-verified route changes, the 240px/content layout, and sidebar colors in both light and true-black themes.
+
+**New files:**
+
+- `apps/web/src/components/Sidebar.css`
+- `apps/web/src/components/Sidebar.tsx`
+- `apps/web/src/views/WorkspaceView.tsx`
+
+**Modified files:**
+
+- `apps/web/package-lock.json`
+- `apps/web/package.json`
+- `apps/web/src/App.css`
+- `apps/web/src/App.tsx`
+- `apps/web/src/index.css`
+- `apps/web/src/index.tsx`
 
 ---
 
