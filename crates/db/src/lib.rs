@@ -132,6 +132,21 @@ pub enum RecordChunkError {
     Database(#[from] sqlx::Error),
 }
 
+/// Expected failures while atomically finalizing an upload.
+#[derive(Debug, thiserror::Error)]
+pub enum FinalizeUploadError {
+    #[error("upload session was not found")]
+    NotFound,
+    #[error("upload session is not active")]
+    NotActive,
+    #[error("upload session has incomplete bytes")]
+    Incomplete,
+    #[error("an active sibling already has this name")]
+    NameConflict,
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+}
+
 /// Minimal node information used for hierarchy paths.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct NodePathEntry {
@@ -517,6 +532,56 @@ pub async fn get_upload_session(
         .await
 }
 
+/// Atomically creates a file node/object, completes its upload session, and
+/// enqueues metadata extraction. Repeated calls return the completed node.
+///
+/// # Errors
+///
+/// Returns an expected session/completeness/name error or an unexpected
+/// database failure. The transaction commits all four records together.
+pub async fn finalize_upload(
+    pool: &PgPool,
+    session_id: Uuid,
+    original_storage_key: Uuid,
+    byte_size: i64,
+    mime_type: &str,
+    checksum_sha256: &str,
+) -> Result<NodeRecord, FinalizeUploadError> {
+    let mut transaction = pool.begin().await?;
+    let session = load_session_for_update(&mut transaction, session_id)
+        .await?
+        .ok_or(FinalizeUploadError::NotFound)?;
+    if session.state == UploadSessionState::Completed {
+        let node = load_completed_upload_node(&mut transaction, &session).await?;
+        transaction.commit().await?;
+        return Ok(node);
+    }
+    if session.state != UploadSessionState::Active {
+        return Err(FinalizeUploadError::NotActive);
+    }
+    if session
+        .expected_byte_size
+        .is_some_and(|expected| expected != session.received_bytes)
+    {
+        return Err(FinalizeUploadError::Incomplete);
+    }
+
+    let node = insert_uploaded_node(&mut transaction, &session).await?;
+    insert_finalized_object(
+        &mut transaction,
+        node.id,
+        original_storage_key,
+        byte_size,
+        mime_type,
+        checksum_sha256,
+    )
+    .await?;
+    enqueue_metadata_job(&mut transaction, node.id).await?;
+    complete_upload_session(&mut transaction, session_id, node.id, checksum_sha256).await?;
+    transaction.commit().await?;
+    Ok(node)
+}
+
 fn upload_session_query(
     sql: &'static str,
 ) -> sqlx::query::QueryAs<'static, sqlx::Postgres, UploadSessionRecord, sqlx::postgres::PgArguments>
@@ -532,6 +597,156 @@ async fn load_session_for_update(
         .bind(session_id)
         .fetch_optional(&mut **transaction)
         .await
+}
+
+async fn load_completed_upload_node(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session: &UploadSessionRecord,
+) -> Result<NodeRecord, FinalizeUploadError> {
+    let node_id = session
+        .completed_node_id
+        .ok_or_else(|| sqlx::Error::Protocol("completed upload has no node".to_owned()))?;
+    load_node_in_transaction(transaction, node_id)
+        .await?
+        .ok_or(FinalizeUploadError::NotFound)
+}
+
+async fn insert_uploaded_node(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session: &UploadSessionRecord,
+) -> Result<NodeRecord, FinalizeUploadError> {
+    sqlx::query_as::<_, NodeRecord>(
+        r"
+        INSERT INTO nodes (
+            id,
+            parent_id,
+            name,
+            kind,
+            source_created_at,
+            source_modified_at
+        )
+        VALUES ($1, $2, $3, 'file', $4, $5)
+        RETURNING
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(session.target_folder_id)
+    .bind(&session.display_name)
+    .bind(session.source_created_at)
+    .bind(session.source_modified_at)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(map_finalize_error)
+}
+
+async fn insert_finalized_object(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+    storage_key: Uuid,
+    byte_size: i64,
+    mime_type: &str,
+    checksum_sha256: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r"
+        INSERT INTO file_objects (
+            id,
+            node_id,
+            storage_key,
+            byte_size,
+            mime_type,
+            checksum_sha256,
+            upload_state
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'finalized')
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(node_id)
+    .bind(storage_key.simple().to_string())
+    .bind(byte_size)
+    .bind(mime_type)
+    .bind(checksum_sha256)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn enqueue_metadata_job(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r"
+        INSERT INTO jobs (id, job_type, target_node_id)
+        VALUES ($1, 'metadata_extraction', $2)
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(node_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn complete_upload_session(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_id: Uuid,
+    node_id: Uuid,
+    checksum_sha256: &str,
+) -> Result<(), sqlx::Error> {
+    upload_session_query(
+        r"
+        UPDATE upload_sessions
+        SET
+            state = 'completed',
+            checksum_sha256 = $2,
+            completed_node_id = $3,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+        ",
+    )
+    .bind(session_id)
+    .bind(checksum_sha256)
+    .bind(node_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn load_node_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+) -> Result<Option<NodeRecord>, sqlx::Error> {
+    sqlx::query_as::<_, NodeRecord>(
+        r"
+        SELECT
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        FROM nodes
+        WHERE id = $1
+        ",
+    )
+    .bind(node_id)
+    .fetch_optional(&mut **transaction)
+    .await
 }
 
 /// Fetches an active or inactive node by its identifier.
@@ -1032,6 +1247,14 @@ fn map_mutation_error(error: sqlx::Error) -> FolderMutationError {
     }
 
     FolderMutationError::Database(error)
+}
+
+fn map_finalize_error(error: sqlx::Error) -> FinalizeUploadError {
+    if is_unique_violation(&error) {
+        FinalizeUploadError::NameConflict
+    } else {
+        FinalizeUploadError::Database(error)
+    }
 }
 
 fn is_unique_violation(error: &sqlx::Error) -> bool {

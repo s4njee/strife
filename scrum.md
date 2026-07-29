@@ -839,15 +839,32 @@ As an API client, I want `POST /api/uploads/:session_id/finalize` to commit the 
 
 **Acceptance Criteria:**
 
-- [ ] Verifies all bytes are received (if `expected_byte_size` was set, `received_bytes` matches).
-- [ ] Computes (or finalizes) the SHA-256 checksum over the staging file.
-- [ ] Detects MIME type from file content bytes (using `libmagic` / `file` command), **not** from the file extension.
-- [ ] In a single transaction: moves the staging file to `originals/`, creates a `nodes` row (kind = `file`), creates a finalized `file_objects` row, updates the session to `completed`, and enqueues a metadata extraction job.
-- [ ] Re-checks name conflict at finalization time (another upload may have raced).
-- [ ] Returns `200` with the created node.
-- [ ] Returns `409` on name conflict, `400` if bytes are incomplete.
-- [ ] The operation is idempotent: calling finalize on an already-completed session returns the existing node.
-- [ ] Source timestamps (`source_created_at`, `source_modified_at`) from the session are preserved on the node.
+- [x] Verifies all bytes are received (if `expected_byte_size` was set, `received_bytes` matches).
+- [x] Computes (or finalizes) the SHA-256 checksum over the staging file.
+- [x] Detects MIME type from file content bytes (using `libmagic` / `file` command), **not** from the file extension.
+- [x] In a single transaction: moves the staging file to `originals/`, creates a `nodes` row (kind = `file`), creates a finalized `file_objects` row, updates the session to `completed`, and enqueues a metadata extraction job.
+- [x] Re-checks name conflict at finalization time (another upload may have raced).
+- [x] Returns `200` with the created node.
+- [x] Returns `409` on name conflict, `400` if bytes are incomplete.
+- [x] The operation is idempotent: calling finalize on an already-completed session returns the existing node.
+- [x] Source timestamps (`source_created_at`, `source_modified_at`) from the session are preserved on the node.
+
+**Implementation report:** Added recoverable storage promotion and a transactional finalization pipeline that verifies completeness, streams SHA-256, detects MIME from content, creates the file node/object, completes the session, and enqueues metadata extraction together. Live integration tests verify source timestamps, content-aware MIME, checksum, staging/original transitions, incomplete and raced-conflict handling, rollback to staging, and idempotent responses.
+
+**New files:**
+
+- `crates/db/migrations/0005_jobs.down.sql`
+- `crates/db/migrations/0005_jobs.up.sql`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `Cargo.toml`
+- `crates/api/Cargo.toml`
+- `crates/api/src/uploads.rs`
+- `crates/api/tests/uploads_api.rs`
+- `crates/db/src/lib.rs`
+- `crates/storage/src/lib.rs`
 
 ---
 

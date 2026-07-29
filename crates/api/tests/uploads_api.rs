@@ -24,7 +24,7 @@ struct CapacityStorage {
 #[async_trait]
 impl StorageBackend for CapacityStorage {
     async fn put_stream(&self, _key: StorageKey, _reader: StorageReader) -> Result<()> {
-        bail!("not used")
+        Ok(())
     }
 
     async fn write_range(
@@ -33,6 +33,14 @@ impl StorageBackend for CapacityStorage {
         _offset: u64,
         _reader: StorageReader,
     ) -> Result<u64> {
+        bail!("not used")
+    }
+
+    async fn move_object(&self, _source: StorageKey, _destination: StorageKey) -> Result<()> {
+        bail!("not used")
+    }
+
+    async fn detect_mime(&self, _key: StorageKey) -> Result<String> {
         bail!("not used")
     }
 
@@ -50,7 +58,7 @@ impl StorageBackend for CapacityStorage {
     }
 
     async fn delete(&self, _key: StorageKey) -> Result<()> {
-        bail!("not used")
+        Ok(())
     }
 
     async fn exists(&self, _key: StorageKey) -> Result<bool> {
@@ -112,6 +120,16 @@ async fn chunk_request(
     .expect("send chunk request")
 }
 
+async fn finalize_request(app: axum::Router, session_id: Uuid) -> axum::response::Response {
+    app.oneshot(
+        Request::post(format!("/api/uploads/{session_id}/finalize"))
+            .body(Body::empty())
+            .expect("build finalize request"),
+    )
+    .await
+    .expect("send finalize request")
+}
+
 async fn response_json<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
     let bytes = to_bytes(response.into_body(), 64 * 1024)
         .await
@@ -127,6 +145,32 @@ fn storage(used_bytes: u64) -> Arc<dyn StorageBackend> {
             available_bytes: 1_000 - used_bytes,
         },
     })
+}
+
+async fn cleanup_upload_fixture(pool: &PgPool, folder_id: Uuid, root: &std::path::Path) {
+    sqlx::query("DELETE FROM upload_sessions WHERE target_folder_id = $1")
+        .bind(folder_id)
+        .execute(pool)
+        .await
+        .expect("remove sessions");
+    sqlx::query(
+        "DELETE FROM file_objects WHERE node_id IN (SELECT id FROM nodes WHERE parent_id = $1)",
+    )
+    .bind(folder_id)
+    .execute(pool)
+    .await
+    .expect("remove objects");
+    sqlx::query("DELETE FROM nodes WHERE parent_id = $1")
+        .bind(folder_id)
+        .execute(pool)
+        .await
+        .expect("remove child nodes");
+    sqlx::query("DELETE FROM nodes WHERE id = $1")
+        .bind(folder_id)
+        .execute(pool)
+        .await
+        .expect("remove fixture folder");
+    fs::remove_dir_all(root).await.expect("remove storage");
 }
 
 #[tokio::test]
@@ -258,4 +302,150 @@ async fn chunks_stream_out_of_order_and_reject_overlaps() {
         .await
         .expect("remove fixture folder");
     fs::remove_dir_all(root).await.expect("remove storage");
+}
+
+#[tokio::test]
+async fn finalization_is_atomic_content_aware_and_idempotent() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL API integration test");
+        return;
+    };
+    let folder_id = create_fixture_folder(&pool).await;
+    let root = std::env::temp_dir().join(format!("strife-finalize-api-{}", Uuid::new_v4()));
+    let backend = Arc::new(LocalFsBackend::new(&root).await.expect("create storage"));
+    let app = strife_api::uploads::router(pool.clone(), backend.clone(), Duration::hours(24), 90);
+    let source_modified_at = "2025-02-03T04:05:06Z";
+    let created = json_request(
+        app.clone(),
+        json!({
+            "folder_id": folder_id,
+            "name": "misleading.jpg",
+            "size": 11,
+            "source_created_at": "2025-01-02T03:04:05Z",
+            "source_modified_at": source_modified_at
+        }),
+    )
+    .await;
+    let created: CreateUploadResponse = response_json(created).await;
+    assert_eq!(
+        chunk_request(
+            app.clone(),
+            created.session_id,
+            "bytes 0-10/11",
+            b"hello world"
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+
+    let finalized = finalize_request(app.clone(), created.session_id).await;
+    assert_eq!(finalized.status(), StatusCode::OK);
+    let finalized: Value = response_json(finalized).await;
+    let node_id =
+        Uuid::parse_str(finalized["id"].as_str().expect("node id")).expect("valid node id");
+    let node = strife_db::get_node_by_id(&pool, node_id)
+        .await
+        .expect("load node")
+        .expect("node exists");
+    assert_eq!(
+        node.source_modified_at
+            .expect("source modified")
+            .to_rfc3339(),
+        "2025-02-03T04:05:06+00:00"
+    );
+    let object = strife_db::get_file_object_by_node_id(&pool, node_id)
+        .await
+        .expect("load object")
+        .expect("object exists");
+    assert_eq!(object.mime_type.as_deref(), Some("text/plain"));
+    assert_eq!(
+        object.checksum_sha256.as_deref(),
+        Some("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")
+    );
+    let original_id = Uuid::parse_str(&object.storage_key).expect("original key");
+    assert!(
+        backend
+            .exists(StorageKey::original(original_id))
+            .await
+            .expect("check original")
+    );
+    assert!(
+        !backend
+            .exists(StorageKey::staging(created.staging_key))
+            .await
+            .expect("check staging")
+    );
+    let job_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM jobs WHERE target_node_id = $1 AND job_type = 'metadata_extraction'",
+    )
+    .bind(node_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count jobs");
+    assert_eq!(job_count, 1);
+
+    let repeated: Value =
+        response_json(finalize_request(app.clone(), created.session_id).await).await;
+    assert_eq!(repeated["id"], finalized["id"]);
+
+    let incomplete = json_request(
+        app.clone(),
+        json!({"folder_id": folder_id, "name": "incomplete.bin", "size": 10}),
+    )
+    .await;
+    let incomplete: CreateUploadResponse = response_json(incomplete).await;
+    chunk_request(app.clone(), incomplete.session_id, "bytes 0-4/10", b"short").await;
+    assert_eq!(
+        finalize_request(app, incomplete.session_id).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    cleanup_upload_fixture(&pool, folder_id, &root).await;
+}
+
+#[tokio::test]
+async fn finalization_rechecks_name_conflicts_and_restores_staging() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL API integration test");
+        return;
+    };
+    let folder_id = create_fixture_folder(&pool).await;
+    let root = std::env::temp_dir().join(format!("strife-finalize-race-{}", Uuid::new_v4()));
+    let backend = Arc::new(LocalFsBackend::new(&root).await.expect("create storage"));
+    let app = strife_api::uploads::router(pool.clone(), backend.clone(), Duration::hours(24), 90);
+    let created = json_request(
+        app.clone(),
+        json!({"folder_id": folder_id, "name": "raced.txt", "size": 5}),
+    )
+    .await;
+    let created: CreateUploadResponse = response_json(created).await;
+    chunk_request(app.clone(), created.session_id, "bytes 0-4/5", b"hello").await;
+
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
+        .bind(Uuid::new_v4())
+        .bind(folder_id)
+        .bind("raced.txt")
+        .execute(&pool)
+        .await
+        .expect("create competing node");
+
+    let conflict = finalize_request(app, created.session_id).await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert!(
+        backend
+            .exists(StorageKey::staging(created.staging_key))
+            .await
+            .expect("check restored staging object")
+    );
+    let progress = strife_db::get_session_progress(&pool, created.session_id)
+        .await
+        .expect("load session")
+        .expect("session exists");
+    assert_eq!(
+        progress.session.state,
+        strife_db::UploadSessionState::Active
+    );
+
+    cleanup_upload_fixture(&pool, folder_id, &root).await;
 }

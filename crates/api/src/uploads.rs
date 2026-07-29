@@ -11,14 +11,19 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use strife_db::{
-    CreateUploadSession, LifecycleState, NodeKind, RecordChunkError, UploadSessionState,
+    CreateUploadSession, FinalizeUploadError, LifecycleState, NodeKind, RecordChunkError,
+    UploadSessionState,
 };
 use strife_domain::FolderRules;
 use strife_storage::{StorageBackend, StorageKey};
+use tokio::io::AsyncReadExt;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
+
+use crate::folders::FolderResponse;
 
 #[derive(Clone)]
 struct UploadState {
@@ -38,6 +43,7 @@ pub fn router(
     Router::new()
         .route("/api/uploads", post(create_upload))
         .route("/api/uploads/{id}", patch(upload_chunk))
+        .route("/api/uploads/{id}/finalize", post(finalize_upload))
         .with_state(UploadState {
             pool,
             storage,
@@ -83,6 +89,7 @@ enum UploadApiError {
     NameConflict,
     RangeConflict,
     Gone,
+    Incomplete,
     DiskFull(u64),
     Internal,
 }
@@ -113,6 +120,12 @@ impl IntoResponse for UploadApiError {
                 StatusCode::GONE,
                 "upload_inactive",
                 "The upload session is no longer active",
+                None,
+            ),
+            Self::Incomplete => (
+                StatusCode::BAD_REQUEST,
+                "upload_incomplete",
+                "The upload has missing bytes",
                 None,
             ),
             Self::DiskFull(usage) => (
@@ -196,7 +209,15 @@ async fn create_upload(
     }
 
     let staging_key = Uuid::new_v4();
-    let session = strife_db::create_session(
+    state
+        .storage
+        .put_stream(
+            StorageKey::staging(staging_key),
+            Box::pin(tokio::io::empty()),
+        )
+        .await
+        .map_err(|_| UploadApiError::Internal)?;
+    let session_result = strife_db::create_session(
         &state.pool,
         CreateUploadSession {
             target_folder_id: folder.id,
@@ -208,14 +229,18 @@ async fn create_upload(
             expires_at: Utc::now() + state.session_ttl,
         },
     )
-    .await
-    .map_err(|error| {
-        if is_unique_violation(&error) {
-            UploadApiError::NameConflict
-        } else {
-            UploadApiError::Internal
+    .await;
+    let session = match session_result {
+        Ok(session) => session,
+        Err(error) => {
+            let _ = state.storage.delete(StorageKey::staging(staging_key)).await;
+            return Err(if is_unique_violation(&error) {
+                UploadApiError::NameConflict
+            } else {
+                UploadApiError::Internal
+            });
         }
-    })?;
+    };
 
     Ok((
         StatusCode::CREATED,
@@ -224,6 +249,109 @@ async fn create_upload(
             staging_key,
         }),
     ))
+}
+
+async fn finalize_upload(
+    State(state): State<UploadState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<Json<FolderResponse>, UploadApiError> {
+    let progress = strife_db::get_session_progress(&state.pool, session_id)
+        .await
+        .map_err(|_| UploadApiError::Internal)?
+        .ok_or(UploadApiError::NotFound)?;
+    if progress.session.state == UploadSessionState::Completed {
+        let node_id = progress
+            .session
+            .completed_node_id
+            .ok_or(UploadApiError::Internal)?;
+        let node = strife_db::get_node_by_id(&state.pool, node_id)
+            .await
+            .map_err(|_| UploadApiError::Internal)?
+            .ok_or(UploadApiError::NotFound)?;
+        return Ok(Json(node.into()));
+    }
+    if progress.session.state != UploadSessionState::Active {
+        return Err(UploadApiError::Gone);
+    }
+    if progress
+        .session
+        .expected_byte_size
+        .is_some_and(|expected| expected != progress.session.received_bytes)
+    {
+        return Err(UploadApiError::Incomplete);
+    }
+
+    let staging_id =
+        Uuid::parse_str(&progress.session.staging_key).map_err(|_| UploadApiError::Internal)?;
+    let staging_key = StorageKey::staging(staging_id);
+    if !state
+        .storage
+        .exists(staging_key)
+        .await
+        .map_err(|_| UploadApiError::Internal)?
+    {
+        return Err(UploadApiError::NotFound);
+    }
+    let checksum = checksum_reader(
+        state
+            .storage
+            .get_stream(staging_key)
+            .await
+            .map_err(|_| UploadApiError::Internal)?,
+    )
+    .await?;
+    let mime_type = state
+        .storage
+        .detect_mime(staging_key)
+        .await
+        .map_err(|_| UploadApiError::Internal)?;
+    let original_id = Uuid::new_v4();
+    let original_key = StorageKey::original(original_id);
+    state
+        .storage
+        .move_object(staging_key, original_key)
+        .await
+        .map_err(|_| UploadApiError::Internal)?;
+    let finalized = strife_db::finalize_upload(
+        &state.pool,
+        session_id,
+        original_id,
+        progress.session.received_bytes,
+        &mime_type,
+        &checksum,
+    )
+    .await;
+    match finalized {
+        Ok(node) => Ok(Json(node.into())),
+        Err(error) => {
+            let _ = state.storage.move_object(original_key, staging_key).await;
+            Err(match error {
+                FinalizeUploadError::NotFound => UploadApiError::NotFound,
+                FinalizeUploadError::NotActive => UploadApiError::Gone,
+                FinalizeUploadError::Incomplete => UploadApiError::Incomplete,
+                FinalizeUploadError::NameConflict => UploadApiError::NameConflict,
+                FinalizeUploadError::Database(_) => UploadApiError::Internal,
+            })
+        }
+    }
+}
+
+async fn checksum_reader(
+    mut reader: strife_storage::StorageReader,
+) -> Result<String, UploadApiError> {
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|_| UploadApiError::Internal)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 async fn upload_chunk(

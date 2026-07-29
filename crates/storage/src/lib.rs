@@ -87,6 +87,8 @@ pub trait StorageBackend: Send + Sync {
     async fn put_stream(&self, key: StorageKey, reader: StorageReader) -> Result<()>;
     async fn write_range(&self, key: StorageKey, offset: u64, reader: StorageReader)
     -> Result<u64>;
+    async fn move_object(&self, source: StorageKey, destination: StorageKey) -> Result<()>;
+    async fn detect_mime(&self, key: StorageKey) -> Result<String>;
     async fn get_stream(&self, key: StorageKey) -> Result<StorageReader>;
     async fn get_range(&self, key: StorageKey, offset: u64, length: u64) -> Result<StorageReader>;
     async fn delete(&self, key: StorageKey) -> Result<()>;
@@ -181,6 +183,33 @@ impl StorageBackend for LocalFsBackend {
             .context("stream staging object range")?;
         file.flush().await.context("flush staging object range")?;
         Ok(written)
+    }
+
+    async fn move_object(&self, source: StorageKey, destination: StorageKey) -> Result<()> {
+        fs::rename(self.path_for(source), self.path_for(destination))
+            .await
+            .context("move managed storage object")
+    }
+
+    async fn detect_mime(&self, key: StorageKey) -> Result<String> {
+        let output = tokio::process::Command::new("file")
+            .arg("--brief")
+            .arg("--mime-type")
+            .arg(self.path_for(key))
+            .output()
+            .await
+            .context("run content MIME detection")?;
+        if !output.status.success() {
+            bail!("content MIME detection failed");
+        }
+        let mime = String::from_utf8(output.stdout)
+            .context("MIME detector returned invalid text")?
+            .trim()
+            .to_owned();
+        if mime.is_empty() {
+            bail!("MIME detector returned an empty result");
+        }
+        Ok(mime)
     }
 
     async fn get_stream(&self, key: StorageKey) -> Result<StorageReader> {

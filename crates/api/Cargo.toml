@@ -13,6 +13,7 @@ fs2.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 strife-db = { path = "../db" }
 strife-domain = { path = "../domain" }
