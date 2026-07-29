@@ -1932,7 +1932,14 @@ name = "strife-importer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "chrono",
+ "sqlx",
+ "strife-db",
  "strife-storage",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

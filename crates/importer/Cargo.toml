@@ -7,7 +7,14 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+sqlx.workspace = true
+strife-db = { path = "../db" }
 strife-storage = { path = "../storage" }
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

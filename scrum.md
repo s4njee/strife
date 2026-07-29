@@ -1164,14 +1164,24 @@ As a user, I want a directory scanner in `crates/importer` so that files are det
 
 **Acceptance Criteria:**
 
-- [ ] A scanner function walks the configured `watch_path` recursively.
-- [ ] For each regular file found, it upserts an `import_entries` row with `state = discovered`, recording size and modification time.
-- [ ] Symbolic links, device files, sockets, and other special files are **skipped** (logged at debug level).
-- [ ] Hidden files (starting with `.`) are skipped by default (configurable).
-- [ ] Directories in the watch path are recorded so hierarchy can be recreated.
-- [ ] The scanner runs only when manually invoked.
-- [ ] The scanner is idempotent: re-scanning the same unchanged file does not create duplicate entries.
-- [ ] Tests: create files in a temp dir, run the scanner, verify entries are created.
+- [x] A scanner function walks the configured `watch_path` recursively.
+- [x] For each regular file found, it upserts an `import_entries` row with `state = discovered`, recording size and modification time.
+- [x] Symbolic links, device files, sockets, and other special files are **skipped** (logged at debug level).
+- [x] Hidden files (starting with `.`) are skipped by default (configurable).
+- [x] Directories in the watch path are recorded so hierarchy can be recreated.
+- [x] The scanner runs only when manually invoked.
+- [x] The scanner is idempotent: re-scanning the same unchanged file does not create duplicate entries.
+- [x] Tests: create files in a temp dir, run the scanner, verify entries are created.
+
+**Implementation report:** Implemented a deterministic, manually invoked recursive scanner with a PostgreSQL discovery sink, parent-first directory reporting, configurable hidden-file inclusion, and debug logging for skipped entries. A temporary-tree test verifies nested discovery while hidden files and symlinks are excluded.
+
+**New files:** None.
+
+**Modified files:**
+
+- `Cargo.lock`
+- `crates/importer/Cargo.toml`
+- `crates/importer/src/lib.rs`
 
 ---
 
