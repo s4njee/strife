@@ -8,7 +8,17 @@ import {
 } from '../api/client'
 import type { FolderItem } from '../api/types'
 
-const DEFAULT_CHUNK_SIZE = 1024 * 1024
+const configuredChunkSize = Number(import.meta.env.VITE_UPLOAD_CHUNK_SIZE_BYTES)
+const DEFAULT_CHUNK_SIZE =
+  Number.isSafeInteger(configuredChunkSize) && configuredChunkSize > 0
+    ? configuredChunkSize
+    : 1024 * 1024
+const MAX_CONCURRENT_UPLOADS = 3
+
+export interface UploadCandidate {
+  file: File
+  relativePath: string
+}
 
 export interface FolderUploadResult {
   path: string
@@ -21,25 +31,66 @@ export async function uploadFolderFiles(
   targetFolderId: string,
   chunkSize = DEFAULT_CHUNK_SIZE,
 ): Promise<FolderUploadResult[]> {
+  return uploadFiles(
+    files.map((file) => ({
+      file,
+      relativePath: file.webkitRelativePath || file.name,
+    })),
+    targetFolderId,
+    chunkSize,
+  )
+}
+
+export async function uploadFiles(
+  candidates: UploadCandidate[],
+  targetFolderId: string,
+  chunkSize = DEFAULT_CHUNK_SIZE,
+): Promise<FolderUploadResult[]> {
   const folderCache = new Map<string, string>()
-  const results: FolderUploadResult[] = []
-  for (const file of files) {
-    const path = file.webkitRelativePath || file.name
-    try {
-      const segments = path.split('/').filter(Boolean)
-      segments.pop()
-      const parentId = await ensureFolderPath(
+  const results = new Array<FolderUploadResult>(candidates.length)
+  let nextIndex = 0
+  const uploadNext = async () => {
+    while (nextIndex < candidates.length) {
+      const index = nextIndex
+      nextIndex += 1
+      const candidate = candidates[index]
+      results[index] = await uploadCandidate(
+        candidate,
         targetFolderId,
-        segments,
         folderCache,
+        chunkSize,
       )
-      const node = await uploadOneFile(file, parentId, chunkSize)
-      results.push({ path, node })
-    } catch (error) {
-      results.push({ path, error: uploadErrorMessage(error) })
     }
   }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(MAX_CONCURRENT_UPLOADS, candidates.length) },
+      uploadNext,
+    ),
+  )
   return results
+}
+
+async function uploadCandidate(
+  candidate: UploadCandidate,
+  targetFolderId: string,
+  folderCache: Map<string, string>,
+  chunkSize: number,
+): Promise<FolderUploadResult> {
+  const { file, relativePath: path } = candidate
+  try {
+    const segments = path.split('/').filter(Boolean)
+    segments.pop()
+    const parentId = await ensureFolderPath(
+      targetFolderId,
+      segments,
+      folderCache,
+    )
+    const node = await uploadOneFile(file, parentId, chunkSize)
+    return { path, node }
+  } catch (error) {
+    return { path, error: uploadErrorMessage(error) }
+  }
 }
 
 async function ensureFolderPath(

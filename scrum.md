@@ -1017,13 +1017,27 @@ As a user, I want to upload files via a file picker button and drag-and-drop so 
 
 **Acceptance Criteria:**
 
-- [ ] An "Upload" button in the toolbar opens the native file picker (supports multi-select).
-- [ ] A second option or mode allows folder selection (`webkitdirectory`).
-- [ ] Dragging files/folders onto the table area shows a visual drop zone overlay.
-- [ ] Dropping files initiates upload sessions for each file.
-- [ ] Files are chunked client-side (default chunk size: 1 MB, configurable).
-- [ ] Each chunk is uploaded via `PATCH /api/uploads/:session_id` with the correct `Content-Range`.
-- [ ] Concurrent uploads are limited (e.g., max 3 simultaneous file uploads).
+- [x] An "Upload" button in the toolbar opens the native file picker (supports multi-select).
+- [x] A second option or mode allows folder selection (`webkitdirectory`).
+- [x] Dragging files/folders onto the table area shows a visual drop zone overlay.
+- [x] Dropping files initiates upload sessions for each file.
+- [x] Files are chunked client-side (default chunk size: 1 MB, configurable).
+- [x] Each chunk is uploaded via `PATCH /api/uploads/:session_id` with the correct `Content-Range`.
+- [x] Concurrent uploads are limited (e.g., max 3 simultaneous file uploads).
+
+**Implementation report:** Added multi-file picking and directory-aware drag-and-drop with a themed table overlay, per-item results, a configurable 1 MiB chunk size, and a shared three-worker upload queue used by both file and folder flows. A live browser upload of a 2,349,483-byte file produced three persisted ranges spanning byte 0 through 2,349,482 and appeared in the table after finalization.
+
+**New files:**
+
+- `apps/web/src/components/FileUploadControl.tsx`
+- `apps/web/src/components/UploadDropZone.css`
+- `apps/web/src/uploads/dropFiles.ts`
+
+**Modified files:**
+
+- `.env.example`
+- `apps/web/src/uploads/folderUpload.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 
