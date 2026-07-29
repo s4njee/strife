@@ -340,12 +340,28 @@ As a developer, I want the `nodes` table with a root node automatically created 
 
 **Acceptance Criteria:**
 
-- [ ] Migration creates a `nodes` table with columns: `id` (UUID PK), `parent_id` (nullable FK to self), `name` (text, not null), `kind` (enum: `folder` | `file`), `lifecycle_state` (enum: `active` | `trashed` | `deleted`), `source_created_at` (timestamptz, nullable), `source_modified_at` (timestamptz, nullable), `created_at` (timestamptz, not null, default now), `updated_at` (timestamptz, not null, default now).
-- [ ] A unique constraint enforces case-sensitive sibling uniqueness: `UNIQUE (parent_id, name) WHERE lifecycle_state = 'active'`.
-- [ ] A root node (e.g., `parent_id IS NULL`, `name = 'root'`, `kind = 'folder'`) is inserted by the migration or by application startup idempotently.
-- [ ] A CHECK or trigger prevents a node from being its own parent.
-- [ ] `crates/db` exposes typed query functions: `get_node_by_id`, `list_children`.
-- [ ] Integration tests verify the root exists after migration and that the unique constraint rejects duplicate sibling names.
+- [x] Migration creates a `nodes` table with columns: `id` (UUID PK), `parent_id` (nullable FK to self), `name` (text, not null), `kind` (enum: `folder` | `file`), `lifecycle_state` (enum: `active` | `trashed` | `deleted`), `source_created_at` (timestamptz, nullable), `source_modified_at` (timestamptz, nullable), `created_at` (timestamptz, not null, default now), `updated_at` (timestamptz, not null, default now).
+- [x] A unique constraint enforces case-sensitive sibling uniqueness: `UNIQUE (parent_id, name) WHERE lifecycle_state = 'active'`.
+- [x] A root node (e.g., `parent_id IS NULL`, `name = 'root'`, `kind = 'folder'`) is inserted by the migration or by application startup idempotently.
+- [x] A CHECK or trigger prevents a node from being its own parent.
+- [x] `crates/db` exposes typed query functions: `get_node_by_id`, `list_children`.
+- [x] Integration tests verify the root exists after migration and that the unique constraint rejects duplicate sibling names.
+
+**Implementation report:** Added PostgreSQL node enums, the rooted hierarchy table, active-sibling uniqueness, self-parent protection, and an idempotent stable root record. Added typed node reads plus integration coverage against PostgreSQL; CI now supplies PostgreSQL so those tests exercise the real migration and constraint.
+
+**New files:**
+
+- `crates/db/migrations/0002_nodes.down.sql`
+- `crates/db/migrations/0002_nodes.up.sql`
+- `crates/db/tests/hierarchy.rs`
+
+**Modified files:**
+
+- `.github/workflows/ci.yml`
+- `Cargo.lock`
+- `Cargo.toml`
+- `crates/db/Cargo.toml`
+- `crates/db/src/lib.rs`
 
 ---
 

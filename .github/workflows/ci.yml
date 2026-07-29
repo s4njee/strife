@@ -13,6 +13,22 @@ jobs:
   check:
     name: Check (${{ matrix.target }})
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.10-alpine3.24
+        env:
+          POSTGRES_DB: strife
+          POSTGRES_USER: strife
+          POSTGRES_PASSWORD: strife-dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strife -d strife"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://strife:strife-dev@127.0.0.1:5432/strife
     strategy:
       fail-fast: false
       matrix:
@@ -70,4 +86,3 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: apps/web
-
