@@ -985,11 +985,29 @@ As a system, I want upload initiation rejected when disk usage ≥ 90% so that t
 
 **Acceptance Criteria:**
 
-- [ ] Before creating an upload session, check `storage.disk_usage()`.
-- [ ] If usage ≥ 90%, return `507 Insufficient Storage` with `{ "error": "disk_full", "usage_percent": number }`.
-- [ ] The 90% threshold is a configurable environment variable (`DISK_GUARD_PERCENT`, default 90).
-- [ ] The same check runs before watched-folder imports (Epic 3).
-- [ ] Test with a mock that simulates 91% usage and verify rejection.
+- [x] Before creating an upload session, check `storage.disk_usage()`.
+- [x] If usage ≥ 90%, return `507 Insufficient Storage` with `{ "error": "disk_full", "usage_percent": number }`.
+- [x] The 90% threshold is a configurable environment variable (`DISK_GUARD_PERCENT`, default 90).
+- [x] The same check runs before watched-folder imports (Epic 3).
+- [x] Test with a mock that simulates 91% usage and verify rejection.
+
+**Implementation report:** Extracted a shared projected-capacity guard used by upload initiation and the watched-folder importer boundary, with a validated `DISK_GUARD_PERCENT` setting that defaults to 90. Unit and live API tests verify threshold projections and the exact 507 payload at simulated 91% usage.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `.env.example`
+- `Cargo.lock`
+- `crates/api/src/config.rs`
+- `crates/api/src/lib.rs`
+- `crates/api/src/uploads.rs`
+- `crates/api/tests/uploads_api.rs`
+- `crates/importer/Cargo.toml`
+- `crates/importer/src/lib.rs`
+- `crates/storage/src/lib.rs`
 
 ---
 

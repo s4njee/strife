@@ -79,7 +79,12 @@ pub async fn run(config: Config) -> Result<()> {
     let app = health::router(dependencies)
         .merge(folders::router(pool.clone()))
         .merge(files::router(pool.clone(), storage.clone()))
-        .merge(uploads::router(pool, storage, upload_ttl, 90));
+        .merge(uploads::router(
+            pool,
+            storage,
+            upload_ttl,
+            config.disk_guard_percent,
+        ));
 
     axum::serve(listener, app)
         .await

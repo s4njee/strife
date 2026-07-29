@@ -1930,6 +1930,10 @@ dependencies = [
 [[package]]
 name = "strife-importer"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "strife-storage",
+]
 
 [[package]]
 name = "strife-media"

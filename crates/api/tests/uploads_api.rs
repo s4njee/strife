@@ -247,15 +247,17 @@ async fn upload_initiation_validates_names_capacity_and_expiry() {
     );
 
     let disk_full_app =
-        strife_api::uploads::router(pool.clone(), storage(850), Duration::hours(24), 90);
+        strife_api::uploads::router(pool.clone(), storage(910), Duration::hours(24), 90);
     let disk_full = json_request(
         disk_full_app,
-        json!({"folder_id": folder_id, "name": "large.bin", "size": 100}),
+        json!({"folder_id": folder_id, "name": "large.bin", "size": 0}),
     )
     .await;
     assert_eq!(disk_full.status(), StatusCode::INSUFFICIENT_STORAGE);
     let disk_full: Value = response_json(disk_full).await;
     assert_eq!(disk_full["code"], "disk_full");
+    assert_eq!(disk_full["error"], "disk_full");
+    assert_eq!(disk_full["usage_percent"], 91);
 
     sqlx::query("DELETE FROM upload_sessions WHERE target_folder_id = $1")
         .bind(folder_id)

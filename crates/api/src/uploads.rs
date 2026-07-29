@@ -18,7 +18,7 @@ use strife_db::{
     UploadSessionState,
 };
 use strife_domain::FolderRules;
-use strife_storage::{StorageBackend, StorageKey};
+use strife_storage::{DiskGuard, StorageBackend, StorageKey};
 use tokio::io::AsyncReadExt;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
@@ -30,10 +30,14 @@ struct UploadState {
     pool: PgPool,
     storage: Arc<dyn StorageBackend>,
     session_ttl: Duration,
-    disk_guard_percent: u8,
+    disk_guard: DiskGuard,
 }
 
 /// Builds the resumable-upload API router.
+///
+/// # Panics
+///
+/// Panics when `disk_guard_percent` is outside the inclusive range 1..=100.
 pub fn router(
     pool: PgPool,
     storage: Arc<dyn StorageBackend>,
@@ -51,7 +55,8 @@ pub fn router(
             pool,
             storage,
             session_ttl,
-            disk_guard_percent,
+            disk_guard: DiskGuard::new(disk_guard_percent)
+                .expect("disk guard percentage must be between 1 and 100"),
         })
 }
 
@@ -103,6 +108,8 @@ struct ListUploadsQuery {
 #[derive(Debug, Serialize)]
 struct ErrorBody {
     code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'static str>,
     message: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     usage_percent: Option<u64>,
@@ -171,6 +178,7 @@ impl IntoResponse for UploadApiError {
             status,
             Json(ErrorBody {
                 code,
+                error: (code == "disk_full").then_some(code),
                 message,
                 usage_percent,
             }),
@@ -215,24 +223,14 @@ async fn create_upload(
         .disk_usage()
         .await
         .map_err(|_| UploadApiError::Internal)?;
-    let projected_used = usage.used_bytes.saturating_add(
-        request
-            .size
-            .and_then(|size| u64::try_from(size).ok())
-            .unwrap_or_default(),
-    );
-    let usage_percent = projected_used
-        .saturating_mul(100)
-        .checked_div(usage.total_bytes)
-        .unwrap_or(100);
-    if usage.total_bytes == 0
-        || projected_used.saturating_mul(100)
-            >= usage
-                .total_bytes
-                .saturating_mul(u64::from(state.disk_guard_percent))
-    {
-        return Err(UploadApiError::DiskFull(usage_percent));
-    }
+    let incoming_bytes = request
+        .size
+        .and_then(|size| u64::try_from(size).ok())
+        .unwrap_or_default();
+    state
+        .disk_guard
+        .check(usage, incoming_bytes)
+        .map_err(|error| UploadApiError::DiskFull(error.usage_percent))?;
 
     let staging_key = Uuid::new_v4();
     state

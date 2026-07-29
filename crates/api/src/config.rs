@@ -11,6 +11,7 @@ pub struct Config {
     pub listen_addr: SocketAddr,
     pub tika_url: String,
     pub upload_session_ttl_hours: u64,
+    pub disk_guard_percent: u8,
 }
 
 impl Config {
@@ -34,6 +35,8 @@ impl Config {
         if upload_session_ttl_hours == 0 {
             bail!("UPLOAD_SESSION_TTL_HOURS must be greater than zero");
         }
+        let disk_guard_percent =
+            parse_disk_guard_percent(env::var("DISK_GUARD_PERCENT").ok().as_deref())?;
 
         Ok(Self {
             database_url,
@@ -41,8 +44,20 @@ impl Config {
             listen_addr,
             tika_url,
             upload_session_ttl_hours,
+            disk_guard_percent,
         })
     }
+}
+
+fn parse_disk_guard_percent(value: Option<&str>) -> Result<u8> {
+    let percent = value
+        .unwrap_or("90")
+        .parse::<u8>()
+        .context("DISK_GUARD_PERCENT must be an integer from 1 to 100")?;
+    if !(1..=100).contains(&percent) {
+        bail!("DISK_GUARD_PERCENT must be between 1 and 100");
+    }
+    Ok(percent)
 }
 
 fn required(name: &str) -> Result<String> {
@@ -69,7 +84,7 @@ fn validate_http_url(name: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_http_url;
+    use super::{parse_disk_guard_percent, validate_http_url};
 
     #[test]
     fn accepts_absolute_http_urls() {
@@ -81,5 +96,13 @@ mod tests {
     fn rejects_relative_or_non_http_urls() {
         assert!(validate_http_url("TIKA_URL", "/version").is_err());
         assert!(validate_http_url("TIKA_URL", "ftp://tika.local").is_err());
+    }
+
+    #[test]
+    fn disk_guard_defaults_and_validates() {
+        assert_eq!(parse_disk_guard_percent(None).expect("default"), 90);
+        assert_eq!(parse_disk_guard_percent(Some("87")).expect("custom"), 87);
+        assert!(parse_disk_guard_percent(Some("0")).is_err());
+        assert!(parse_disk_guard_percent(Some("101")).is_err());
     }
 }

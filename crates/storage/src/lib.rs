@@ -81,6 +81,53 @@ pub struct DiskUsage {
     pub available_bytes: u64,
 }
 
+/// Configurable capacity threshold shared by uploads and watched-folder imports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiskGuard {
+    threshold_percent: u8,
+}
+
+impl DiskGuard {
+    /// Creates a guard for a percentage in the inclusive range 1..=100.
+    #[must_use]
+    pub const fn new(threshold_percent: u8) -> Option<Self> {
+        if threshold_percent == 0 || threshold_percent > 100 {
+            None
+        } else {
+            Some(Self { threshold_percent })
+        }
+    }
+
+    /// Checks current and projected usage, returning the projected percentage.
+    ///
+    /// # Errors
+    ///
+    /// Returns capacity information when the projection reaches the guard.
+    pub fn check(self, usage: DiskUsage, incoming_bytes: u64) -> Result<u64, DiskGuardExceeded> {
+        let projected_used = usage.used_bytes.saturating_add(incoming_bytes);
+        let usage_percent = projected_used
+            .saturating_mul(100)
+            .checked_div(usage.total_bytes)
+            .unwrap_or(100);
+        if usage.total_bytes == 0
+            || projected_used.saturating_mul(100)
+                >= usage
+                    .total_bytes
+                    .saturating_mul(u64::from(self.threshold_percent))
+        {
+            Err(DiskGuardExceeded { usage_percent })
+        } else {
+            Ok(usage_percent)
+        }
+    }
+}
+
+/// Projected disk usage that meets or exceeds the configured guard.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiskGuardExceeded {
+    pub usage_percent: u64,
+}
+
 /// Backend contract for managed originals, staging objects, and artifacts.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
@@ -261,5 +308,39 @@ impl StorageBackend for LocalFsBackend {
         })
         .await
         .context("join disk usage task")?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DiskGuard, DiskUsage};
+
+    #[test]
+    fn disk_guard_rejects_current_and_projected_thresholds() {
+        let guard = DiskGuard::new(90).expect("valid guard");
+        let usage = DiskUsage {
+            total_bytes: 1_000,
+            used_bytes: 850,
+            available_bytes: 150,
+        };
+        assert_eq!(guard.check(usage, 0), Ok(85));
+        assert_eq!(
+            guard.check(usage, 50).expect_err("at threshold"),
+            super::DiskGuardExceeded { usage_percent: 90 }
+        );
+        assert_eq!(
+            guard
+                .check(
+                    DiskUsage {
+                        used_bytes: 910,
+                        available_bytes: 90,
+                        ..usage
+                    },
+                    0,
+                )
+                .expect_err("above threshold")
+                .usage_percent,
+            91
+        );
     }
 }
