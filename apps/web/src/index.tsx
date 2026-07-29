@@ -13,11 +13,15 @@ import {
 } from './views/WorkspaceView'
 
 const root = document.getElementById('root')
+const routerBase =
+  import.meta.env.BASE_URL === '/'
+    ? undefined
+    : import.meta.env.BASE_URL.replace(/\/$/, '')
 
 render(
   () => (
     <ThemeProvider>
-      <Router base={import.meta.env.BASE_URL} root={App}>
+      <Router base={routerBase} root={App}>
         <Route path="/" component={RootFolderView} />
         <Route path="/folder/:id" component={FolderView} />
         <Route path="/favorites" component={FavoritesView} />
