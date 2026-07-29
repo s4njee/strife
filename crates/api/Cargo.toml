@@ -17,6 +17,7 @@ sha2.workspace = true
 sqlx.workspace = true
 strife-db = { path = "../db" }
 strife-domain = { path = "../domain" }
+strife-importer = { path = "../importer" }
 strife-storage = { path = "../storage" }
 tokio.workspace = true
 tokio-util.workspace = true

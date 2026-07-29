@@ -2,12 +2,13 @@ pub mod config;
 pub mod files;
 pub mod folders;
 pub mod health;
+pub mod imports;
 pub mod uploads;
 
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -79,6 +80,13 @@ pub async fn run(config: Config) -> Result<()> {
     let app = health::router(dependencies)
         .merge(folders::router(pool.clone()))
         .merge(files::router(pool.clone(), storage.clone()))
+        .merge(imports::router(
+            pool.clone(),
+            storage.clone(),
+            config.storage_root.clone(),
+            PathBuf::from("/mnt/ext/watch"),
+            config.disk_guard_percent,
+        ))
         .merge(uploads::router(
             pool,
             storage,

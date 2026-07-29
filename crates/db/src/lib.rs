@@ -73,6 +73,21 @@ pub struct ImportSourceRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Import-source status with durable entry counts grouped by lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct ImportSourceStatusRecord {
+    pub id: Uuid,
+    pub watch_path: String,
+    pub destination_folder_id: Uuid,
+    pub enabled: bool,
+    pub last_scan_at: Option<DateTime<Utc>>,
+    pub discovered_count: i64,
+    pub stable_count: i64,
+    pub importing_count: i64,
+    pub imported_count: i64,
+    pub failed_count: i64,
+}
+
 /// One source file tracked across discovery, import, and retry.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct ImportEntryRecord {
@@ -124,6 +139,119 @@ pub async fn get_import_source(
         .bind(source_id)
         .fetch_optional(pool)
         .await
+}
+
+/// Lists watched-folder sources and their entry counts.
+///
+/// # Errors
+///
+/// Returns the database error when source status cannot be queried.
+pub async fn list_import_source_statuses(
+    pool: &PgPool,
+) -> Result<Vec<ImportSourceStatusRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportSourceStatusRecord>(
+        r"
+        SELECT
+            source.id,
+            source.watch_path,
+            source.destination_folder_id,
+            source.enabled,
+            source.last_scan_at,
+            count(entry.id) FILTER (WHERE entry.state = 'discovered') AS discovered_count,
+            count(entry.id) FILTER (WHERE entry.state = 'stable') AS stable_count,
+            count(entry.id) FILTER (WHERE entry.state = 'importing') AS importing_count,
+            count(entry.id) FILTER (WHERE entry.state = 'imported') AS imported_count,
+            count(entry.id) FILTER (WHERE entry.state = 'failed') AS failed_count
+        FROM import_sources AS source
+        LEFT JOIN import_entries AS entry ON entry.source_id = source.id
+        GROUP BY source.id
+        ORDER BY source.created_at, source.id
+        ",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Enables or disables the fixed watched-folder source.
+///
+/// # Errors
+///
+/// Returns the database error when the source cannot be updated.
+pub async fn set_import_source_enabled(
+    pool: &PgPool,
+    source_id: Uuid,
+    enabled: bool,
+) -> Result<Option<ImportSourceRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportSourceRecord>(
+        r"
+        UPDATE import_sources SET enabled = $2, updated_at = now()
+        WHERE id = $1 RETURNING *
+        ",
+    )
+    .bind(source_id)
+    .bind(enabled)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Records completion of a manually requested source scan.
+///
+/// # Errors
+///
+/// Returns the database error when the timestamp cannot be updated.
+pub async fn mark_import_source_scanned(pool: &PgPool, source_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE import_sources SET last_scan_at = now(), updated_at = now() WHERE id = $1")
+        .bind(source_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Lists entries for one source, optionally filtered to one state.
+///
+/// # Errors
+///
+/// Returns the database error when entries cannot be queried.
+pub async fn list_import_entries(
+    pool: &PgPool,
+    source_id: Uuid,
+    state: Option<ImportEntryState>,
+) -> Result<Vec<ImportEntryRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        SELECT * FROM import_entries
+        WHERE source_id = $1 AND ($2::import_entry_state IS NULL OR state = $2)
+        ORDER BY updated_at DESC, id
+        ",
+    )
+    .bind(source_id)
+    .bind(state)
+    .fetch_all(pool)
+    .await
+}
+
+/// Resets one failed source entry for a user-requested retry.
+///
+/// # Errors
+///
+/// Returns the database error when the entry cannot be updated.
+pub async fn retry_import_entry(
+    pool: &PgPool,
+    source_id: Uuid,
+    entry_id: Uuid,
+) -> Result<Option<ImportEntryRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        UPDATE import_entries
+        SET state = 'discovered', error_message = NULL, updated_at = now()
+        WHERE id = $1 AND source_id = $2 AND state = 'failed'
+        RETURNING *
+        ",
+    )
+    .bind(entry_id)
+    .bind(source_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Creates or refreshes a discovered entry. A path that reappears after its

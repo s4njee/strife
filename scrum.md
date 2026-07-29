@@ -1267,11 +1267,25 @@ As a user, I want API endpoints to configure and monitor watched-folder imports 
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/import-sources` returns the fixed source with its status (enabled, last scan time, entry counts by state).
-- [ ] `PATCH /api/import-sources/:id` toggles `enabled`.
-- [ ] `POST /api/import-sources/:id/scan` validates that the fixed path exists, is readable, and does not overlap managed storage, then runs one scan/import pass.
-- [ ] `GET /api/import-sources/:id/entries?state=failed` lists entries filtered by state, with error messages.
-- [ ] `POST /api/import-sources/:id/entries/:entry_id/retry` resets a failed entry to `discovered` for re-processing.
+- [x] `GET /api/import-sources` returns the fixed source with its status (enabled, last scan time, entry counts by state).
+- [x] `PATCH /api/import-sources/:id` toggles `enabled`.
+- [x] `POST /api/import-sources/:id/scan` validates that the fixed path exists, is readable, and does not overlap managed storage, then runs one scan/import pass.
+- [x] `GET /api/import-sources/:id/entries?state=failed` lists entries filtered by state, with error messages.
+- [x] `POST /api/import-sources/:id/entries/:entry_id/retry` resets a failed entry to `discovered` for re-processing.
+
+**Implementation report:** Added fixed-source management endpoints for aggregate status, enable/disable, validated manual scans, state-filtered entries, and failed-entry retry. API integration tests cover the full manual scan flow, persistent name-conflict errors, retry reset, disabled-source rejection, and managed-storage overlap protection.
+
+**New files:**
+
+- `crates/api/src/imports.rs`
+- `crates/api/tests/imports_api.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `crates/api/Cargo.toml`
+- `crates/api/src/lib.rs`
+- `crates/db/src/lib.rs`
 
 ---
 
