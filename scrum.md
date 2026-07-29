@@ -699,13 +699,26 @@ As a developer, I want a `StorageBackend` trait in `crates/storage` with impleme
 
 **Acceptance Criteria:**
 
-- [ ] `crates/storage` defines a `StorageBackend` trait with async methods: `put_stream(key, stream) -> Result<()>`, `get_stream(key) -> Result<impl AsyncRead>`, `get_range(key, offset, length) -> Result<impl AsyncRead>`, `delete(key) -> Result<()>`, `exists(key) -> Result<bool>`, `disk_usage() -> Result<DiskUsage>`.
-- [ ] A `LocalFsBackend` (or `MinioBackend`) implements the trait using the decided storage approach.
-- [ ] Storage keys are opaque UUIDs — display names are **never** used as file paths.
-- [ ] Three separate namespaces (directories or prefixes) exist: `staging/`, `originals/`, `artifacts/`.
-- [ ] `put_stream` writes atomically: write to a temp file, then rename (or use MinIO's multipart upload).
-- [ ] Integration tests verify put/get/delete round-trip and that `get_range` returns correct byte ranges.
-- [ ] `disk_usage()` returns total, used, and available bytes for the storage volume.
+- [x] `crates/storage` defines a `StorageBackend` trait with async methods: `put_stream(key, stream) -> Result<()>`, `get_stream(key) -> Result<impl AsyncRead>`, `get_range(key, offset, length) -> Result<impl AsyncRead>`, `delete(key) -> Result<()>`, `exists(key) -> Result<bool>`, `disk_usage() -> Result<DiskUsage>`.
+- [x] A `LocalFsBackend` (or `MinioBackend`) implements the trait using the decided storage approach.
+- [x] Storage keys are opaque UUIDs — display names are **never** used as file paths.
+- [x] Three separate namespaces (directories or prefixes) exist: `staging/`, `originals/`, `artifacts/`.
+- [x] `put_stream` writes atomically: write to a temp file, then rename (or use MinIO's multipart upload).
+- [x] Integration tests verify put/get/delete round-trip and that `get_range` returns correct byte ranges.
+- [x] `disk_usage()` returns total, used, and available bytes for the storage volume.
+
+**Implementation report:** Added an object-safe asynchronous storage contract and local-filesystem implementation with strongly typed UUID keys, isolated staging/originals/artifacts namespaces, and atomic temporary-file publication. Integration tests verify full round trips, exact ranged reads, idempotent deletion, namespace creation, and consistent total/used/available capacity reporting.
+
+**New files:**
+
+- `crates/storage/tests/local_fs.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `Cargo.toml`
+- `crates/storage/Cargo.toml`
+- `crates/storage/src/lib.rs`
 
 ---
 
