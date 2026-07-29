@@ -582,12 +582,24 @@ As a user, I want a dialog to create a new folder in the current directory so th
 
 **Acceptance Criteria:**
 
-- [ ] A "New Folder" button in the toolbar (or via context menu on empty space) opens a modal dialog.
-- [ ] Dialog has a text input for folder name, a "Create" button, and a "Cancel" button.
-- [ ] On submit, calls `POST /api/folders` with the current folder as parent.
-- [ ] On success, the new folder appears in the table without a full page refresh.
-- [ ] On `409 Conflict`, the dialog shows an inline error: "A folder with this name already exists".
-- [ ] The input is auto-focused on open. Enter submits; Escape cancels.
+- [x] A "New Folder" button in the toolbar (or via context menu on empty space) opens a modal dialog.
+- [x] Dialog has a text input for folder name, a "Create" button, and a "Cancel" button.
+- [x] On submit, calls `POST /api/folders` with the current folder as parent.
+- [x] On success, the new folder appears in the table without a full page refresh.
+- [x] On `409 Conflict`, the dialog shows an inline error: "A folder with this name already exists".
+- [x] The input is auto-focused on open. Enter submits; Escape cancels.
+
+**Implementation report:** Added a New Folder toolbar action, accessible modal form, typed create-folder API client, current-folder refetch, and exact inline 409 handling; the static Pages preview also supports local demonstration creates. Browser tests against the real Axum/PostgreSQL stack confirmed autofocus, Escape cancellation, button and Enter submission, live table refresh, and duplicate-name feedback, then removed the temporary folders.
+
+**New files:**
+
+- `apps/web/src/components/CreateFolderDialog.css`
+- `apps/web/src/components/CreateFolderDialog.tsx`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 

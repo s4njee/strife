@@ -1,0 +1,112 @@
+.folder-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.folder-toolbar button,
+.dialog-card button {
+  border: 1px solid var(--color-border-raised);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface-input);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.folder-toolbar button,
+.dialog-card button.is-primary {
+  border-color: var(--color-accent);
+  color: var(--color-accent-contrast);
+  background: var(--color-accent);
+}
+
+.folder-toolbar button:focus-visible,
+.dialog-card button:focus-visible,
+.dialog-card input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: rgb(0 0 0 / 68%);
+}
+
+.dialog-card {
+  width: min(26rem, 100%);
+  border: 1px solid var(--color-border-raised);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+  text-align: left;
+}
+
+.dialog-card header p,
+.dialog-card header h2 {
+  margin: 0;
+}
+
+.dialog-card header p {
+  color: var(--color-text-muted);
+  font: var(--font-weight-medium) var(--font-size-xs) / 1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dialog-card header h2 {
+  margin-top: var(--space-1);
+  font-size: 1.25rem;
+}
+
+.dialog-card form {
+  display: grid;
+  margin-top: var(--space-5);
+}
+
+.dialog-card label {
+  margin-bottom: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.dialog-card input {
+  width: 100%;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-primary);
+  background: var(--color-surface-input);
+}
+
+.dialog-card input[aria-invalid='true'] {
+  border-color: var(--color-error);
+}
+
+.dialog-card__error {
+  margin: var(--space-2) 0 0;
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+.dialog-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+}
+
+.dialog-card button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}

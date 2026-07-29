@@ -1,8 +1,13 @@
 import { useParams } from '@solidjs/router'
-import { createResource, Show, type JSX } from 'solid-js'
-import { getFolderAncestors, getFolderChildren } from '../api/client'
+import { createResource, createSignal, Show, type JSX } from 'solid-js'
+import {
+  createFolder,
+  getFolderAncestors,
+  getFolderChildren,
+} from '../api/client'
 import type { FolderAncestor, FolderItem } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
+import { CreateFolderDialog } from '../components/CreateFolderDialog'
 import { FileTable } from '../components/FileTable'
 
 const ROOT_FOLDER_ID = '00000000-0000-0000-0000-000000000001'
@@ -77,25 +82,59 @@ export function FolderView() {
 }
 
 function FolderContents(props: { folderId: string }) {
+  const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
+  const [showCreateDialog, setShowCreateDialog] = createSignal(false)
+  const [staticItems, setStaticItems] = createSignal(previewItems)
   const [children, { refetch }] = createResource(
-    () =>
-      import.meta.env.VITE_STATIC_PREVIEW === 'true' ? false : props.folderId,
+    () => (staticPreview ? false : props.folderId),
     (folderId) => getFolderChildren(folderId),
   )
   const items = () =>
-    import.meta.env.VITE_STATIC_PREVIEW === 'true'
-      ? previewItems
-      : (children()?.items ?? [])
+    staticPreview ? staticItems() : (children()?.items ?? [])
+
+  const handleCreate = async (name: string) => {
+    if (staticPreview) {
+      const now = new Date().toISOString()
+      setStaticItems((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          name,
+          kind: 'folder',
+          size_bytes: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ])
+      return
+    }
+
+    await createFolder(props.folderId, name)
+    await refetch()
+  }
 
   return (
-    <FileTable
-      items={items()}
-      loading={children.loading}
-      error={
-        children.error instanceof Error ? children.error.message : undefined
-      }
-      onRetry={() => void refetch()}
-    />
+    <>
+      <div class="folder-toolbar">
+        <button type="button" onClick={() => setShowCreateDialog(true)}>
+          New Folder
+        </button>
+      </div>
+      <FileTable
+        items={items()}
+        loading={children.loading}
+        error={
+          children.error instanceof Error ? children.error.message : undefined
+        }
+        onRetry={() => void refetch()}
+      />
+      <Show when={showCreateDialog()}>
+        <CreateFolderDialog
+          onCreate={handleCreate}
+          onClose={() => setShowCreateDialog(false)}
+        />
+      </Show>
+    </>
   )
 }
 

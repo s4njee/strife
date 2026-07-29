@@ -8,9 +8,17 @@ import type {
 } from './types'
 
 export class ApiClientError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly status?: number
+  readonly code?: string
+
+  constructor(
+    message: string,
+    options?: ErrorOptions & { status?: number; code?: string },
+  ) {
     super(message, options)
     this.name = 'ApiClientError'
+    this.status = options?.status
+    this.code = options?.code
   }
 }
 
@@ -127,6 +135,42 @@ export async function getFolderChildren(
   }
 }
 
+export async function createFolder(
+  parentId: string,
+  name: string,
+): Promise<FolderItem> {
+  let response: Response
+
+  try {
+    response = await fetch('/api/folders', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ parent_id: parentId, name }),
+    })
+  } catch (error) {
+    throw new ApiClientError('The folder could not be created.', {
+      cause: error,
+    })
+  }
+
+  if (!response.ok) {
+    const errorBody = await readErrorBody(response)
+    throw new ApiClientError(
+      errorBody?.message ?? `The create request failed (${response.status}).`,
+      { status: response.status, code: errorBody?.code },
+    )
+  }
+
+  const body: unknown = await response.json()
+  if (!isFolderItem(body)) {
+    throw new ApiClientError('The created folder response was invalid.')
+  }
+  return { ...body, size_bytes: body.size_bytes ?? null }
+}
+
 function isReadinessResponse(value: unknown): value is ReadinessResponse {
   if (!isRecord(value)) return false
 
@@ -174,6 +218,21 @@ function isFolderItem(value: unknown): value is FolderItem {
     typeof value.created_at === 'string' &&
     typeof value.updated_at === 'string'
   )
+}
+
+async function readErrorBody(
+  response: Response,
+): Promise<{ code?: string; message?: string } | undefined> {
+  try {
+    const body: unknown = await response.json()
+    if (!isRecord(body)) return undefined
+    return {
+      code: typeof body.code === 'string' ? body.code : undefined,
+      message: typeof body.message === 'string' ? body.message : undefined,
+    }
+  } catch {
+    return undefined
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
