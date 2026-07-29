@@ -807,14 +807,29 @@ As an API client, I want `PATCH /api/uploads/:session_id` to upload a chunk with
 
 **Acceptance Criteria:**
 
-- [ ] Accepts a `Content-Range` header (e.g., `bytes 0-1048575/10485760`) and the chunk body.
-- [ ] Streams the chunk body to the staging file at the correct offset — does **not** buffer the entire chunk in memory.
-- [ ] Updates `upload_sessions.received_bytes` and records the range in `upload_chunks`.
-- [ ] Returns `200` with current progress: `{ "received_bytes": number, "expected_bytes": number | null, "complete": boolean }`.
-- [ ] Rejects overlapping or duplicate ranges with `409`.
-- [ ] Rejects chunks for non-active sessions with `404` or `410 Gone`.
-- [ ] Incrementally computes SHA-256 checksum as chunks arrive (or on finalization).
-- [ ] Handles out-of-order chunks correctly.
+- [x] Accepts a `Content-Range` header (e.g., `bytes 0-1048575/10485760`) and the chunk body.
+- [x] Streams the chunk body to the staging file at the correct offset — does **not** buffer the entire chunk in memory.
+- [x] Updates `upload_sessions.received_bytes` and records the range in `upload_chunks`.
+- [x] Returns `200` with current progress: `{ "received_bytes": number, "expected_bytes": number | null, "complete": boolean }`.
+- [x] Rejects overlapping or duplicate ranges with `409`.
+- [x] Rejects chunks for non-active sessions with `404` or `410 Gone`.
+- [x] Incrementally computes SHA-256 checksum as chunks arrive (or on finalization).
+- [x] Handles out-of-order chunks correctly.
+
+**Implementation report:** Added strict `Content-Range` parsing and streamed random-access writes that feed Axum bodies directly into staging files without whole-chunk buffering, with checksum calculation intentionally assigned to finalization. Unit and live integration tests cover invalid ranges, reversed chunk order, exact reconstructed bytes, progress totals, overlap rejection, and inactive-session `410` responses.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `Cargo.lock`
+- `Cargo.toml`
+- `crates/api/Cargo.toml`
+- `crates/api/src/uploads.rs`
+- `crates/api/tests/uploads_api.rs`
+- `crates/storage/src/lib.rs`
 
 ---
 

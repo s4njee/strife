@@ -85,6 +85,8 @@ pub struct DiskUsage {
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     async fn put_stream(&self, key: StorageKey, reader: StorageReader) -> Result<()>;
+    async fn write_range(&self, key: StorageKey, offset: u64, reader: StorageReader)
+    -> Result<u64>;
     async fn get_stream(&self, key: StorageKey) -> Result<StorageReader>;
     async fn get_range(&self, key: StorageKey, offset: u64, length: u64) -> Result<StorageReader>;
     async fn delete(&self, key: StorageKey) -> Result<()>;
@@ -158,6 +160,27 @@ impl StorageBackend for LocalFsBackend {
             let _ = fs::remove_file(&temporary).await;
         }
         result
+    }
+
+    async fn write_range(
+        &self,
+        key: StorageKey,
+        offset: u64,
+        mut reader: StorageReader,
+    ) -> Result<u64> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.path_for(key))
+            .await
+            .context("open staging object for ranged write")?;
+        file.seek(SeekFrom::Start(offset)).await?;
+        let written = tokio::io::copy(&mut reader, &mut file)
+            .await
+            .context("stream staging object range")?;
+        file.flush().await.context("flush staging object range")?;
+        Ok(written)
     }
 
     async fn get_stream(&self, key: StorageKey) -> Result<StorageReader> {

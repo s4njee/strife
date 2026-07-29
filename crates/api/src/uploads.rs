@@ -2,17 +2,22 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::State,
-    http::StatusCode,
+    body::Body,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{patch, post},
 };
 use chrono::{DateTime, Duration, Utc};
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use strife_db::{CreateUploadSession, LifecycleState, NodeKind};
+use strife_db::{
+    CreateUploadSession, LifecycleState, NodeKind, RecordChunkError, UploadSessionState,
+};
 use strife_domain::FolderRules;
-use strife_storage::StorageBackend;
+use strife_storage::{StorageBackend, StorageKey};
+use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -32,6 +37,7 @@ pub fn router(
 ) -> Router {
     Router::new()
         .route("/api/uploads", post(create_upload))
+        .route("/api/uploads/{id}", patch(upload_chunk))
         .with_state(UploadState {
             pool,
             storage,
@@ -55,6 +61,13 @@ pub struct CreateUploadResponse {
     pub staging_key: Uuid,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UploadProgressResponse {
+    pub received_bytes: i64,
+    pub expected_bytes: Option<i64>,
+    pub complete: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct ErrorBody {
     code: &'static str,
@@ -68,6 +81,8 @@ enum UploadApiError {
     BadRequest(&'static str),
     NotFound,
     NameConflict,
+    RangeConflict,
+    Gone,
     DiskFull(u64),
     Internal,
 }
@@ -86,6 +101,18 @@ impl IntoResponse for UploadApiError {
                 StatusCode::CONFLICT,
                 "name_conflict",
                 "An active item or upload already has this name",
+                None,
+            ),
+            Self::RangeConflict => (
+                StatusCode::CONFLICT,
+                "range_conflict",
+                "This byte range has already been received",
+                None,
+            ),
+            Self::Gone => (
+                StatusCode::GONE,
+                "upload_inactive",
+                "The upload session is no longer active",
                 None,
             ),
             Self::DiskFull(usage) => (
@@ -111,6 +138,13 @@ impl IntoResponse for UploadApiError {
         )
             .into_response()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ContentRange {
+    start: i64,
+    end: i64,
+    total: Option<i64>,
 }
 
 async fn create_upload(
@@ -192,6 +226,139 @@ async fn create_upload(
     ))
 }
 
+async fn upload_chunk(
+    State(state): State<UploadState>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Json<UploadProgressResponse>, UploadApiError> {
+    let content_range = headers
+        .get("content-range")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)
+        .ok_or(UploadApiError::BadRequest(
+            "A valid Content-Range header is required",
+        ))?;
+    let progress = strife_db::get_session_progress(&state.pool, session_id)
+        .await
+        .map_err(|_| UploadApiError::Internal)?
+        .ok_or(UploadApiError::NotFound)?;
+    if progress.session.state != UploadSessionState::Active {
+        return Err(UploadApiError::Gone);
+    }
+    if content_range.total.is_some() && content_range.total != progress.session.expected_byte_size {
+        return Err(UploadApiError::BadRequest(
+            "Content-Range total does not match the upload session",
+        ));
+    }
+    if progress
+        .received_ranges
+        .iter()
+        .any(|range| range.start_byte <= content_range.end && range.end_byte >= content_range.start)
+    {
+        return Err(UploadApiError::RangeConflict);
+    }
+
+    let staging_id =
+        Uuid::parse_str(&progress.session.staging_key).map_err(|_| UploadApiError::Internal)?;
+    let stream = body.into_data_stream().map_err(std::io::Error::other);
+    let reader = StreamReader::new(stream);
+    let written = state
+        .storage
+        .write_range(
+            StorageKey::staging(staging_id),
+            u64::try_from(content_range.start).map_err(|_| UploadApiError::Internal)?,
+            Box::pin(reader),
+        )
+        .await
+        .map_err(|_| UploadApiError::Internal)?;
+    let expected_length = content_range
+        .end
+        .checked_sub(content_range.start)
+        .and_then(|difference| difference.checked_add(1))
+        .and_then(|length| u64::try_from(length).ok())
+        .ok_or(UploadApiError::BadRequest("Invalid byte range"))?;
+    if written != expected_length {
+        return Err(UploadApiError::BadRequest(
+            "Request body length does not match Content-Range",
+        ));
+    }
+
+    let session = strife_db::record_chunk(
+        &state.pool,
+        session_id,
+        content_range.start,
+        content_range.end,
+    )
+    .await
+    .map_err(|error| match error {
+        RecordChunkError::NotFound => UploadApiError::NotFound,
+        RecordChunkError::NotActive => UploadApiError::Gone,
+        RecordChunkError::Overlap => UploadApiError::RangeConflict,
+        RecordChunkError::Database(_) => UploadApiError::Internal,
+    })?;
+    Ok(Json(UploadProgressResponse {
+        received_bytes: session.received_bytes,
+        expected_bytes: session.expected_byte_size,
+        complete: session
+            .expected_byte_size
+            .is_some_and(|expected| session.received_bytes == expected),
+    }))
+}
+
+fn parse_content_range(value: &str) -> Option<ContentRange> {
+    let value = value.strip_prefix("bytes ")?;
+    let (range, total) = value.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse::<i64>().ok()?;
+    let end = end.parse::<i64>().ok()?;
+    if start < 0 || end < start {
+        return None;
+    }
+    let total = if total == "*" {
+        None
+    } else {
+        let parsed = total.parse::<i64>().ok()?;
+        if parsed <= end {
+            return None;
+        }
+        Some(parsed)
+    };
+    Some(ContentRange { start, end, total })
+}
+
 fn is_unique_violation(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::Database(database_error) if database_error.code().as_deref() == Some("23505"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ContentRange, parse_content_range};
+
+    #[test]
+    fn parses_valid_content_ranges() {
+        assert_eq!(
+            parse_content_range("bytes 0-4/10"),
+            Some(ContentRange {
+                start: 0,
+                end: 4,
+                total: Some(10)
+            })
+        );
+        assert_eq!(
+            parse_content_range("bytes 5-9/*"),
+            Some(ContentRange {
+                start: 5,
+                end: 9,
+                total: None
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_content_ranges() {
+        for value in ["0-4/10", "bytes 5-4/10", "bytes 0-10/10", "bytes a-b/10"] {
+            assert_eq!(parse_content_range(value), None);
+        }
+    }
 }

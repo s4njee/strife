@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_api::uploads::CreateUploadResponse;
 use strife_db::{MIGRATOR, ROOT_NODE_ID};
-use strife_storage::{DiskUsage, StorageBackend, StorageKey, StorageReader};
+use strife_storage::{DiskUsage, LocalFsBackend, StorageBackend, StorageKey, StorageReader};
+use tokio::{fs, io::AsyncReadExt};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -23,6 +24,15 @@ struct CapacityStorage {
 #[async_trait]
 impl StorageBackend for CapacityStorage {
     async fn put_stream(&self, _key: StorageKey, _reader: StorageReader) -> Result<()> {
+        bail!("not used")
+    }
+
+    async fn write_range(
+        &self,
+        _key: StorageKey,
+        _offset: u64,
+        _reader: StorageReader,
+    ) -> Result<u64> {
         bail!("not used")
     }
 
@@ -84,6 +94,22 @@ async fn json_request(app: axum::Router, body: Value) -> axum::response::Respons
     )
     .await
     .expect("send request")
+}
+
+async fn chunk_request(
+    app: axum::Router,
+    session_id: Uuid,
+    content_range: &str,
+    body: &'static [u8],
+) -> axum::response::Response {
+    app.oneshot(
+        Request::patch(format!("/api/uploads/{session_id}"))
+            .header("content-range", content_range)
+            .body(Body::from(body))
+            .expect("build chunk request"),
+    )
+    .await
+    .expect("send chunk request")
 }
 
 async fn response_json<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
@@ -167,4 +193,69 @@ async fn upload_initiation_validates_names_capacity_and_expiry() {
         .execute(&pool)
         .await
         .expect("remove fixture folder");
+}
+
+#[tokio::test]
+async fn chunks_stream_out_of_order_and_reject_overlaps() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL API integration test");
+        return;
+    };
+    let folder_id = create_fixture_folder(&pool).await;
+    let root = std::env::temp_dir().join(format!("strife-upload-api-{}", Uuid::new_v4()));
+    let backend = Arc::new(LocalFsBackend::new(&root).await.expect("create storage"));
+    let app = strife_api::uploads::router(pool.clone(), backend.clone(), Duration::hours(24), 90);
+    let created = json_request(
+        app.clone(),
+        json!({"folder_id": folder_id, "name": "chunks.bin", "size": 10}),
+    )
+    .await;
+    let created: CreateUploadResponse = response_json(created).await;
+
+    let later = chunk_request(app.clone(), created.session_id, "bytes 5-9/10", b"world").await;
+    assert_eq!(later.status(), StatusCode::OK);
+    let later: Value = response_json(later).await;
+    assert_eq!(later["received_bytes"], 5);
+    assert_eq!(later["complete"], false);
+
+    let earlier = chunk_request(app.clone(), created.session_id, "bytes 0-4/10", b"hello").await;
+    assert_eq!(earlier.status(), StatusCode::OK);
+    let earlier: Value = response_json(earlier).await;
+    assert_eq!(earlier["received_bytes"], 10);
+    assert_eq!(earlier["complete"], true);
+    assert_eq!(
+        chunk_request(app.clone(), created.session_id, "bytes 3-6/10", b"xxxx")
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    strife_db::finalize_session(&pool, created.session_id, "pending-finalization-test", None)
+        .await
+        .expect("mark session completed");
+    assert_eq!(
+        chunk_request(app, created.session_id, "bytes 0-4/10", b"hello")
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+
+    let mut stored = backend
+        .get_stream(StorageKey::staging(created.staging_key))
+        .await
+        .expect("open staged upload");
+    let mut bytes = Vec::new();
+    stored.read_to_end(&mut bytes).await.expect("read upload");
+    assert_eq!(bytes, b"helloworld");
+
+    sqlx::query("DELETE FROM upload_sessions WHERE target_folder_id = $1")
+        .bind(folder_id)
+        .execute(&pool)
+        .await
+        .expect("remove sessions");
+    sqlx::query("DELETE FROM nodes WHERE id = $1")
+        .bind(folder_id)
+        .execute(&pool)
+        .await
+        .expect("remove fixture folder");
+    fs::remove_dir_all(root).await.expect("remove storage");
 }
