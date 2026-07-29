@@ -17,9 +17,11 @@ Development proceeds in small vertical slices. Every milestone must leave the ap
 | Users | Single-user |
 | Network | Private LAN only; normal operation must not require internet access |
 | Authentication | None in v1 |
-| Host | Raspberry Pi 5, ARM64, 4 GB RAM |
+| Host | Gentoo Linux on Raspberry Pi 5, ARM64, 4 GB RAM |
 | Additional architecture | x86-64 must also be supported |
 | Capacity | 5 TB external HDD mounted at `/mnt/ext` |
+| Storage backend | Direct opaque-key storage on a reformatted ZFS volume; no MinIO in v1 |
+| Managed paths | Strife owns `/mnt/ext/strife`; storage and import roots are separate subtrees |
 | Database | PostgreSQL |
 | Frontend | SolidJS with TypeScript |
 | Backend | Rust with Axum and Tokio |
@@ -87,7 +89,7 @@ The primary development target is a Raspberry Pi 5 with 4 GB of RAM and a 5 TB e
 
 The Rust services, frontend assets, PostgreSQL setup, and external processing tools must run on ARM64. The code and eventual container images must also support x86-64. Memory-heavy extractors need explicit concurrency limits appropriate to a 4 GB host.
 
-The exact host operating system, disk filesystem, and managed subdirectories under `/mnt/ext` remain open in [`questions.md`](questions.md).
+Foundation choices are recorded in [ADR 0001](docs/decisions/0001-primary-host-platform.md), [ADR 0002](docs/decisions/0002-zfs-storage-backend.md), and [ADR 0003](docs/decisions/0003-managed-storage-layout.md).
 
 ## 5. Architecture
 
@@ -105,7 +107,7 @@ Axum API -------------------------------- PostgreSQL
 Storage abstraction                           |
       |                                       |
       v                                       |
-ZFS-backed directory or local MinIO            |
+ZFS-backed managed directory                   |
       ^                                       |
       |                                       |
 Background worker <---------------------------+
@@ -145,7 +147,7 @@ crates/
   api/                 Axum binary and HTTP layer
   worker/              metadata and preview worker
   domain/              file/folder rules and state machines
-  storage/             filesystem/MinIO abstraction
+  storage/             opaque-key storage abstraction
   db/                  PostgreSQL queries and migrations
   media/               extractor and preview adapters
   importer/            watched-folder discovery and ingestion
@@ -159,10 +161,10 @@ Use a development Docker Compose configuration for PostgreSQL, Apache Tika, and 
 
 Original bytes and generated artifacts live outside PostgreSQL. PostgreSQL holds the virtual hierarchy, lifecycle state, storage keys, upload/import progress, metadata, and background jobs.
 
-- The physical backend is still to be chosen between a ZFS-backed managed directory and local MinIO.
+- Use a direct ZFS-backed managed directory for v1; MinIO is not a v1 service.
 - Hide it behind a small storage interface from the beginning.
 - Use opaque generated keys; never use display names as physical paths.
-- Reserve separate namespaces for staging uploads, originals, and cached artifacts.
+- Under `/mnt/ext/strife`, use separate namespaces for staging uploads, originals, cached artifacts, and the non-overlapping import inbox as defined by ADR 0003.
 - Finalize writes atomically.
 - Compute a cryptographic checksum while receiving/importing bytes and verify it during finalization.
 - Do not merge identical files or expose checksum-based identity to the user.
@@ -357,7 +359,7 @@ Exact CI, performance targets, accessibility level, and release-platform matrix 
 
 ### Milestone 0 — Resolve foundations and scaffold
 
-- Resolve the v1 questions in [`questions.md`](questions.md), especially storage and watched-folder semantics.
+- Apply the accepted host and storage decisions in ADRs 0001–0003; watched-folder behavior is resolved before Milestone 3.
 - Create the Rust workspace and SolidJS app.
 - Add formatting, linting, migrations, and basic tests.
 - Add development Compose services for PostgreSQL and Apache Tika.
@@ -436,14 +438,11 @@ Exact CI, performance targets, accessibility level, and release-platform matrix 
 
 Only unresolved v1 decisions remain in [`questions.md`](questions.md):
 
-1. Host operating system and external-disk filesystem
-2. ZFS-backed directory versus local MinIO
-3. Managed paths under `/mnt/ext`
-4. Watched-folder ownership and change semantics
-5. Raw metadata size/retention policy
-6. First-class normalized metadata columns
-7. DOCX/office preview renderer
-8. Initial command-bar grammar and commands
+1. Watched-folder ownership and change semantics
+2. Raw metadata size/retention policy
+3. First-class normalized metadata columns
+4. DOCX/office and raw-image preview renderers
+5. Initial command-bar grammar and commands
 
 Resolve each shortly before the milestone that needs it. Material choices should become short Architecture Decision Records under `docs/decisions/`.
 

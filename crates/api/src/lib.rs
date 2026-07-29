@@ -1,0 +1,154 @@
+pub mod config;
+pub mod health;
+
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::Path,
+    time::Duration,
+};
+
+use anyhow::{Context, Result, bail};
+use config::Config;
+use health::{LiveDependencyChecker, router};
+use sqlx::{PgPool, postgres::PgPoolOptions};
+use tokio::{net::TcpListener, time::timeout};
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Configures structured JSON logging for the API process.
+pub fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .json()
+        .with_current_span(false)
+        .with_span_list(false)
+        .init();
+}
+
+/// Validates dependencies, applies migrations, and serves the API.
+///
+/// # Errors
+///
+/// Returns a contextual error when storage, `PostgreSQL`, migrations, socket
+/// binding, or the HTTP server cannot start.
+pub async fn run(config: Config) -> Result<()> {
+    verify_storage_root(&config.storage_root)?;
+    let pool = connect_database(&config.database_url).await?;
+
+    strife_db::MIGRATOR
+        .run(&pool)
+        .await
+        .context("failed to apply database migrations")?;
+
+    let listener = TcpListener::bind(config.listen_addr)
+        .await
+        .with_context(|| format!("failed to bind API listener at {}", config.listen_addr))?;
+
+    info!(
+        listen_addr = %config.listen_addr,
+        storage_root = %config.storage_root.display(),
+        tika_url = %config.tika_url,
+        "Strife API started"
+    );
+
+    let dependencies =
+        LiveDependencyChecker::new(pool, config.storage_root.clone(), config.tika_url.clone());
+
+    axum::serve(listener, router(dependencies))
+        .await
+        .context("API server failed")
+}
+
+/// Connects to `PostgreSQL` within the startup deadline.
+///
+/// # Errors
+///
+/// Returns a timeout or connection error with startup context.
+pub async fn connect_database(database_url: &str) -> Result<PgPool> {
+    let connect = PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(DATABASE_CONNECT_TIMEOUT)
+        .connect(database_url);
+
+    timeout(DATABASE_CONNECT_TIMEOUT, connect)
+        .await
+        .context("timed out connecting to PostgreSQL after 5 seconds")?
+        .context("failed to connect to PostgreSQL")
+}
+
+/// Confirms that the configured storage root is a writable directory.
+///
+/// # Errors
+///
+/// Returns a contextual error when the path is absent, not a directory, or
+/// cannot create and remove a probe file.
+pub fn verify_storage_root(path: &Path) -> Result<()> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("storage root {} is unavailable", path.display()))?;
+
+    if !metadata.is_dir() {
+        bail!("storage root {} is not a directory", path.display());
+    }
+
+    let probe_path = path.join(format!(".strife-write-check-{}", std::process::id()));
+    let mut probe = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe_path)
+        .with_context(|| format!("storage root {} is not writable", path.display()))?;
+
+    probe
+        .write_all(b"strife")
+        .context("failed to write storage probe")?;
+    drop(probe);
+    fs::remove_file(&probe_path).context("failed to remove storage probe")?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::verify_storage_root;
+
+    fn temporary_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "strife-api-{name}-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ))
+    }
+
+    #[test]
+    fn accepts_a_writable_directory() {
+        let path = temporary_path("writable");
+        fs::create_dir_all(&path).expect("create test directory");
+
+        let result = verify_storage_root(&path);
+
+        fs::remove_dir_all(&path).expect("remove test directory");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_a_missing_directory() {
+        let path = temporary_path("missing");
+        assert!(verify_storage_root(&path).is_err());
+    }
+
+    #[test]
+    fn rejects_a_regular_file() {
+        let path = temporary_path("file");
+        fs::write(&path, b"not a directory").expect("create test file");
+
+        let result = verify_storage_root(&path);
+
+        fs::remove_file(&path).expect("remove test file");
+        assert!(result.is_err());
+    }
+}

@@ -1,0 +1,6 @@
+[alias]
+check-all = "check --workspace --all-targets"
+clippy-all = "clippy --workspace --all-targets -- -D warnings"
+build-arm64-linux = "build --workspace --target aarch64-unknown-linux-gnu"
+build-x86-64-linux = "build --workspace --target x86_64-unknown-linux-gnu"
+

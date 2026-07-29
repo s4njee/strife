@@ -1,0 +1,30 @@
+:root {
+  font-family: var(--font-sans);
+  color: var(--color-text-primary);
+  background: var(--color-canvas);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 20rem;
+  min-height: 100%;
+  margin: 0;
+}
+
+#root {
+  display: grid;
+  min-height: 100vh;
+  text-align: center;
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast);
+}

@@ -2,29 +2,6 @@
 
 Only unresolved questions that can affect v1 belong here. Settled decisions are recorded in [`README.md`](README.md); questions deliberately postponed until v2 or later are in [`deferred.md`](deferred.md).
 
-## Milestone 0 — Host and Storage
-
-### What operating system will the Raspberry Pi run?
-
-This determines installation instructions, available ARM64 packages, filesystem tooling, service management, and how external tools are installed during development.
-
-### Which filesystem is currently on the 5 TB external HDD?
-
-If the existing contents must be preserved, that constrains whether the disk can become a ZFS dataset. Record whether it may be reformatted and whether any other application uses it.
-
-### Should v1 use a ZFS-backed managed directory or local MinIO?
-
-Points to decide:
-
-- ZFS/direct storage has fewer moving parts and lower memory overhead on a 4 GB Raspberry Pi.
-- MinIO gives an S3 interface and object semantics but adds another long-running service and operational overhead.
-- Both choices still need PostgreSQL for the virtual hierarchy and application state.
-- Clarify whether “ZFS” means Strife writes directly into an opaque-key directory on a ZFS dataset.
-
-### Which managed paths under `/mnt/ext` should Strife own?
-
-Choose locations for originals, staging uploads, derived artifacts, and the watched import source. The watched source should not overlap managed storage or the worker could re-import its own files.
-
 ## Milestone 3 — Watched-Folder Import
 
 ### Does importing copy or move a source file?

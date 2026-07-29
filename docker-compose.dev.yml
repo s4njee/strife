@@ -1,0 +1,31 @@
+name: strife-dev
+
+services:
+  postgres:
+    image: postgres:17.10-alpine3.24@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-strife}
+      POSTGRES_USER: ${POSTGRES_USER:-strife}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strife-dev}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 5s
+
+  tika:
+    image: apache/tika:3.2.3.0-full@sha256:21d8052de04e491ccf66e8680ade4da6f3d453a56d59f740b4167e54167219b7
+    ports:
+      - "127.0.0.1:${TIKA_PORT:-9998}:9998"
+
+volumes:
+  postgres-data:

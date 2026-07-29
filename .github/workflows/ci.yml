@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target ${{ matrix.target }}
+          rustup default stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+      - name: Lint Rust
+        run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+        env:
+          SQLX_OFFLINE: "true"
+
+      - name: Build Rust
+        run: cargo build --workspace --target ${{ matrix.target }}
+        env:
+          SQLX_OFFLINE: "true"
+
+      - name: Test Rust
+        run: cargo test --workspace --target ${{ matrix.target }}
+        env:
+          SQLX_OFFLINE: "true"
+
+      - name: Lint frontend
+        run: npm run lint
+        working-directory: apps/web
+
+      - name: Check frontend formatting
+        run: npm run format:check
+        working-directory: apps/web
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/web
+

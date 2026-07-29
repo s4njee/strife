@@ -1,0 +1,92 @@
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Variable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --color-canvas: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-surface-raised: #f0f0f2;
+  --color-surface-input: #e8e8eb;
+  --color-surface-selected: #e2e8f8;
+  --color-text-primary: #151518;
+  --color-text-secondary: #414147;
+  --color-text-tertiary: #66666e;
+  --color-text-muted: #7c7c85;
+  --color-text-faint: #9a9aa2;
+  --color-border-structural: #d9d9de;
+  --color-border-row: #e5e5e9;
+  --color-border-control: #c9c9d0;
+  --color-border-raised: #b9b9c2;
+  --color-accent: oklch(0.58 0.22 258);
+  --color-accent-contrast: #ffffff;
+  --color-accent-soft: oklch(0.58 0.22 258 / 12%);
+  --color-success: oklch(0.52 0.16 150);
+  --color-success-soft: oklch(0.52 0.16 150 / 12%);
+  --color-error: #b34f3d;
+  --color-error-soft: rgb(179 79 61 / 12%);
+  --font-sans: 'Inter', Helvetica, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-size-xs: 0.625rem;
+  --font-size-sm: 0.75rem;
+  --font-size-md: 0.8125rem;
+  --font-size-lg: 0.9375rem;
+  --font-size-display: clamp(2rem, 8vw, 3.5rem);
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-pill: 999px;
+  --shadow-popover: 0 0.75rem 2.5rem rgb(16 16 20 / 18%);
+  --transition-fast: 140ms ease-out;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --color-canvas: #000000;
+  --color-surface: #0b0b0c;
+  --color-surface-raised: #101012;
+  --color-surface-input: #131315;
+  --color-surface-selected: #17181c;
+  --color-text-primary: #f2f2f3;
+  --color-text-secondary: #c9c9cd;
+  --color-text-tertiary: #9c9ca2;
+  --color-text-muted: #85858c;
+  --color-text-faint: #5f5f66;
+  --color-border-structural: #1e1e21;
+  --color-border-row: #161618;
+  --color-border-control: #26262a;
+  --color-border-raised: #2c2c31;
+  --color-accent: oklch(0.7 0.2 258);
+  --color-accent-contrast: #000000;
+  --color-accent-soft: oklch(0.7 0.2 258 / 16%);
+  --color-success: oklch(0.78 0.16 150);
+  --color-success-soft: oklch(0.78 0.16 150 / 14%);
+  --color-error: #d06a52;
+  --color-error-soft: rgb(208 106 82 / 15%);
+  --shadow-popover: 0 0.75rem 2.5rem rgb(0 0 0 / 80%);
+}
