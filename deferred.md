@@ -32,6 +32,14 @@ These questions are intentionally outside v1. They are not commitments: revisit 
 - If so, should conflicts support overwrite, auto-rename, selective resolution, or file versions?
 - Should content checksums ever be used for physical deduplication rather than integrity only?
 
+## Watched-Folder Import
+
+- Should Strife support multiple configurable source-to-destination mappings instead of the fixed `/mnt/ext/watch` to root mapping?
+- Should imports run on a schedule or continuous watcher instead of only through an explicit manual scan?
+- If automatic scanning is added, what quiet period or consecutive-scan threshold proves that a producer has finished writing a file?
+- Should successful imports optionally copy, archive, or retain their source instead of always moving it into managed storage?
+- Should external sources outside the single import inbox be monitored for later changes or disappearance?
+
 ## OCR and Text Extraction
 
 - Which OCR languages should be installed initially?
@@ -144,7 +152,7 @@ These questions are intentionally outside v1. They are not commitments: revisit 
 
 - Would desktop or mobile synchronization clients be valuable?
 - Should WebDAV expose Strife to external file managers?
-- Should watched-folder import expand into multiple sources, scheduled imports, or bidirectional synchronization?
+- Should watched-folder import expand into bidirectional synchronization?
 - Should photo features include albums, timelines, maps, face grouping, or object recognition?
 - Should automatic media tagging use local machine-learning models?
 - Should an API or plugin system allow custom extractors and automations?

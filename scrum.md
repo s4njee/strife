@@ -1104,7 +1104,7 @@ As a user, I want a persistent notification when disk usage is high so that I kn
 
 ## Epic 3 — Watched-Folder Import
 
-**Goal:** Files placed in a configured server-side directory are automatically discovered, validated, and imported into Strife, using the same finalization pipeline as uploads.
+**Goal:** Files placed in the fixed server-side inbox are manually discovered, validated, and moved into Strife using the same finalization pipeline as uploads.
 
 **Sprint Capacity Estimate:** 2 sprints
 
@@ -1116,18 +1116,30 @@ As a developer, I want all Milestone 3 questions in [`questions.md`](questions.m
 
 **Acceptance Criteria:**
 
-- [ ] Decisions recorded in `docs/decisions/` for: copy vs move, watch path → destination mapping, stability detection, post-import source handling, re-import/disappearance handling, conflict handling.
-- [ ] `questions.md` M3 section is cleared; `README.md` updated.
+- [x] Decisions recorded in `docs/decisions/` for: copy vs move, watch path → destination mapping, stability detection, post-import source handling, re-import/disappearance handling, conflict handling.
+- [x] `questions.md` M3 section is cleared; `README.md` updated.
+
+**Implementation report:** Recorded the fixed `/mnt/ext/watch` → root mapping, manual-scan workflow, move-after-finalization semantics, in-stream stability check, and persistent conflict errors in ADR 0004 and the product plan. Deferred configurable sources and automatic watching to v2+, and added a later story for a unified actionable Errors tab.
+
+**New files:**
+
+- `docs/decisions/0004-watched-folder-import.md`
+
+**Modified files:**
+
+- `README.md`
+- `deferred.md`
+- `questions.md`
 
 ---
 
 ### Story 3.2 — Import Source Schema
 
-As a developer, I want `import_sources` and `import_entries` tables so that import configuration and per-file state are durably tracked. **Estimated: 3 points.**
+As a developer, I want `import_sources` and `import_entries` tables so that the fixed source and per-file state are durably tracked. **Estimated: 3 points.**
 
 **Acceptance Criteria:**
 
-- [ ] `import_sources` has: `id`, `watch_path` (text, unique), `destination_folder_id` (FK), `enabled` (bool), `last_scan_at`, `created_at`, `updated_at`.
+- [ ] `import_sources` has: `id`, `watch_path` (text, unique), `destination_folder_id` (FK), `enabled` (bool), `last_scan_at`, `created_at`, `updated_at`, and seeds the fixed `/mnt/ext/watch` → root source.
 - [ ] `import_entries` has: `id`, `source_id` (FK), `source_path` (text), `source_size` (bigint), `source_modified_at`, `source_checksum` (text, nullable), `state` (enum: `discovered` | `stable` | `importing` | `imported` | `failed`), `resulting_node_id` (FK, nullable), `error_message` (text, nullable), `created_at`, `updated_at`.
 - [ ] A unique constraint on `(source_id, source_path)` prevents duplicate tracking of the same file.
 - [ ] DB queries: `upsert_import_entry`, `list_pending_entries`, `mark_imported`, `mark_failed`.
@@ -1136,7 +1148,7 @@ As a developer, I want `import_sources` and `import_entries` tables so that impo
 
 ### Story 3.3 — File Discovery Scanner
 
-As a system, I want a periodic directory scanner in `crates/importer` so that new files in the watched folder are detected. **Estimated: 5 points.**
+As a user, I want a directory scanner in `crates/importer` so that files are detected when I request an import. **Estimated: 5 points.**
 
 **Acceptance Criteria:**
 
@@ -1145,7 +1157,7 @@ As a system, I want a periodic directory scanner in `crates/importer` so that ne
 - [ ] Symbolic links, device files, sockets, and other special files are **skipped** (logged at debug level).
 - [ ] Hidden files (starting with `.`) are skipped by default (configurable).
 - [ ] Directories in the watch path are recorded so hierarchy can be recreated.
-- [ ] The scanner runs on a configurable interval (default: 60 seconds).
+- [ ] The scanner runs only when manually invoked.
 - [ ] The scanner is idempotent: re-scanning the same unchanged file does not create duplicate entries.
 - [ ] Tests: create files in a temp dir, run the scanner, verify entries are created.
 
@@ -1153,15 +1165,15 @@ As a system, I want a periodic directory scanner in `crates/importer` so that ne
 
 ### Story 3.4 — Stability Detection
 
-As a system, I want to only import files that have been stable (unchanged) for a configured period so that partially written files are not imported. **Estimated: 3 points.**
+As a system, I want to reject files that change while being staged so that partially written files are not imported. **Estimated: 3 points.**
 
 **Acceptance Criteria:**
 
-- [ ] After discovery, a file's size and modification time are compared to the previous scan.
-- [ ] If unchanged for N consecutive scans (configurable, default: 2 scans = 2 minutes at 60s interval), the entry transitions to `state = stable`.
-- [ ] If the file changes between scans, the stability counter resets.
-- [ ] Only `stable` entries proceed to the import pipeline.
-- [ ] Tests: simulate a file that changes between scans and verify it is not imported prematurely.
+- [ ] The file's size and modification time are captured immediately before and after streaming it into staging.
+- [ ] An unchanged file transitions to `state = stable` and may be finalized.
+- [ ] A changed or missing file returns to `state = discovered`; its staging object is deleted and the source remains untouched.
+- [ ] Only `stable` entries proceed to finalization.
+- [ ] Tests simulate a file changing during staging and verify it is not finalized or removed.
 
 ---
 
@@ -1176,7 +1188,7 @@ As a system, I want stable files processed through the same checksum/finalizatio
 - [ ] Hierarchy is preserved: if the source is `watch_path/photos/2024/img.jpg`, create folders `photos` and `2024` under the destination before importing `img.jpg`.
 - [ ] Folder creation reuses existing folders if they already exist (no conflict on pre-existing matching folder).
 - [ ] On conflict (duplicate file name), the entry is marked `failed` with a clear error message; it does **not** block other imports.
-- [ ] On completion, a metadata extraction job is enqueued.
+- [ ] On completion, a metadata extraction job is enqueued and the source file is removed; empty source directories are pruned.
 - [ ] Tests: import a tree of 5 files across 3 directories; verify nodes, hierarchy, checksums, and no duplicates.
 
 ---
@@ -1201,9 +1213,9 @@ As a user, I want API endpoints to configure and monitor watched-folder imports 
 
 **Acceptance Criteria:**
 
-- [ ] `POST /api/import-sources` creates a new watched source: `{ "watch_path": string, "destination_folder_id": UUID }`. Validates the path exists and is readable. Returns `400` if the path overlaps managed storage.
-- [ ] `GET /api/import-sources` lists all sources with their status (enabled, last scan time, entry counts by state).
+- [ ] `GET /api/import-sources` returns the fixed source with its status (enabled, last scan time, entry counts by state).
 - [ ] `PATCH /api/import-sources/:id` toggles `enabled`.
+- [ ] `POST /api/import-sources/:id/scan` validates that the fixed path exists, is readable, and does not overlap managed storage, then runs one scan/import pass.
 - [ ] `GET /api/import-sources/:id/entries?state=failed` lists entries filtered by state, with error messages.
 - [ ] `POST /api/import-sources/:id/entries/:entry_id/retry` resets a failed entry to `discovered` for re-processing.
 
@@ -1755,6 +1767,20 @@ As a user, I want brief toast messages for completed actions and recoverable err
 - [ ] Used for: "Folder created", "3 items moved to trash", "Upload failed: name conflict", etc.
 - [ ] Max 3 toasts visible at once; older ones are pushed out.
 - [ ] Works in both themes.
+
+---
+
+### Story 6.14 — Actionable Errors Tab
+
+As a user, I want one Errors tab for persistent import and processing failures so that I can find and resolve issues without inspecting logs. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] An "Errors" sidebar link shows a badge with the unresolved error count and navigates to `/errors`.
+- [ ] The page lists persistent import conflicts and failed processing jobs with the affected item/source path, clear cause, occurrence time, and available recovery action.
+- [ ] Import conflicts link to the failed entry and provide Retry after the user resolves the duplicate name.
+- [ ] Resolving or successfully retrying an error removes it from the unresolved list without deleting its diagnostic log context.
+- [ ] Transient failures continue to use toasts; only failures requiring user action appear in this tab.
 
 ---
 

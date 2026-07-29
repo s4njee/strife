@@ -245,7 +245,7 @@ Browser uploads and watched-folder imports converge on one finalization pipeline
 
 Folder uploads preserve relative hierarchy and fail safely on conflicts. Job and finalization handlers must be idempotent so retries do not duplicate nodes or artifacts.
 
-The watch path, copy-versus-move behavior, change detection, and handling of later source modifications/deletions still need decisions in [`questions.md`](questions.md).
+The v1 importer has one fixed inbox at `/mnt/ext/watch`, mapped to the Strife root with relative hierarchy preserved. Scans are initiated manually, and files are accepted only if their size and modification time remain unchanged while they stream into staging. After durable finalization, the source is removed; failures leave it in place and are recorded as actionable errors. Strife does not monitor paths after they leave the inbox and never overwrites a conflicting node. See [ADR 0004](docs/decisions/0004-watched-folder-import.md).
 
 ## 10. Metadata Pipeline
 
@@ -393,7 +393,7 @@ Exact CI, performance targets, accessibility level, and release-platform matrix 
 ### Milestone 3 — Watched-folder import
 
 - Implement the decided watch and destination rules.
-- Detect stable regular files and directories; ignore special files.
+- On manual request, discover regular files and directories; ignore hidden and special files, and reject files that change during staging.
 - Stream through the same checksum/finalization path as uploads.
 - Preserve hierarchy and timestamps, enforce conflict and disk rules, and record actionable errors.
 

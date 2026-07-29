@@ -2,32 +2,6 @@
 
 Only unresolved questions that can affect v1 belong here. Settled decisions are recorded in [`README.md`](README.md); questions deliberately postponed until v2 or later are in [`deferred.md`](deferred.md).
 
-## Milestone 3 — Watched-Folder Import
-
-### Does importing copy or move a source file?
-
-Copying leaves the source intact but temporarily needs space for two copies. Moving consumes less space but is destructive and may not be atomic across filesystems.
-
-### How is the watched path mapped into Strife?
-
-Decide whether there is one fixed watch path and destination, or configurable source-to-destination mappings. Also decide whether the watch directory itself appears as a folder or only its contents are imported.
-
-### When is a watched file considered stable and ready to import?
-
-Possible signals include unchanged size/modification time across scans, a minimum quiet period, or an explicit producer-side rename into place.
-
-### What happens after an import succeeds?
-
-For copied sources, choose whether to leave them, move them to an archive/completed directory, or delete them. Any destructive policy must be explicit.
-
-### What happens when an already imported source changes or disappears?
-
-Choose whether changes are ignored, rejected and reported, imported as a new conflict, or update the existing Strife file. v1 has no versions and should not silently overwrite an existing node.
-
-### How should source-name conflicts be handled?
-
-The settled default is to reject duplicates. Decide whether the importer keeps retrying, quarantines the source, or records one persistent actionable error until the conflict is resolved.
-
 ## Milestone 4 — Metadata
 
 ### How much raw extractor output should PostgreSQL retain?
