@@ -293,6 +293,27 @@ async fn import_entry_inner(
     entry: &ImportEntryRecord,
     guard: DiskGuard,
 ) -> Result<Option<NodeRecord>> {
+    if let Some(node_id) = entry.resulting_node_id {
+        let node = strife_db::get_node_by_id(pool, node_id)
+            .await?
+            .context("previously finalized import node is missing")?;
+        let source_path = watch_root.join(&entry.source_path);
+        match tokio::fs::remove_file(&source_path).await {
+            Ok(()) => prune_empty_source_directories(watch_root, source_path.parent()).await,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("remove finalized import source {}", source_path.display())
+                });
+            }
+        }
+        let checksum = entry
+            .source_checksum
+            .as_deref()
+            .context("previously finalized import checksum is missing")?;
+        strife_db::mark_imported(pool, entry.id, node.id, checksum).await?;
+        return Ok(Some(node));
+    }
     let byte_size = u64::try_from(entry.source_size).context("negative import file size")?;
     ensure_import_capacity(storage, byte_size, guard).await?;
     let StabilityOutcome::Stable { staging_key } =

@@ -1249,12 +1249,13 @@ As a system, I want imports to survive service restarts without duplication so t
 - [x] No restart scenario creates a duplicate node for the same source file.
 - [x] Test: simulate a crash mid-import (kill the process), restart, verify exactly one node exists.
 
-**Implementation report:** Added a durable `importing` checkpoint and startup recovery pass that retries interrupted entries independently using deterministic storage keys and the idempotent finalization transaction. The restart integration test leaves an entry staged at the simulated crash boundary, runs recovery twice, and verifies exactly one node is published.
+**Implementation report:** Added a durable `importing` checkpoint and an API-startup recovery pass that retries interrupted entries independently using deterministic storage keys and the idempotent finalization transaction. Retries also recognize a previously published node and finish source cleanup without touching its managed original; the restart integration test runs recovery twice and verifies exactly one node is published.
 
 **New files:** None.
 
 **Modified files:**
 
+- `crates/api/src/lib.rs`
 - `crates/db/src/lib.rs`
 - `crates/importer/src/lib.rs`
 - `crates/importer/tests/import_pipeline.rs`

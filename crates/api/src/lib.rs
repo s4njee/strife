@@ -17,7 +17,7 @@ use anyhow::{Context, Result, bail};
 use config::Config;
 use health::LiveDependencyChecker;
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use strife_storage::LocalFsBackend;
+use strife_storage::{DiskGuard, LocalFsBackend};
 use tokio::{net::TcpListener, time::timeout};
 use tracing::info;
 use tracing::warn;
@@ -76,6 +76,7 @@ pub async fn run(config: Config) -> Result<()> {
         i64::try_from(config.upload_session_ttl_hours)
             .context("UPLOAD_SESSION_TTL_HOURS is too large")?,
     );
+    recover_watched_imports(&pool, storage.as_ref(), config.disk_guard_percent).await;
     spawn_upload_cleanup(pool.clone(), storage.clone());
     let app = health::router(dependencies)
         .merge(folders::router(pool.clone()))
@@ -97,6 +98,41 @@ pub async fn run(config: Config) -> Result<()> {
     axum::serve(listener, app)
         .await
         .context("API server failed")
+}
+
+async fn recover_watched_imports(pool: &PgPool, storage: &LocalFsBackend, disk_guard_percent: u8) {
+    let watch_root = Path::new("/mnt/ext/watch");
+    if !watch_root.is_dir() {
+        return;
+    }
+    let Ok(Some(source)) =
+        strife_db::get_import_source(pool, strife_db::DEFAULT_IMPORT_SOURCE_ID).await
+    else {
+        warn!("fixed import source could not be loaded for startup recovery");
+        return;
+    };
+    let Some(guard) = DiskGuard::new(disk_guard_percent) else {
+        warn!("invalid disk guard prevented import startup recovery");
+        return;
+    };
+    match strife_importer::recover_interrupted_imports(
+        pool,
+        storage,
+        watch_root,
+        source.destination_folder_id,
+        guard,
+    )
+    .await
+    {
+        Ok(report) if report.attempted > 0 => info!(
+            attempted = report.attempted,
+            completed = report.completed,
+            failed = report.failures.len(),
+            "interrupted imports recovered"
+        ),
+        Ok(_) => {}
+        Err(error) => warn!(%error, "interrupted import recovery failed"),
+    }
 }
 
 fn spawn_upload_cleanup(pool: PgPool, storage: Arc<LocalFsBackend>) {
