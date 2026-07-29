@@ -752,9 +752,21 @@ As a developer, I want the `upload_sessions` table to track resumable uploads so
 
 **Acceptance Criteria:**
 
-- [ ] Migration creates `upload_sessions` with columns: `id` (UUID PK), `target_folder_id` (FK to `nodes`), `display_name` (text), `expected_byte_size` (bigint, nullable), `received_bytes` (bigint, default 0), `staging_key` (text), `state` (enum: `active` | `finalizing` | `completed` | `cancelled` | `expired`), `checksum_sha256` (text, nullable), `source_created_at` (timestamptz, nullable), `source_modified_at` (timestamptz, nullable), `expires_at` (timestamptz), `created_at`, `updated_at`.
-- [ ] A separate `upload_chunks` table (or `received_ranges` jsonb column) tracks which byte ranges have been received.
-- [ ] DB query functions: `create_session`, `record_chunk`, `get_session_progress`, `finalize_session`, `cancel_session`, `list_expired_sessions`.
+- [x] Migration creates `upload_sessions` with columns: `id` (UUID PK), `target_folder_id` (FK to `nodes`), `display_name` (text), `expected_byte_size` (bigint, nullable), `received_bytes` (bigint, default 0), `staging_key` (text), `state` (enum: `active` | `finalizing` | `completed` | `cancelled` | `expired`), `checksum_sha256` (text, nullable), `source_created_at` (timestamptz, nullable), `source_modified_at` (timestamptz, nullable), `expires_at` (timestamptz), `created_at`, `updated_at`.
+- [x] A separate `upload_chunks` table (or `received_ranges` jsonb column) tracks which byte ranges have been received.
+- [x] DB query functions: `create_session`, `record_chunk`, `get_session_progress`, `finalize_session`, `cancel_session`, `list_expired_sessions`.
+
+**Implementation report:** Added durable upload-session and chunk-range schemas with lifecycle, expiry, active-name uniqueness, completed-node linkage, and ordered byte-range tracking. Typed queries and live PostgreSQL tests cover session creation, out-of-order non-overlapping chunks, atomic byte totals, overlap rejection, progress retrieval, completion, idempotent cancellation, and expiry listing.
+
+**New files:**
+
+- `crates/db/migrations/0004_upload_sessions.down.sql`
+- `crates/db/migrations/0004_upload_sessions.up.sql`
+- `crates/db/tests/upload_sessions.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
 
 ---
 

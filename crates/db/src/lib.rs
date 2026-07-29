@@ -36,6 +36,17 @@ pub enum FileUploadState {
     Finalized,
 }
 
+/// Durable resumable-upload lifecycle state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "upload_session_state", rename_all = "lowercase")]
+pub enum UploadSessionState {
+    Active,
+    Finalizing,
+    Completed,
+    Cancelled,
+    Expired,
+}
+
 /// Typed representation of a row in `nodes`.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct NodeRecord {
@@ -62,6 +73,63 @@ pub struct FileObjectRecord {
     pub upload_state: FileUploadState,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Typed representation of a row in `upload_sessions`.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct UploadSessionRecord {
+    pub id: Uuid,
+    pub target_folder_id: Uuid,
+    pub display_name: String,
+    pub expected_byte_size: Option<i64>,
+    pub received_bytes: i64,
+    pub staging_key: String,
+    pub state: UploadSessionState,
+    pub checksum_sha256: Option<String>,
+    pub completed_node_id: Option<Uuid>,
+    pub source_created_at: Option<DateTime<Utc>>,
+    pub source_modified_at: Option<DateTime<Utc>>,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Parameters required to create a resumable upload session.
+pub struct CreateUploadSession<'a> {
+    pub target_folder_id: Uuid,
+    pub display_name: &'a str,
+    pub expected_byte_size: Option<i64>,
+    pub staging_key: Uuid,
+    pub source_created_at: Option<DateTime<Utc>>,
+    pub source_modified_at: Option<DateTime<Utc>>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// A persisted inclusive byte range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct ReceivedRange {
+    pub start_byte: i64,
+    pub end_byte: i64,
+}
+
+/// A session and its ordered received ranges.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UploadSessionProgress {
+    pub session: UploadSessionRecord,
+    pub received_ranges: Vec<ReceivedRange>,
+}
+
+/// Expected errors while recording a resumable-upload range.
+#[derive(Debug, thiserror::Error)]
+pub enum RecordChunkError {
+    #[error("upload session was not found")]
+    NotFound,
+    #[error("upload session is not active")]
+    NotActive,
+    #[error("byte range overlaps an existing chunk")]
+    Overlap,
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
 }
 
 /// Minimal node information used for hierarchy paths.
@@ -214,6 +282,256 @@ pub async fn get_file_object_by_node_id(
     .bind(node_id)
     .fetch_optional(pool)
     .await
+}
+
+/// Creates a durable active upload session.
+///
+/// # Errors
+///
+/// Returns the database error when the session cannot be inserted.
+pub async fn create_session(
+    pool: &PgPool,
+    input: CreateUploadSession<'_>,
+) -> Result<UploadSessionRecord, sqlx::Error> {
+    upload_session_query(
+        r"
+        INSERT INTO upload_sessions (
+            id,
+            target_folder_id,
+            display_name,
+            expected_byte_size,
+            staging_key,
+            source_created_at,
+            source_modified_at,
+            expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(input.target_folder_id)
+    .bind(input.display_name)
+    .bind(input.expected_byte_size)
+    .bind(input.staging_key.simple().to_string())
+    .bind(input.source_created_at)
+    .bind(input.source_modified_at)
+    .bind(input.expires_at)
+    .fetch_one(pool)
+    .await
+}
+
+/// Atomically records a non-overlapping inclusive byte range.
+///
+/// # Errors
+///
+/// Returns `NotFound`, `NotActive`, or `Overlap` for expected session/range
+/// failures and `Database` for unexpected database failures.
+pub async fn record_chunk(
+    pool: &PgPool,
+    session_id: Uuid,
+    start_byte: i64,
+    end_byte: i64,
+) -> Result<UploadSessionRecord, RecordChunkError> {
+    let mut transaction = pool.begin().await?;
+    let session = load_session_for_update(&mut transaction, session_id)
+        .await?
+        .ok_or(RecordChunkError::NotFound)?;
+    if session.state != UploadSessionState::Active {
+        return Err(RecordChunkError::NotActive);
+    }
+
+    let overlaps = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1
+            FROM upload_chunks
+            WHERE session_id = $1
+              AND start_byte <= $3
+              AND end_byte >= $2
+        )
+        ",
+    )
+    .bind(session_id)
+    .bind(start_byte)
+    .bind(end_byte)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if overlaps {
+        return Err(RecordChunkError::Overlap);
+    }
+
+    sqlx::query(
+        r"
+        INSERT INTO upload_chunks (id, session_id, start_byte, end_byte)
+        VALUES ($1, $2, $3, $4)
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(session_id)
+    .bind(start_byte)
+    .bind(end_byte)
+    .execute(&mut *transaction)
+    .await?;
+    let byte_count = end_byte
+        .checked_sub(start_byte)
+        .and_then(|difference| difference.checked_add(1))
+        .ok_or_else(|| sqlx::Error::Protocol("invalid upload chunk range".to_owned()))?;
+    let updated = upload_session_query(
+        r"
+        UPDATE upload_sessions
+        SET received_bytes = received_bytes + $2, updated_at = now()
+        WHERE id = $1
+        RETURNING *
+        ",
+    )
+    .bind(session_id)
+    .bind(byte_count)
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(updated)
+}
+
+/// Loads a session with its ordered received byte ranges.
+///
+/// # Errors
+///
+/// Returns the database error when the session or ranges cannot be loaded.
+pub async fn get_session_progress(
+    pool: &PgPool,
+    session_id: Uuid,
+) -> Result<Option<UploadSessionProgress>, sqlx::Error> {
+    let Some(session) = get_upload_session(pool, session_id).await? else {
+        return Ok(None);
+    };
+    let received_ranges = sqlx::query_as::<_, ReceivedRange>(
+        r"
+        SELECT start_byte, end_byte
+        FROM upload_chunks
+        WHERE session_id = $1
+        ORDER BY start_byte
+        ",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(Some(UploadSessionProgress {
+        session,
+        received_ranges,
+    }))
+}
+
+/// Marks a session completed with its final checksum and optional file node.
+///
+/// # Errors
+///
+/// Returns `RowNotFound` for an unavailable session or a database error.
+pub async fn finalize_session(
+    pool: &PgPool,
+    session_id: Uuid,
+    checksum_sha256: &str,
+    completed_node_id: Option<Uuid>,
+) -> Result<UploadSessionRecord, sqlx::Error> {
+    upload_session_query(
+        r"
+        UPDATE upload_sessions
+        SET
+            state = 'completed',
+            checksum_sha256 = $2,
+            completed_node_id = $3,
+            updated_at = now()
+        WHERE id = $1
+          AND state IN ('active', 'finalizing', 'completed')
+        RETURNING *
+        ",
+    )
+    .bind(session_id)
+    .bind(checksum_sha256)
+    .bind(completed_node_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(sqlx::Error::RowNotFound)
+}
+
+/// Cancels an active/finalizing session and returns its stable state.
+///
+/// # Errors
+///
+/// Returns `RowNotFound` when the session does not exist or a database error.
+pub async fn cancel_session(
+    pool: &PgPool,
+    session_id: Uuid,
+) -> Result<UploadSessionRecord, sqlx::Error> {
+    let updated = upload_session_query(
+        r"
+        UPDATE upload_sessions
+        SET state = 'cancelled', updated_at = now()
+        WHERE id = $1
+          AND state IN ('active', 'finalizing')
+        RETURNING *
+        ",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    match updated {
+        Some(session) => Ok(session),
+        None => get_upload_session(pool, session_id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound),
+    }
+}
+
+/// Lists active sessions whose expiry deadline has passed.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn list_expired_sessions(pool: &PgPool) -> Result<Vec<UploadSessionRecord>, sqlx::Error> {
+    upload_session_query(
+        r"
+        SELECT *
+        FROM upload_sessions
+        WHERE state = 'active'
+          AND expires_at < now()
+        ORDER BY expires_at, id
+        ",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Fetches any upload session by identifier.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn get_upload_session(
+    pool: &PgPool,
+    session_id: Uuid,
+) -> Result<Option<UploadSessionRecord>, sqlx::Error> {
+    upload_session_query("SELECT * FROM upload_sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await
+}
+
+fn upload_session_query(
+    sql: &'static str,
+) -> sqlx::query::QueryAs<'static, sqlx::Postgres, UploadSessionRecord, sqlx::postgres::PgArguments>
+{
+    sqlx::query_as::<_, UploadSessionRecord>(sql)
+}
+
+async fn load_session_for_update(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_id: Uuid,
+) -> Result<Option<UploadSessionRecord>, sqlx::Error> {
+    upload_session_query("SELECT * FROM upload_sessions WHERE id = $1 FOR UPDATE")
+        .bind(session_id)
+        .fetch_optional(&mut **transaction)
+        .await
 }
 
 /// Fetches an active or inactive node by its identifier.
