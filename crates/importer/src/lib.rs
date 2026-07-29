@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use strife_db::{ImportEntryRecord, UpsertImportEntry};
-use strife_storage::{DiskGuard, StorageBackend};
+use strife_storage::{DiskGuard, StorageBackend, StorageKey};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -150,6 +150,97 @@ pub async fn scan_directory(
     Ok(report)
 }
 
+/// Result of copying one source into staging while checking its stability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StabilityOutcome {
+    Stable { staging_key: StorageKey },
+    Changed,
+}
+
+/// Streams a discovered file into staging only when its observed metadata is
+/// unchanged before and after the stream.
+///
+/// # Errors
+///
+/// Returns an error when the source cannot be inspected or opened, storage
+/// streaming fails, or an unstable staging object cannot be cleaned up.
+pub async fn stream_if_stable(
+    storage: &dyn StorageBackend,
+    source_path: &Path,
+    expected_size: u64,
+    expected_modified_at: DateTime<Utc>,
+) -> Result<StabilityOutcome> {
+    let before = snapshot_regular_file(source_path).await?;
+    if before != (expected_size, expected_modified_at) {
+        return Ok(StabilityOutcome::Changed);
+    }
+
+    let staging_key = StorageKey::staging(Uuid::new_v4());
+    let file = tokio::fs::File::open(source_path)
+        .await
+        .with_context(|| format!("open import source {}", source_path.display()))?;
+    storage.put_stream(staging_key, Box::pin(file)).await?;
+    let after = snapshot_regular_file(source_path).await;
+    if after.as_ref().ok() != Some(&before) {
+        storage.delete(staging_key).await?;
+        return Ok(StabilityOutcome::Changed);
+    }
+    Ok(StabilityOutcome::Stable { staging_key })
+}
+
+/// Stages one discovered database entry and persists the stability transition.
+///
+/// # Errors
+///
+/// Returns an error for unsafe paths, invalid sizes, filesystem/storage
+/// failures, or a database transition failure.
+pub async fn stage_import_entry(
+    pool: &PgPool,
+    storage: &dyn StorageBackend,
+    watch_root: &Path,
+    entry: &ImportEntryRecord,
+) -> Result<StabilityOutcome> {
+    let relative = Path::new(&entry.source_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        anyhow::bail!("import source path must remain below the watch root");
+    }
+    let expected_size = u64::try_from(entry.source_size).context("negative import file size")?;
+    let outcome = stream_if_stable(
+        storage,
+        &watch_root.join(relative),
+        expected_size,
+        entry.source_modified_at,
+    )
+    .await?;
+    match outcome {
+        StabilityOutcome::Stable { .. } => {
+            strife_db::mark_import_stable(pool, entry.id).await?;
+        }
+        StabilityOutcome::Changed => {
+            strife_db::reset_import_discovered(pool, entry.id).await?;
+        }
+    }
+    Ok(outcome)
+}
+
+async fn snapshot_regular_file(path: &Path) -> Result<(u64, DateTime<Utc>)> {
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .with_context(|| format!("inspect import source {}", path.display()))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        anyhow::bail!("import source is no longer a regular file");
+    }
+    let modified = metadata
+        .modified()
+        .with_context(|| format!("read modification time for {}", path.display()))?
+        .into();
+    Ok((metadata.len(), modified))
+}
+
 fn is_hidden(path: &Path) -> bool {
     path.components().any(|component| {
         component
@@ -180,6 +271,8 @@ pub async fn ensure_import_capacity(
 mod tests {
     use std::sync::Mutex;
 
+    use strife_storage::{DiskUsage, LocalFsBackend, StorageReader};
+
     use super::*;
 
     #[derive(Default)]
@@ -190,6 +283,62 @@ mod tests {
         async fn upsert(&self, file: &DiscoveredFile) -> Result<()> {
             self.0.lock().expect("lock sink").push(file.clone());
             Ok(())
+        }
+    }
+
+    struct MutatingStorage {
+        inner: LocalFsBackend,
+        source: PathBuf,
+    }
+
+    #[async_trait]
+    impl StorageBackend for MutatingStorage {
+        async fn put_stream(&self, key: StorageKey, reader: StorageReader) -> Result<()> {
+            self.inner.put_stream(key, reader).await?;
+            tokio::fs::write(&self.source, b"changed during staging").await?;
+            Ok(())
+        }
+
+        async fn write_range(
+            &self,
+            key: StorageKey,
+            offset: u64,
+            reader: StorageReader,
+        ) -> Result<u64> {
+            self.inner.write_range(key, offset, reader).await
+        }
+
+        async fn move_object(&self, source: StorageKey, destination: StorageKey) -> Result<()> {
+            self.inner.move_object(source, destination).await
+        }
+
+        async fn detect_mime(&self, key: StorageKey) -> Result<String> {
+            self.inner.detect_mime(key).await
+        }
+
+        async fn get_stream(&self, key: StorageKey) -> Result<StorageReader> {
+            self.inner.get_stream(key).await
+        }
+
+        async fn get_range(
+            &self,
+            key: StorageKey,
+            offset: u64,
+            length: u64,
+        ) -> Result<StorageReader> {
+            self.inner.get_range(key, offset, length).await
+        }
+
+        async fn delete(&self, key: StorageKey) -> Result<()> {
+            self.inner.delete(key).await
+        }
+
+        async fn exists(&self, key: StorageKey) -> Result<bool> {
+            self.inner.exists(key).await
+        }
+
+        async fn disk_usage(&self) -> Result<DiskUsage> {
+            self.inner.disk_usage().await
         }
     }
 
@@ -250,5 +399,71 @@ mod tests {
         tokio::fs::remove_dir_all(&root)
             .await
             .expect("remove fixture");
+    }
+
+    #[tokio::test]
+    async fn stable_file_is_staged_and_changed_snapshot_is_rejected() {
+        let source_root = temporary_root();
+        let storage_root = temporary_root();
+        tokio::fs::create_dir_all(&source_root)
+            .await
+            .expect("create source root");
+        let source = source_root.join("ready.txt");
+        tokio::fs::write(&source, b"ready")
+            .await
+            .expect("write source");
+        let snapshot = snapshot_regular_file(&source).await.expect("snapshot");
+        let storage = LocalFsBackend::new(&storage_root)
+            .await
+            .expect("create storage");
+
+        let stable = stream_if_stable(&storage, &source, snapshot.0, snapshot.1)
+            .await
+            .expect("stage stable file");
+        let StabilityOutcome::Stable { staging_key } = stable else {
+            panic!("unchanged file should be stable");
+        };
+        assert!(storage.exists(staging_key).await.expect("inspect staging"));
+
+        tokio::fs::write(&source, b"ready")
+            .await
+            .expect("restore source");
+        let snapshot = snapshot_regular_file(&source).await.expect("new snapshot");
+        let mutating_storage = MutatingStorage {
+            inner: storage.clone(),
+            source: source.clone(),
+        };
+        assert_eq!(
+            stream_if_stable(&mutating_storage, &source, snapshot.0, snapshot.1)
+                .await
+                .expect("reject mid-stream change"),
+            StabilityOutcome::Changed
+        );
+        let mut staging_entries = tokio::fs::read_dir(storage_root.join("staging"))
+            .await
+            .expect("read staging directory");
+        assert!(
+            staging_entries
+                .next_entry()
+                .await
+                .expect("inspect staging directory")
+                .is_some(),
+            "the first stable fixture remains staged"
+        );
+        assert!(
+            staging_entries
+                .next_entry()
+                .await
+                .expect("inspect staging cleanup")
+                .is_none(),
+            "changed file staging object was deleted"
+        );
+
+        tokio::fs::remove_dir_all(&source_root)
+            .await
+            .expect("remove source fixture");
+        tokio::fs::remove_dir_all(&storage_root)
+            .await
+            .expect("remove storage fixture");
     }
 }

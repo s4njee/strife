@@ -1191,11 +1191,20 @@ As a system, I want to reject files that change while being staged so that parti
 
 **Acceptance Criteria:**
 
-- [ ] The file's size and modification time are captured immediately before and after streaming it into staging.
-- [ ] An unchanged file transitions to `state = stable` and may be finalized.
-- [ ] A changed or missing file returns to `state = discovered`; its staging object is deleted and the source remains untouched.
-- [ ] Only `stable` entries proceed to finalization.
-- [ ] Tests simulate a file changing during staging and verify it is not finalized or removed.
+- [x] The file's size and modification time are captured immediately before and after streaming it into staging.
+- [x] An unchanged file transitions to `state = stable` and may be finalized.
+- [x] A changed or missing file returns to `state = discovered`; its staging object is deleted and the source remains untouched.
+- [x] Only `stable` entries proceed to finalization.
+- [x] Tests simulate a file changing during staging and verify it is not finalized or removed.
+
+**Implementation report:** Added guarded staging that compares regular-file size and modification time before and after streaming, publishes only an unchanged staging object, and persists either `stable` or a reset to `discovered`. Tests cover successful staging and rejection after the discovery snapshot changes, with source files left untouched.
+
+**New files:** None.
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `crates/importer/src/lib.rs`
 
 ---
 

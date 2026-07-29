@@ -178,6 +178,49 @@ pub async fn list_pending_entries(
     .await
 }
 
+/// Moves an import entry to stable after its source survives staging unchanged.
+///
+/// # Errors
+///
+/// Returns the database error when the entry cannot be updated.
+pub async fn mark_import_stable(
+    pool: &PgPool,
+    entry_id: Uuid,
+) -> Result<ImportEntryRecord, sqlx::Error> {
+    set_import_entry_state(pool, entry_id, ImportEntryState::Stable).await
+}
+
+/// Returns an entry to discovery after its source changes during staging.
+///
+/// # Errors
+///
+/// Returns the database error when the entry cannot be updated.
+pub async fn reset_import_discovered(
+    pool: &PgPool,
+    entry_id: Uuid,
+) -> Result<ImportEntryRecord, sqlx::Error> {
+    set_import_entry_state(pool, entry_id, ImportEntryState::Discovered).await
+}
+
+async fn set_import_entry_state(
+    pool: &PgPool,
+    entry_id: Uuid,
+    state: ImportEntryState,
+) -> Result<ImportEntryRecord, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        UPDATE import_entries
+        SET state = $2, error_message = NULL, updated_at = now()
+        WHERE id = $1
+        RETURNING *
+        ",
+    )
+    .bind(entry_id)
+    .bind(state)
+    .fetch_one(pool)
+    .await
+}
+
 /// Records a successfully finalized import and its integrity checksum.
 ///
 /// # Errors
