@@ -954,12 +954,28 @@ As a user, I want to upload an entire folder and have its directory structure pr
 
 **Acceptance Criteria:**
 
-- [ ] The frontend reads `webkitRelativePath` from the `File` objects when a folder is selected via `<input webkitdirectory>`.
-- [ ] Before uploading, the client resolves the relative paths and issues `POST /api/folders` calls to create any missing intermediate folders.
-- [ ] Each file upload session references its correct parent folder.
-- [ ] If any folder creation or file upload fails due to a name conflict, the error is reported per-item; other non-conflicting items continue uploading.
-- [ ] The final folder structure in Strife mirrors the original on-disk structure.
-- [ ] Test: upload a folder with 3 levels of nesting and verify the hierarchy in the API.
+- [x] The frontend reads `webkitRelativePath` from the `File` objects when a folder is selected via `<input webkitdirectory>`.
+- [x] Before uploading, the client resolves the relative paths and issues `POST /api/folders` calls to create any missing intermediate folders.
+- [x] Each file upload session references its correct parent folder.
+- [x] If any folder creation or file upload fails due to a name conflict, the error is reported per-item; other non-conflicting items continue uploading.
+- [x] The final folder structure in Strife mirrors the original on-disk structure.
+- [x] Test: upload a folder with 3 levels of nesting and verify the hierarchy in the API.
+
+**Implementation report:** Added a `webkitdirectory` folder picker and relative-path uploader that resolves or creates each intermediate folder, streams files into their exact parents, and isolates errors per file. A live three-level API test and browser run verified mirrored nesting, a 3-of-3 initial upload, and a repeat upload where three conflicts were reported while one new deep file still completed.
+
+**New files:**
+
+- `apps/web/src/components/FolderUploadControl.css`
+- `apps/web/src/components/FolderUploadControl.tsx`
+- `apps/web/src/uploads/folderUpload.ts`
+- `crates/api/tests/folder_upload_api.rs`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/components/CreateFolderDialog.css`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 

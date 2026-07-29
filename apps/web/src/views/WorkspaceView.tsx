@@ -12,6 +12,7 @@ import type { FolderAncestor, FolderItem } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
 import { CreateFolderDialog } from '../components/CreateFolderDialog'
 import { FileTable } from '../components/FileTable'
+import { FolderUploadControl } from '../components/FolderUploadControl'
 import { MoveFolderDialog } from '../components/MoveFolderDialog'
 import { RenameFolderDialog } from '../components/RenameFolderDialog'
 
@@ -179,6 +180,10 @@ function FolderContents(props: { folderId: string }) {
     <>
       <span hidden data-resumable-upload-count={activeUploads()?.length ?? 0} />
       <div class="folder-toolbar">
+        <FolderUploadControl
+          folderId={props.folderId}
+          onComplete={() => void refetch()}
+        />
         <button type="button" onClick={() => setShowCreateDialog(true)}>
           New Folder
         </button>

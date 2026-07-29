@@ -1,5 +1,6 @@
 import type {
   ApiReadiness,
+  CreatedUploadSession,
   DependencyStatus,
   FolderAncestor,
   FolderChildrenResponse,
@@ -276,6 +277,82 @@ export async function getActiveUploads(
 ): Promise<UploadSession[]> {
   const query = new URLSearchParams({ folder_id: folderId })
   return requestUploadSessions(`/api/uploads?${query}`, signal)
+}
+
+export async function createUploadSession(
+  folderId: string,
+  file: File,
+): Promise<CreatedUploadSession> {
+  const response = await fetch('/api/uploads', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      folder_id: folderId,
+      name: file.name,
+      size: file.size,
+      source_created_at: null,
+      source_modified_at: new Date(file.lastModified).toISOString(),
+    }),
+  })
+  if (!response.ok) {
+    const errorBody = await readErrorBody(response)
+    throw new ApiClientError(
+      errorBody?.message ?? `Upload creation failed (${response.status}).`,
+      { status: response.status, code: errorBody?.code },
+    )
+  }
+  const body: unknown = await response.json()
+  if (
+    !isRecord(body) ||
+    typeof body.session_id !== 'string' ||
+    typeof body.staging_key !== 'string'
+  ) {
+    throw new ApiClientError('The upload creation response was invalid.')
+  }
+  return body as unknown as CreatedUploadSession
+}
+
+export async function uploadFileChunk(
+  sessionId: string,
+  bytes: Blob,
+  start: number,
+  total: number,
+): Promise<void> {
+  const end = start + bytes.size - 1
+  const response = await fetch(`/api/uploads/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Range': `bytes ${start}-${end}/${total}` },
+    body: bytes,
+  })
+  if (!response.ok) {
+    const errorBody = await readErrorBody(response)
+    throw new ApiClientError(
+      errorBody?.message ?? `Upload chunk failed (${response.status}).`,
+      { status: response.status, code: errorBody?.code },
+    )
+  }
+}
+
+export async function finalizeUpload(sessionId: string): Promise<FolderItem> {
+  const response = await fetch(`/api/uploads/${sessionId}/finalize`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) {
+    const errorBody = await readErrorBody(response)
+    throw new ApiClientError(
+      errorBody?.message ?? `Upload finalization failed (${response.status}).`,
+      { status: response.status, code: errorBody?.code },
+    )
+  }
+  const body: unknown = await response.json()
+  if (!isFolderItem(body)) {
+    throw new ApiClientError('The finalized upload response was invalid.')
+  }
+  return { ...body, size_bytes: body.size_bytes ?? null }
 }
 
 async function requestUploadSessions(

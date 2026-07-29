@@ -62,3 +62,8 @@ export interface UploadSession {
   created_at: string
   expires_at: string
 }
+
+export interface CreatedUploadSession {
+  session_id: string
+  staging_key: string
+}
