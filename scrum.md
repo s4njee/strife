@@ -466,11 +466,27 @@ As a user, I want a breadcrumb trail showing my current path in the folder hiera
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/folders/:id/ancestors` returns an ordered array of `{ id, name }` from root to the requested folder.
-- [ ] A `<Breadcrumb>` component renders each ancestor as a clickable link.
-- [ ] Clicking an ancestor navigates to that folder.
-- [ ] The current folder name is displayed but not clickable.
-- [ ] Breadcrumbs truncate gracefully if the path is very deep (e.g., ellipsis after 5 levels with a hover/expand).
+- [x] `GET /api/folders/:id/ancestors` returns an ordered array of `{ id, name }` from root to the requested folder.
+- [x] A `<Breadcrumb>` component renders each ancestor as a clickable link.
+- [x] Clicking an ancestor navigates to that folder.
+- [x] The current folder name is displayed but not clickable.
+- [x] Breadcrumbs truncate gracefully if the path is very deep (e.g., ellipsis after 5 levels with a hover/expand).
+
+**Implementation report:** Added a recursive ancestor query and `/api/folders/:id/ancestors` endpoint, then connected it to a routed breadcrumb that keeps the current folder non-interactive. Browser verification against a temporary six-level PostgreSQL hierarchy confirmed root-to-current links, five-part truncation, and full-path expansion.
+
+**New files:**
+
+- `apps/web/src/components/Breadcrumb.css`
+- `apps/web/src/components/Breadcrumb.tsx`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/folders.rs`
+- `crates/api/tests/folders_api.rs`
+- `crates/db/src/lib.rs`
 
 ---
 

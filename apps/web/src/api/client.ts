@@ -1,4 +1,9 @@
-import type { ApiReadiness, DependencyStatus, ReadinessResponse } from './types'
+import type {
+  ApiReadiness,
+  DependencyStatus,
+  FolderAncestor,
+  ReadinessResponse,
+} from './types'
 
 export class ApiClientError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -52,6 +57,37 @@ export async function getReadiness(
   }
 }
 
+export async function getFolderAncestors(
+  folderId: string,
+  signal?: AbortSignal,
+): Promise<FolderAncestor[]> {
+  let response: Response
+
+  try {
+    response = await fetch(`/api/folders/${folderId}/ancestors`, {
+      headers: { Accept: 'application/json' },
+      signal,
+    })
+  } catch (error) {
+    throw new ApiClientError('The folder path could not be loaded.', {
+      cause: error,
+    })
+  }
+
+  if (!response.ok) {
+    throw new ApiClientError(
+      `The folder path request failed (${response.status}).`,
+    )
+  }
+
+  const body: unknown = await response.json()
+  if (!Array.isArray(body) || !body.every(isFolderAncestor)) {
+    throw new ApiClientError('The folder path response was invalid.')
+  }
+
+  return body
+}
+
 function isReadinessResponse(value: unknown): value is ReadinessResponse {
   if (!isRecord(value)) return false
 
@@ -66,6 +102,14 @@ function isReadinessResponse(value: unknown): value is ReadinessResponse {
 
 function isDependencyStatus(value: unknown): value is DependencyStatus {
   return value === 'ok' || value === 'error'
+}
+
+function isFolderAncestor(value: unknown): value is FolderAncestor {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string'
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

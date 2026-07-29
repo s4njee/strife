@@ -42,6 +42,13 @@ pub struct NodeRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Minimal node information used for hierarchy paths.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct NodePathEntry {
+    pub id: Uuid,
+    pub name: String,
+}
+
 /// Expected failures from a transactional folder mutation.
 #[derive(Debug, thiserror::Error)]
 pub enum FolderMutationError {
@@ -161,6 +168,42 @@ pub async fn list_children_page(
     .bind(parent_id)
     .bind(cursor)
     .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await
+}
+
+/// Returns an active folder path ordered from the root to the requested node.
+///
+/// # Errors
+///
+/// Returns the database error when the recursive query cannot be completed.
+pub async fn list_ancestors(
+    pool: &PgPool,
+    folder_id: Uuid,
+) -> Result<Vec<NodePathEntry>, sqlx::Error> {
+    sqlx::query_as::<_, NodePathEntry>(
+        r"
+        WITH RECURSIVE ancestors AS (
+            SELECT id, parent_id, name, 0 AS depth
+            FROM nodes
+            WHERE id = $1
+              AND kind = 'folder'
+              AND lifecycle_state = 'active'
+
+            UNION ALL
+
+            SELECT parent.id, parent.parent_id, parent.name, child.depth + 1
+            FROM nodes AS parent
+            JOIN ancestors AS child ON parent.id = child.parent_id
+            WHERE parent.kind = 'folder'
+              AND parent.lifecycle_state = 'active'
+        )
+        SELECT id, name
+        FROM ancestors
+        ORDER BY depth DESC
+        ",
+    )
+    .bind(folder_id)
     .fetch_all(pool)
     .await
 }

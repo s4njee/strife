@@ -12,3 +12,8 @@ export interface ApiReadiness {
   httpStatus: 200 | 503
   details: ReadinessResponse
 }
+
+export interface FolderAncestor {
+  id: string
+  name: string
+}

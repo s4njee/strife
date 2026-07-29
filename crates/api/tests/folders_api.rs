@@ -4,7 +4,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use strife_api::folders::{ChildrenResponse, FolderResponse};
+use strife_api::folders::{AncestorResponse, ChildrenResponse, FolderResponse};
 use strife_db::{MIGRATOR, ROOT_NODE_ID};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -194,6 +194,46 @@ async fn children_are_name_sorted_and_cursor_paginated() {
     assert_eq!(second.items.len(), 1);
     assert_eq!(second.items[0].name, "Charlie");
     assert_eq!(second.next_cursor, None);
+
+    remove_fixture_tree(&pool, fixture_id).await;
+}
+
+#[tokio::test]
+async fn ancestors_are_ordered_from_root_to_current_folder() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL API integration test");
+        return;
+    };
+    let fixture_id = create_fixture_parent(&pool).await;
+    let child = strife_db::create_folder(&pool, fixture_id, "Child")
+        .await
+        .expect("create child");
+    let grandchild = strife_db::create_folder(&pool, child.id, "Grandchild")
+        .await
+        .expect("create grandchild");
+    let app = strife_api::folders::router(pool.clone());
+
+    let response = app
+        .oneshot(
+            Request::get(format!("/api/folders/{}/ancestors", grandchild.id))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("list ancestors");
+    assert_eq!(response.status(), StatusCode::OK);
+    let ancestors: Vec<AncestorResponse> = response_json(response).await;
+
+    assert_eq!(ancestors.first().map(|item| item.id), Some(ROOT_NODE_ID));
+    assert_eq!(
+        ancestors
+            .iter()
+            .rev()
+            .take(2)
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Grandchild", "Child"]
+    );
 
     remove_fixture_tree(&pool, fixture_id).await;
 }

@@ -26,6 +26,7 @@ pub fn router(pool: PgPool) -> Router {
         .route("/api/folders", post(create_folder))
         .route("/api/folders/{id}", patch(update_folder))
         .route("/api/folders/{id}/children", get(list_children))
+        .route("/api/folders/{id}/ancestors", get(list_ancestors))
         .with_state(FolderState { pool })
 }
 
@@ -67,6 +68,12 @@ pub struct FolderResponse {
 pub struct ChildrenResponse {
     pub items: Vec<FolderResponse>,
     pub next_cursor: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AncestorResponse {
+    pub id: Uuid,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,6 +173,28 @@ async fn list_children(
         items: nodes.into_iter().map(FolderResponse::from).collect(),
         next_cursor,
     }))
+}
+
+async fn list_ancestors(
+    State(state): State<FolderState>,
+    Path(folder_id): Path<Uuid>,
+) -> Result<Json<Vec<AncestorResponse>>, ApiError> {
+    let ancestors = strife_db::list_ancestors(&state.pool, folder_id)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    if ancestors.is_empty() {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(Json(
+        ancestors
+            .into_iter()
+            .map(|node| AncestorResponse {
+                id: node.id,
+                name: node.name,
+            })
+            .collect(),
+    ))
 }
 
 async fn create_folder(
