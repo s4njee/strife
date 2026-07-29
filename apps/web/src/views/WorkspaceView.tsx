@@ -2,6 +2,7 @@ import { useParams } from '@solidjs/router'
 import { createResource, createSignal, Show, type JSX } from 'solid-js'
 import {
   createFolder,
+  getActiveUploads,
   getFolderAncestors,
   getFolderChildren,
   moveFolders,
@@ -95,6 +96,10 @@ function FolderContents(props: { folderId: string }) {
     () => (staticPreview ? false : props.folderId),
     (folderId) => getFolderChildren(folderId),
   )
+  const [activeUploads] = createResource(
+    () => (staticPreview ? false : props.folderId),
+    (folderId) => getActiveUploads(folderId),
+  )
   const items = () =>
     staticPreview ? staticItems() : (children()?.items ?? [])
 
@@ -172,6 +177,7 @@ function FolderContents(props: { folderId: string }) {
 
   return (
     <>
+      <span hidden data-resumable-upload-count={activeUploads()?.length ?? 0} />
       <div class="folder-toolbar">
         <button type="button" onClick={() => setShowCreateDialog(true)}>
           New Folder

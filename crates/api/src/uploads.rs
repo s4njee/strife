@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{patch, post},
@@ -41,10 +41,10 @@ pub fn router(
     disk_guard_percent: u8,
 ) -> Router {
     Router::new()
-        .route("/api/uploads", post(create_upload))
+        .route("/api/uploads", post(create_upload).get(list_uploads))
         .route(
             "/api/uploads/{id}",
-            patch(upload_chunk).delete(cancel_upload),
+            patch(upload_chunk).get(get_upload).delete(cancel_upload),
         )
         .route("/api/uploads/{id}/finalize", post(finalize_upload))
         .with_state(UploadState {
@@ -75,6 +75,29 @@ pub struct UploadProgressResponse {
     pub received_bytes: i64,
     pub expected_bytes: Option<i64>,
     pub complete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReceivedRangeResponse {
+    pub start: i64,
+    pub end: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UploadSessionResponse {
+    pub session_id: Uuid,
+    pub state: &'static str,
+    pub display_name: String,
+    pub received_bytes: i64,
+    pub expected_bytes: Option<i64>,
+    pub received_ranges: Vec<ReceivedRangeResponse>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListUploadsQuery {
+    folder_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -252,6 +275,65 @@ async fn create_upload(
             staging_key,
         }),
     ))
+}
+
+async fn get_upload(
+    State(state): State<UploadState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<Json<UploadSessionResponse>, UploadApiError> {
+    let progress = strife_db::get_session_progress(&state.pool, session_id)
+        .await
+        .map_err(|_| UploadApiError::Internal)?
+        .ok_or(UploadApiError::NotFound)?;
+    Ok(Json(progress_response(progress)))
+}
+
+async fn list_uploads(
+    State(state): State<UploadState>,
+    Query(query): Query<ListUploadsQuery>,
+) -> Result<Json<Vec<UploadSessionResponse>>, UploadApiError> {
+    let sessions = strife_db::list_active_upload_sessions(&state.pool, query.folder_id)
+        .await
+        .map_err(|_| UploadApiError::Internal)?;
+    let mut responses = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        let progress = strife_db::get_session_progress(&state.pool, session.id)
+            .await
+            .map_err(|_| UploadApiError::Internal)?
+            .ok_or(UploadApiError::NotFound)?;
+        responses.push(progress_response(progress));
+    }
+    Ok(Json(responses))
+}
+
+fn progress_response(progress: strife_db::UploadSessionProgress) -> UploadSessionResponse {
+    UploadSessionResponse {
+        session_id: progress.session.id,
+        state: upload_state_name(progress.session.state),
+        display_name: progress.session.display_name,
+        received_bytes: progress.session.received_bytes,
+        expected_bytes: progress.session.expected_byte_size,
+        received_ranges: progress
+            .received_ranges
+            .into_iter()
+            .map(|range| ReceivedRangeResponse {
+                start: range.start_byte,
+                end: range.end_byte,
+            })
+            .collect(),
+        created_at: progress.session.created_at,
+        expires_at: progress.session.expires_at,
+    }
+}
+
+const fn upload_state_name(state: UploadSessionState) -> &'static str {
+    match state {
+        UploadSessionState::Active => "active",
+        UploadSessionState::Finalizing => "finalizing",
+        UploadSessionState::Completed => "completed",
+        UploadSessionState::Cancelled => "cancelled",
+        UploadSessionState::Expired => "expired",
+    }
 }
 
 async fn finalize_upload(

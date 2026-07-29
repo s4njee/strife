@@ -547,6 +547,29 @@ pub async fn list_expired_sessions(pool: &PgPool) -> Result<Vec<UploadSessionRec
     .await
 }
 
+/// Lists active upload sessions targeting one folder in creation order.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn list_active_upload_sessions(
+    pool: &PgPool,
+    folder_id: Uuid,
+) -> Result<Vec<UploadSessionRecord>, sqlx::Error> {
+    upload_session_query(
+        r"
+        SELECT *
+        FROM upload_sessions
+        WHERE target_folder_id = $1
+          AND state = 'active'
+        ORDER BY created_at, id
+        ",
+    )
+    .bind(folder_id)
+    .fetch_all(pool)
+    .await
+}
+
 /// Fetches any upload session by identifier.
 ///
 /// # Errors

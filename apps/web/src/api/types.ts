@@ -43,3 +43,22 @@ export interface MoveFolderConflict {
 export interface MoveFoldersResponse {
   items: FolderItem[]
 }
+
+export type UploadSessionState =
+  'active' | 'finalizing' | 'completed' | 'cancelled' | 'expired'
+
+export interface UploadByteRange {
+  start: number
+  end: number
+}
+
+export interface UploadSession {
+  session_id: string
+  state: UploadSessionState
+  display_name: string
+  received_bytes: number
+  expected_bytes: number | null
+  received_ranges: UploadByteRange[]
+  created_at: string
+  expires_at: string
+}

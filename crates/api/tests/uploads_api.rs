@@ -140,6 +140,26 @@ async fn cancel_request(app: axum::Router, session_id: Uuid) -> axum::response::
     .expect("send cancel request")
 }
 
+async fn progress_request(app: axum::Router, session_id: Uuid) -> axum::response::Response {
+    app.oneshot(
+        Request::get(format!("/api/uploads/{session_id}"))
+            .body(Body::empty())
+            .expect("build progress request"),
+    )
+    .await
+    .expect("send progress request")
+}
+
+async fn list_uploads_request(app: axum::Router, folder_id: Uuid) -> axum::response::Response {
+    app.oneshot(
+        Request::get(format!("/api/uploads?folder_id={folder_id}"))
+            .body(Body::empty())
+            .expect("build list request"),
+    )
+    .await
+    .expect("send list request")
+}
+
 async fn response_json<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
     let bytes = to_bytes(response.into_body(), 64 * 1024)
         .await
@@ -277,6 +297,30 @@ async fn chunks_stream_out_of_order_and_reject_overlaps() {
     let earlier: Value = response_json(earlier).await;
     assert_eq!(earlier["received_bytes"], 10);
     assert_eq!(earlier["complete"], true);
+    let progress: Value =
+        response_json(progress_request(app.clone(), created.session_id).await).await;
+    assert_eq!(progress["session_id"], created.session_id.to_string());
+    assert_eq!(progress["state"], "active");
+    assert_eq!(progress["display_name"], "chunks.bin");
+    assert_eq!(progress["received_bytes"], 10);
+    assert_eq!(progress["expected_bytes"], 10);
+    assert_eq!(
+        progress["received_ranges"][0],
+        json!({"start": 0, "end": 4})
+    );
+    assert_eq!(
+        progress["received_ranges"][1],
+        json!({"start": 5, "end": 9})
+    );
+    assert!(progress["created_at"].is_string());
+    assert!(progress["expires_at"].is_string());
+    let active: Vec<Value> =
+        response_json(list_uploads_request(app.clone(), folder_id).await).await;
+    assert!(
+        active
+            .iter()
+            .any(|session| session["session_id"] == created.session_id.to_string())
+    );
     assert_eq!(
         chunk_request(app.clone(), created.session_id, "bytes 3-6/10", b"xxxx")
             .await
@@ -286,6 +330,13 @@ async fn chunks_stream_out_of_order_and_reject_overlaps() {
     strife_db::finalize_session(&pool, created.session_id, "pending-finalization-test", None)
         .await
         .expect("mark session completed");
+    let active: Vec<Value> =
+        response_json(list_uploads_request(app.clone(), folder_id).await).await;
+    assert!(
+        active
+            .iter()
+            .all(|session| session["session_id"] != created.session_id.to_string())
+    );
     assert_eq!(
         chunk_request(app, created.session_id, "bytes 0-4/10", b"hello")
             .await

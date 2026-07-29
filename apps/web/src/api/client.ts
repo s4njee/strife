@@ -7,6 +7,7 @@ import type {
   MoveFolderConflict,
   MoveFoldersResponse,
   ReadinessResponse,
+  UploadSession,
 } from './types'
 
 export class ApiClientError extends Error {
@@ -260,6 +261,52 @@ export async function moveFolders(
   }
 }
 
+export async function getUploadSession(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<UploadSession> {
+  return requestUploadSessions(`/api/uploads/${sessionId}`, signal).then(
+    (sessions) => sessions[0],
+  )
+}
+
+export async function getActiveUploads(
+  folderId: string,
+  signal?: AbortSignal,
+): Promise<UploadSession[]> {
+  const query = new URLSearchParams({ folder_id: folderId })
+  return requestUploadSessions(`/api/uploads?${query}`, signal)
+}
+
+async function requestUploadSessions(
+  url: string,
+  signal?: AbortSignal,
+): Promise<UploadSession[]> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal,
+    })
+  } catch (error) {
+    throw new ApiClientError('Upload progress could not be loaded.', {
+      cause: error,
+    })
+  }
+  if (!response.ok) {
+    throw new ApiClientError(
+      `The upload progress request failed (${response.status}).`,
+      { status: response.status },
+    )
+  }
+  const body: unknown = await response.json()
+  const sessions = Array.isArray(body) ? body : [body]
+  if (!sessions.every(isUploadSession)) {
+    throw new ApiClientError('The upload progress response was invalid.')
+  }
+  return sessions
+}
+
 function isReadinessResponse(value: unknown): value is ReadinessResponse {
   if (!isRecord(value)) return false
 
@@ -323,6 +370,29 @@ function isMoveFolderConflict(value: unknown): value is MoveFolderConflict {
     typeof value.id === 'string' &&
     typeof value.name === 'string' &&
     (value.reason === 'name_conflict' || value.reason === 'cycle_detected')
+  )
+}
+
+function isUploadSession(value: unknown): value is UploadSession {
+  return (
+    isRecord(value) &&
+    typeof value.session_id === 'string' &&
+    ['active', 'finalizing', 'completed', 'cancelled', 'expired'].includes(
+      String(value.state),
+    ) &&
+    typeof value.display_name === 'string' &&
+    typeof value.received_bytes === 'number' &&
+    (value.expected_bytes === null ||
+      typeof value.expected_bytes === 'number') &&
+    Array.isArray(value.received_ranges) &&
+    value.received_ranges.every(
+      (range) =>
+        isRecord(range) &&
+        typeof range.start === 'number' &&
+        typeof range.end === 'number',
+    ) &&
+    typeof value.created_at === 'string' &&
+    typeof value.expires_at === 'string'
   )
 }
 

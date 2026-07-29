@@ -900,9 +900,24 @@ As an API client, I want `GET /api/uploads/:session_id` to check upload progress
 
 **Acceptance Criteria:**
 
-- [ ] Returns `{ "session_id", "state", "display_name", "received_bytes", "expected_bytes", "received_ranges": [...], "created_at", "expires_at" }`.
-- [ ] `GET /api/uploads?folder_id=:id` lists all active sessions for a folder.
-- [ ] Used by the frontend to detect in-progress uploads on page load and resume them.
+- [x] Returns `{ "session_id", "state", "display_name", "received_bytes", "expected_bytes", "received_ranges": [...], "created_at", "expires_at" }`.
+- [x] `GET /api/uploads?folder_id=:id` lists all active sessions for a folder.
+- [x] Used by the frontend to detect in-progress uploads on page load and resume them.
+
+**Implementation report:** Added typed detail and folder-scoped active-upload queries with ordered received ranges and durable lifecycle timestamps, plus a SolidJS loader that discovers resumable sessions whenever a folder view loads. Integration tests verify the complete response contract, range ordering, and that completed sessions leave the active listing.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/uploads.rs`
+- `crates/api/tests/uploads_api.rs`
+- `crates/db/src/lib.rs`
 
 ---
 
