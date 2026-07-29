@@ -609,12 +609,23 @@ As a user, I want to rename a folder via the context menu so that I can fix nami
 
 **Acceptance Criteria:**
 
-- [ ] "Rename" from the context menu opens an inline edit field on the row's name cell (or a small dialog).
-- [ ] The current name is pre-filled and fully selected.
-- [ ] Pressing Enter or clicking "Save" calls `PATCH /api/folders/:id`.
-- [ ] On success, the row updates in place.
-- [ ] On `409 Conflict`, an inline error message appears.
-- [ ] Pressing Escape cancels the rename.
+- [x] "Rename" from the context menu opens an inline edit field on the row's name cell (or a small dialog).
+- [x] The current name is pre-filled and fully selected.
+- [x] Pressing Enter or clicking "Save" calls `PATCH /api/folders/:id`.
+- [x] On success, the row updates in place.
+- [x] On `409 Conflict`, an inline error message appears.
+- [x] Pressing Escape cancels the rename.
+
+**Implementation report:** Added a context-menu rename dialog with selected current-name input, keyboard controls, typed PATCH client, in-place resource updates, and exact inline conflict handling. Browser tests against the real Axum/PostgreSQL stack confirmed Enter submission, immediate row replacement, duplicate-name feedback, and Escape cancellation.
+
+**New files:**
+
+- `apps/web/src/components/RenameFolderDialog.tsx`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 

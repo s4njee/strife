@@ -171,6 +171,42 @@ export async function createFolder(
   return { ...body, size_bytes: body.size_bytes ?? null }
 }
 
+export async function renameFolder(
+  folderId: string,
+  name: string,
+): Promise<FolderItem> {
+  let response: Response
+
+  try {
+    response = await fetch(`/api/folders/${folderId}`, {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name }),
+    })
+  } catch (error) {
+    throw new ApiClientError('The folder could not be renamed.', {
+      cause: error,
+    })
+  }
+
+  if (!response.ok) {
+    const errorBody = await readErrorBody(response)
+    throw new ApiClientError(
+      errorBody?.message ?? `The rename request failed (${response.status}).`,
+      { status: response.status, code: errorBody?.code },
+    )
+  }
+
+  const body: unknown = await response.json()
+  if (!isFolderItem(body)) {
+    throw new ApiClientError('The renamed folder response was invalid.')
+  }
+  return { ...body, size_bytes: body.size_bytes ?? null }
+}
+
 function isReadinessResponse(value: unknown): value is ReadinessResponse {
   if (!isRecord(value)) return false
 

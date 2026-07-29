@@ -4,11 +4,13 @@ import {
   createFolder,
   getFolderAncestors,
   getFolderChildren,
+  renameFolder,
 } from '../api/client'
 import type { FolderAncestor, FolderItem } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
 import { CreateFolderDialog } from '../components/CreateFolderDialog'
 import { FileTable } from '../components/FileTable'
+import { RenameFolderDialog } from '../components/RenameFolderDialog'
 
 const ROOT_FOLDER_ID = '00000000-0000-0000-0000-000000000001'
 
@@ -84,8 +86,9 @@ export function FolderView() {
 function FolderContents(props: { folderId: string }) {
   const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
   const [showCreateDialog, setShowCreateDialog] = createSignal(false)
+  const [renameItem, setRenameItem] = createSignal<FolderItem>()
   const [staticItems, setStaticItems] = createSignal(previewItems)
-  const [children, { refetch }] = createResource(
+  const [children, { mutate, refetch }] = createResource(
     () => (staticPreview ? false : props.folderId),
     (folderId) => getFolderChildren(folderId),
   )
@@ -113,6 +116,29 @@ function FolderContents(props: { folderId: string }) {
     await refetch()
   }
 
+  const handleRename = async (folder: FolderItem, name: string) => {
+    if (staticPreview) {
+      setStaticItems((current) =>
+        current.map((item) =>
+          item.id === folder.id ? { ...item, name } : item,
+        ),
+      )
+      return
+    }
+
+    const updated = await renameFolder(folder.id, name)
+    mutate((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((item) =>
+              item.id === updated.id ? updated : item,
+            ),
+          }
+        : current,
+    )
+  }
+
   return (
     <>
       <div class="folder-toolbar">
@@ -127,12 +153,22 @@ function FolderContents(props: { folderId: string }) {
           children.error instanceof Error ? children.error.message : undefined
         }
         onRetry={() => void refetch()}
+        onRename={setRenameItem}
       />
       <Show when={showCreateDialog()}>
         <CreateFolderDialog
           onCreate={handleCreate}
           onClose={() => setShowCreateDialog(false)}
         />
+      </Show>
+      <Show when={renameItem()}>
+        {(folder) => (
+          <RenameFolderDialog
+            folder={folder()}
+            onRename={(name) => handleRename(folder(), name)}
+            onClose={() => setRenameItem(undefined)}
+          />
+        )}
       </Show>
     </>
   )
