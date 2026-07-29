@@ -874,10 +874,23 @@ As an API client or system operator, I want to cancel an upload and have stale s
 
 **Acceptance Criteria:**
 
-- [ ] `DELETE /api/uploads/:session_id` cancels an active session, marks it `cancelled`, and deletes the staging file.
-- [ ] A background task (in `crates/worker` or the API process) runs periodically (e.g., every 15 minutes) to find expired sessions (`expires_at < now()`), delete their staging files, and mark them `expired`.
-- [ ] Cancellation and cleanup are idempotent.
-- [ ] Tests verify that a cancelled/expired session's staging file is removed from disk.
+- [x] `DELETE /api/uploads/:session_id` cancels an active session, marks it `cancelled`, and deletes the staging file.
+- [x] A background task (in `crates/worker` or the API process) runs periodically (e.g., every 15 minutes) to find expired sessions (`expires_at < now()`), delete their staging files, and mark them `expired`.
+- [x] Cancellation and cleanup are idempotent.
+- [x] Tests verify that a cancelled/expired session's staging file is removed from disk.
+
+**Implementation report:** Added an idempotent cancellation endpoint and an API-process cleanup loop that sweeps every 15 minutes, removing expired staging objects before committing terminal session state so failed deletions can retry. Live integration tests verify repeated cancellation and cleanup calls, both terminal states, and physical staging-file removal.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `crates/api/src/lib.rs`
+- `crates/api/src/uploads.rs`
+- `crates/api/tests/uploads_api.rs`
+- `crates/db/src/lib.rs`
 
 ---
 

@@ -18,6 +18,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_storage::LocalFsBackend;
 use tokio::{net::TcpListener, time::timeout};
 use tracing::info;
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
 const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -73,6 +74,7 @@ pub async fn run(config: Config) -> Result<()> {
         i64::try_from(config.upload_session_ttl_hours)
             .context("UPLOAD_SESSION_TTL_HOURS is too large")?,
     );
+    spawn_upload_cleanup(pool.clone(), storage.clone());
     let app = health::router(dependencies)
         .merge(folders::router(pool.clone()))
         .merge(uploads::router(pool, storage, upload_ttl, 90));
@@ -80,6 +82,20 @@ pub async fn run(config: Config) -> Result<()> {
     axum::serve(listener, app)
         .await
         .context("API server failed")
+}
+
+fn spawn_upload_cleanup(pool: PgPool, storage: Arc<LocalFsBackend>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
+        loop {
+            interval.tick().await;
+            match uploads::cleanup_expired_uploads(&pool, storage.as_ref()).await {
+                Ok(count) if count > 0 => info!(expired_uploads = count, "expired uploads cleaned"),
+                Ok(_) => {}
+                Err(error) => warn!(%error, "expired upload cleanup failed"),
+            }
+        }
+    });
 }
 
 /// Connects to `PostgreSQL` within the startup deadline.

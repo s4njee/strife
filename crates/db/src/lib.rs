@@ -498,6 +498,36 @@ pub async fn cancel_session(
     }
 }
 
+/// Marks an overdue active session expired and returns its stable state.
+///
+/// # Errors
+///
+/// Returns `RowNotFound` when the session does not exist or a database error.
+pub async fn expire_session(
+    pool: &PgPool,
+    session_id: Uuid,
+) -> Result<UploadSessionRecord, sqlx::Error> {
+    let updated = upload_session_query(
+        r"
+        UPDATE upload_sessions
+        SET state = 'expired', updated_at = now()
+        WHERE id = $1
+          AND state = 'active'
+          AND expires_at < now()
+        RETURNING *
+        ",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    match updated {
+        Some(session) => Ok(session),
+        None => get_upload_session(pool, session_id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound),
+    }
+}
+
 /// Lists active sessions whose expiry deadline has passed.
 ///
 /// # Errors

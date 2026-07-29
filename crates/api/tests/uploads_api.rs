@@ -130,6 +130,16 @@ async fn finalize_request(app: axum::Router, session_id: Uuid) -> axum::response
     .expect("send finalize request")
 }
 
+async fn cancel_request(app: axum::Router, session_id: Uuid) -> axum::response::Response {
+    app.oneshot(
+        Request::delete(format!("/api/uploads/{session_id}"))
+            .body(Body::empty())
+            .expect("build cancel request"),
+    )
+    .await
+    .expect("send cancel request")
+}
+
 async fn response_json<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
     let bytes = to_bytes(response.into_body(), 64 * 1024)
         .await
@@ -445,6 +455,90 @@ async fn finalization_rechecks_name_conflicts_and_restores_staging() {
     assert_eq!(
         progress.session.state,
         strife_db::UploadSessionState::Active
+    );
+
+    cleanup_upload_fixture(&pool, folder_id, &root).await;
+}
+
+#[tokio::test]
+async fn cancellation_and_expiry_cleanup_remove_staging_objects_idempotently() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL API integration test");
+        return;
+    };
+    let folder_id = create_fixture_folder(&pool).await;
+    let root = std::env::temp_dir().join(format!("strife-cleanup-api-{}", Uuid::new_v4()));
+    let backend = Arc::new(LocalFsBackend::new(&root).await.expect("create storage"));
+    let app = strife_api::uploads::router(pool.clone(), backend.clone(), Duration::hours(24), 90);
+    let cancelled: CreateUploadResponse = response_json(
+        json_request(
+            app.clone(),
+            json!({"folder_id": folder_id, "name": "cancel.bin", "size": 5}),
+        )
+        .await,
+    )
+    .await;
+    chunk_request(app.clone(), cancelled.session_id, "bytes 0-4/5", b"hello").await;
+
+    assert_eq!(
+        cancel_request(app.clone(), cancelled.session_id)
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        cancel_request(app.clone(), cancelled.session_id)
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        !backend
+            .exists(StorageKey::staging(cancelled.staging_key))
+            .await
+            .expect("check cancelled staging")
+    );
+
+    let expired: CreateUploadResponse = response_json(
+        json_request(
+            app,
+            json!({"folder_id": folder_id, "name": "expired.bin", "size": 1}),
+        )
+        .await,
+    )
+    .await;
+    sqlx::query(
+        "UPDATE upload_sessions SET expires_at = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(expired.session_id)
+    .execute(&pool)
+    .await
+    .expect("expire session fixture");
+    assert_eq!(
+        strife_api::uploads::cleanup_expired_uploads(&pool, backend.as_ref())
+            .await
+            .expect("run cleanup"),
+        1
+    );
+    assert_eq!(
+        strife_api::uploads::cleanup_expired_uploads(&pool, backend.as_ref())
+            .await
+            .expect("repeat cleanup"),
+        0
+    );
+    assert!(
+        !backend
+            .exists(StorageKey::staging(expired.staging_key))
+            .await
+            .expect("check expired staging")
+    );
+    assert_eq!(
+        strife_db::get_upload_session(&pool, expired.session_id)
+            .await
+            .expect("load expired session")
+            .expect("expired session exists")
+            .state,
+        strife_db::UploadSessionState::Expired
     );
 
     cleanup_upload_fixture(&pool, folder_id, &root).await;

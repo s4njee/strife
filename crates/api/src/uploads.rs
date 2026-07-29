@@ -42,7 +42,10 @@ pub fn router(
 ) -> Router {
     Router::new()
         .route("/api/uploads", post(create_upload))
-        .route("/api/uploads/{id}", patch(upload_chunk))
+        .route(
+            "/api/uploads/{id}",
+            patch(upload_chunk).delete(cancel_upload),
+        )
         .route("/api/uploads/{id}/finalize", post(finalize_upload))
         .with_state(UploadState {
             pool,
@@ -325,6 +328,20 @@ async fn finalize_upload(
         Ok(node) => Ok(Json(node.into())),
         Err(error) => {
             let _ = state.storage.move_object(original_key, staging_key).await;
+            if matches!(error, FinalizeUploadError::NotActive)
+                && strife_db::get_upload_session(&state.pool, session_id)
+                    .await
+                    .is_ok_and(|session| {
+                        session.is_some_and(|session| {
+                            matches!(
+                                session.state,
+                                UploadSessionState::Cancelled | UploadSessionState::Expired
+                            )
+                        })
+                    })
+            {
+                let _ = state.storage.delete(staging_key).await;
+            }
             Err(match error {
                 FinalizeUploadError::NotFound => UploadApiError::NotFound,
                 FinalizeUploadError::NotActive => UploadApiError::Gone,
@@ -334,6 +351,61 @@ async fn finalize_upload(
             })
         }
     }
+}
+
+async fn cancel_upload(
+    State(state): State<UploadState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<StatusCode, UploadApiError> {
+    let session = strife_db::cancel_session(&state.pool, session_id)
+        .await
+        .map_err(|error| {
+            if matches!(error, sqlx::Error::RowNotFound) {
+                UploadApiError::NotFound
+            } else {
+                UploadApiError::Internal
+            }
+        })?;
+    if session.state != UploadSessionState::Cancelled {
+        return Err(UploadApiError::Gone);
+    }
+    let staging_id = Uuid::parse_str(&session.staging_key).map_err(|_| UploadApiError::Internal)?;
+    state
+        .storage
+        .delete(StorageKey::staging(staging_id))
+        .await
+        .map_err(|_| UploadApiError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deletes staging objects for overdue sessions and marks each session expired.
+/// A storage failure leaves the session active so the next sweep can retry it.
+///
+/// # Errors
+///
+/// Returns an error when expired sessions cannot be listed or a successfully
+/// deleted session cannot be transitioned to its terminal state.
+pub async fn cleanup_expired_uploads(
+    pool: &PgPool,
+    storage: &dyn StorageBackend,
+) -> anyhow::Result<usize> {
+    let sessions = strife_db::list_expired_sessions(pool).await?;
+    let mut expired_count = 0;
+    for session in sessions {
+        let staging_id = Uuid::parse_str(&session.staging_key)?;
+        if storage
+            .delete(StorageKey::staging(staging_id))
+            .await
+            .is_err()
+        {
+            continue;
+        }
+        let expired = strife_db::expire_session(pool, session.id).await?;
+        if expired.state == UploadSessionState::Expired {
+            expired_count += 1;
+        }
+    }
+    Ok(expired_count)
 }
 
 async fn checksum_reader(
