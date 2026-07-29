@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 chrono.workspace = true
 sqlx.workspace = true
+strife-domain = { path = "../domain" }
 thiserror.workspace = true
 uuid.workspace = true
 

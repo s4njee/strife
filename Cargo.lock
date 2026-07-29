@@ -1849,6 +1849,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "strife-db",
+ "strife-domain",
  "tokio",
  "tower",
  "tracing",
@@ -1862,6 +1863,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "sqlx",
+ "strife-domain",
  "thiserror",
  "tokio",
  "uuid",
@@ -1870,6 +1872,12 @@ dependencies = [
 [[package]]
 name = "strife-domain"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "strife-importer"

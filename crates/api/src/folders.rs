@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use strife_db::{FolderMutationError, NodeKind, NodeRecord};
+use strife_domain::{FolderError, FolderRules};
 use uuid::Uuid;
 
 const DEFAULT_PAGE_SIZE: u32 = 50;
@@ -118,9 +119,12 @@ impl IntoResponse for ApiError {
 impl From<FolderMutationError> for ApiError {
     fn from(error: FolderMutationError) -> Self {
         match error {
-            FolderMutationError::NotFound => Self::NotFound,
-            FolderMutationError::NameConflict => Self::NameConflict,
-            FolderMutationError::CycleDetected => Self::CycleDetected,
+            FolderMutationError::Rule(FolderError::NotFound) => Self::NotFound,
+            FolderMutationError::Rule(FolderError::NameConflict) => Self::NameConflict,
+            FolderMutationError::Rule(FolderError::CycleDetected) => Self::CycleDetected,
+            FolderMutationError::Rule(FolderError::InvalidName) => {
+                Self::BadRequest("Folder name cannot be empty")
+            }
             FolderMutationError::Database(_) => Self::Internal,
         }
     }
@@ -187,11 +191,8 @@ async fn update_folder(
 }
 
 fn validate_name(name: &str) -> Result<&str, ApiError> {
-    if name.is_empty() {
-        Err(ApiError::BadRequest("Folder name cannot be empty"))
-    } else {
-        Ok(name)
-    }
+    FolderRules::validate_name(name)
+        .map_err(|_| ApiError::BadRequest("Folder name cannot be empty"))
 }
 
 impl From<NodeRecord> for FolderResponse {

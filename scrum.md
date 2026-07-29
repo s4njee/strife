@@ -405,10 +405,26 @@ As a developer, I want folder hierarchy rules encapsulated in `crates/domain` so
 
 **Acceptance Criteria:**
 
-- [ ] `crates/domain` defines types: `NodeId`, `NodeKind`, `LifecycleState`, `Node`, and a `FolderTree` or equivalent service trait.
-- [ ] Pure functions or methods validate: name is non-empty, move target is not a descendant, sibling name is unique (given a list of existing siblings).
-- [ ] Error types clearly distinguish: `NameConflict`, `CycleDetected`, `NotFound`, `InvalidName`.
-- [ ] Unit tests cover all validation rules without touching a database.
+- [x] `crates/domain` defines types: `NodeId`, `NodeKind`, `LifecycleState`, `Node`, and a `FolderTree` or equivalent service trait.
+- [x] Pure functions or methods validate: name is non-empty, move target is not a descendant, sibling name is unique (given a list of existing siblings).
+- [x] Error types clearly distinguish: `NameConflict`, `CycleDetected`, `NotFound`, `InvalidName`.
+- [x] Unit tests cover all validation rules without touching a database.
+
+**Implementation report:** Added database- and HTTP-independent node types, a `FolderTree` boundary, explicit folder error variants, and pure validation for names, active sibling uniqueness, and move cycles. Database mutations and API validation now consume the domain rules, with unit tests covering every rule without external services.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `Cargo.lock`
+- `crates/api/Cargo.toml`
+- `crates/api/src/folders.rs`
+- `crates/db/Cargo.toml`
+- `crates/db/src/lib.rs`
+- `crates/domain/Cargo.toml`
+- `crates/domain/src/lib.rs`
 
 ---
 

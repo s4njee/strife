@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, migrate::Migrator};
+use strife_domain::{FolderError, FolderRules, NodeId};
 use uuid::Uuid;
 
 /// Embedded, versioned database migrations.
@@ -44,12 +45,8 @@ pub struct NodeRecord {
 /// Expected failures from a transactional folder mutation.
 #[derive(Debug, thiserror::Error)]
 pub enum FolderMutationError {
-    #[error("folder or destination was not found")]
-    NotFound,
-    #[error("an active sibling already has that name")]
-    NameConflict,
-    #[error("the move would create a folder cycle")]
-    CycleDetected,
+    #[error(transparent)]
+    Rule(#[from] FolderError),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -179,6 +176,7 @@ pub async fn create_folder(
     parent_id: Uuid,
     name: &str,
 ) -> Result<NodeRecord, FolderMutationError> {
+    FolderRules::validate_name(name)?;
     let mut transaction = pool.begin().await?;
     ensure_active_folder(&mut transaction, parent_id).await?;
 
@@ -221,16 +219,20 @@ pub async fn update_folder(
     name: Option<&str>,
     parent_id: Option<Uuid>,
 ) -> Result<NodeRecord, FolderMutationError> {
+    if let Some(name) = name {
+        FolderRules::validate_name(name)?;
+    }
     let mut transaction = pool.begin().await?;
     ensure_active_folder(&mut transaction, folder_id).await?;
 
     if let Some(destination_id) = parent_id {
         ensure_active_folder(&mut transaction, destination_id).await?;
-        if destination_id == folder_id
-            || is_descendant(&mut transaction, folder_id, destination_id).await?
-        {
-            return Err(FolderMutationError::CycleDetected);
-        }
+        let descendant_ids = descendant_ids(&mut transaction, folder_id).await?;
+        FolderRules::validate_move_target(
+            NodeId::new(folder_id),
+            NodeId::new(destination_id),
+            &descendant_ids,
+        )?;
     }
 
     let result = sqlx::query_as::<_, NodeRecord>(
@@ -261,7 +263,7 @@ pub async fn update_folder(
     .fetch_optional(&mut *transaction)
     .await
     .map_err(map_mutation_error)?
-    .ok_or(FolderMutationError::NotFound)?;
+    .ok_or(FolderError::NotFound)?;
 
     transaction.commit().await?;
     Ok(result)
@@ -289,16 +291,15 @@ async fn ensure_active_folder(
     if exists {
         Ok(())
     } else {
-        Err(FolderMutationError::NotFound)
+        Err(FolderError::NotFound.into())
     }
 }
 
-async fn is_descendant(
+async fn descendant_ids(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     folder_id: Uuid,
-    possible_descendant_id: Uuid,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar::<_, bool>(
+) -> Result<Vec<NodeId>, sqlx::Error> {
+    let ids = sqlx::query_scalar::<_, Uuid>(
         r"
         WITH RECURSIVE descendants AS (
             SELECT id
@@ -313,24 +314,21 @@ async fn is_descendant(
             JOIN descendants AS parent ON child.parent_id = parent.id
             WHERE child.lifecycle_state = 'active'
         )
-        SELECT EXISTS (
-            SELECT 1
-            FROM descendants
-            WHERE id = $2
-        )
+        SELECT id FROM descendants
         ",
     )
     .bind(folder_id)
-    .bind(possible_descendant_id)
-    .fetch_one(&mut **transaction)
-    .await
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    Ok(ids.into_iter().map(NodeId::new).collect())
 }
 
 fn map_mutation_error(error: sqlx::Error) -> FolderMutationError {
     if let sqlx::Error::Database(database_error) = &error
         && database_error.code().as_deref() == Some("23505")
     {
-        return FolderMutationError::NameConflict;
+        return FolderError::NameConflict.into();
     }
 
     FolderMutationError::Database(error)
