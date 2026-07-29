@@ -4,12 +4,14 @@ import {
   createFolder,
   getFolderAncestors,
   getFolderChildren,
+  moveFolders,
   renameFolder,
 } from '../api/client'
 import type { FolderAncestor, FolderItem } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
 import { CreateFolderDialog } from '../components/CreateFolderDialog'
 import { FileTable } from '../components/FileTable'
+import { MoveFolderDialog } from '../components/MoveFolderDialog'
 import { RenameFolderDialog } from '../components/RenameFolderDialog'
 
 const ROOT_FOLDER_ID = '00000000-0000-0000-0000-000000000001'
@@ -87,6 +89,7 @@ function FolderContents(props: { folderId: string }) {
   const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
   const [showCreateDialog, setShowCreateDialog] = createSignal(false)
   const [renameItem, setRenameItem] = createSignal<FolderItem>()
+  const [moveItems, setMoveItems] = createSignal<FolderItem[]>()
   const [staticItems, setStaticItems] = createSignal(previewItems)
   const [children, { mutate, refetch }] = createResource(
     () => (staticPreview ? false : props.folderId),
@@ -139,6 +142,34 @@ function FolderContents(props: { folderId: string }) {
     )
   }
 
+  const handleMove = async (folders: FolderItem[], parentId: string) => {
+    const movedIds = new Set(folders.map((folder) => folder.id))
+    if (staticPreview) {
+      setStaticItems((current) =>
+        current.filter((item) => !movedIds.has(item.id)),
+      )
+      return
+    }
+
+    await moveFolders([...movedIds], parentId)
+    mutate((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.filter((item) => !movedIds.has(item.id)),
+          }
+        : current,
+    )
+  }
+
+  const loadPreviewFolders = async (folderId: string) => ({
+    items:
+      folderId === ROOT_FOLDER_ID
+        ? staticItems().filter((item) => item.kind === 'folder')
+        : [],
+    next_cursor: null,
+  })
+
   return (
     <>
       <div class="folder-toolbar">
@@ -154,6 +185,7 @@ function FolderContents(props: { folderId: string }) {
         }
         onRetry={() => void refetch()}
         onRename={setRenameItem}
+        onMove={setMoveItems}
       />
       <Show when={showCreateDialog()}>
         <CreateFolderDialog
@@ -167,6 +199,17 @@ function FolderContents(props: { folderId: string }) {
             folder={folder()}
             onRename={(name) => handleRename(folder(), name)}
             onClose={() => setRenameItem(undefined)}
+          />
+        )}
+      </Show>
+      <Show when={moveItems()}>
+        {(folders) => (
+          <MoveFolderDialog
+            items={folders()}
+            currentFolderId={props.folderId}
+            loadChildren={staticPreview ? loadPreviewFolders : undefined}
+            onMove={(parentId) => handleMove(folders(), parentId)}
+            onClose={() => setMoveItems(undefined)}
           />
         )}
       </Show>

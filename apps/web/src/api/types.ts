@@ -33,3 +33,13 @@ export interface FolderChildrenResponse {
   items: FolderItem[]
   next_cursor: string | null
 }
+
+export interface MoveFolderConflict {
+  id: string
+  name: string
+  reason: 'name_conflict' | 'cycle_detected'
+}
+
+export interface MoveFoldersResponse {
+  items: FolderItem[]
+}

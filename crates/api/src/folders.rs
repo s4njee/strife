@@ -8,7 +8,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use strife_db::{FolderMutationError, NodeKind, NodeRecord};
+use strife_db::{
+    FolderMoveConflict, FolderMoveConflictReason, FolderMutationError, NodeKind, NodeRecord,
+};
 use strife_domain::{FolderError, FolderRules};
 use uuid::Uuid;
 
@@ -24,6 +26,7 @@ struct FolderState {
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/api/folders", post(create_folder))
+        .route("/api/folders/move", patch(move_folders))
         .route("/api/folders/{id}", patch(update_folder))
         .route("/api/folders/{id}/children", get(list_children))
         .route("/api/folders/{id}/ancestors", get(list_ancestors))
@@ -46,6 +49,12 @@ struct CreateFolderRequest {
 struct UpdateFolderRequest {
     name: Option<String>,
     parent_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MoveFoldersRequest {
+    folder_ids: Vec<Uuid>,
+    parent_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,10 +85,36 @@ pub struct AncestorResponse {
     pub name: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MoveFoldersResponse {
+    pub items: Vec<FolderResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveConflictReasonResponse {
+    NameConflict,
+    CycleDetected,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MoveConflictResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub reason: MoveConflictReasonResponse,
+}
+
 #[derive(Debug, Serialize)]
 struct ErrorBody {
     code: &'static str,
     message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MoveConflictBody {
+    code: &'static str,
+    message: &'static str,
+    conflicts: Vec<MoveConflictResponse>,
 }
 
 #[derive(Debug)]
@@ -88,11 +123,24 @@ enum ApiError {
     NotFound,
     NameConflict,
     CycleDetected,
+    MoveConflict(Vec<MoveConflictResponse>),
     Internal,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let Self::MoveConflict(conflicts) = self {
+            return (
+                StatusCode::CONFLICT,
+                Json(MoveConflictBody {
+                    code: "move_conflict",
+                    message: "One or more folders cannot be moved",
+                    conflicts,
+                }),
+            )
+                .into_response();
+        }
+
         let (status, code, message) = match self {
             Self::BadRequest(message) => {
                 (StatusCode::BAD_REQUEST, "bad_request", message.to_owned())
@@ -112,6 +160,7 @@ impl IntoResponse for ApiError {
                 "cycle_detected",
                 "Moving this folder would create a cycle".to_owned(),
             ),
+            Self::MoveConflict(_) => unreachable!(),
             Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -132,6 +181,12 @@ impl From<FolderMutationError> for ApiError {
             FolderMutationError::Rule(FolderError::InvalidName) => {
                 Self::BadRequest("Folder name cannot be empty")
             }
+            FolderMutationError::MoveConflict(conflicts) => Self::MoveConflict(
+                conflicts
+                    .into_iter()
+                    .map(MoveConflictResponse::from)
+                    .collect(),
+            ),
             FolderMutationError::Database(_) => Self::Internal,
         }
     }
@@ -219,6 +274,21 @@ async fn update_folder(
     Ok(Json(folder.into()))
 }
 
+async fn move_folders(
+    State(state): State<FolderState>,
+    Json(request): Json<MoveFoldersRequest>,
+) -> Result<Json<MoveFoldersResponse>, ApiError> {
+    if request.folder_ids.is_empty() {
+        return Err(ApiError::BadRequest("Select at least one folder"));
+    }
+
+    let folders =
+        strife_db::move_folders(&state.pool, &request.folder_ids, request.parent_id).await?;
+    Ok(Json(MoveFoldersResponse {
+        items: folders.into_iter().map(FolderResponse::from).collect(),
+    }))
+}
+
 fn validate_name(name: &str) -> Result<&str, ApiError> {
     FolderRules::validate_name(name)
         .map_err(|_| ApiError::BadRequest("Folder name cannot be empty"))
@@ -235,6 +305,21 @@ impl From<NodeRecord> for FolderResponse {
             },
             created_at: node.created_at,
             updated_at: node.updated_at,
+        }
+    }
+}
+
+impl From<FolderMoveConflict> for MoveConflictResponse {
+    fn from(conflict: FolderMoveConflict) -> Self {
+        Self {
+            id: conflict.id,
+            name: conflict.name,
+            reason: match conflict.reason {
+                FolderMoveConflictReason::NameConflict => MoveConflictReasonResponse::NameConflict,
+                FolderMoveConflictReason::CycleDetected => {
+                    MoveConflictReasonResponse::CycleDetected
+                }
+            },
         }
     }
 }

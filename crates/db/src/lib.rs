@@ -49,11 +49,28 @@ pub struct NodePathEntry {
     pub name: String,
 }
 
+/// A folder that prevented an atomic batch move.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FolderMoveConflict {
+    pub id: Uuid,
+    pub name: String,
+    pub reason: FolderMoveConflictReason,
+}
+
+/// Why a folder could not be moved to the requested destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FolderMoveConflictReason {
+    NameConflict,
+    CycleDetected,
+}
+
 /// Expected failures from a transactional folder mutation.
 #[derive(Debug, thiserror::Error)]
 pub enum FolderMutationError {
     #[error(transparent)]
     Rule(#[from] FolderError),
+    #[error("one or more folders conflict with the requested destination")]
+    MoveConflict(Vec<FolderMoveConflict>),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -312,6 +329,175 @@ pub async fn update_folder(
     Ok(result)
 }
 
+/// Moves active folders to one destination in a single transaction.
+///
+/// # Errors
+///
+/// Returns `NotFound` if a source or destination is unavailable, `MoveConflict`
+/// with the affected folders for name/cycle conflicts, or `Database` for an
+/// unexpected database failure. No folder is moved when any validation fails.
+pub async fn move_folders(
+    pool: &PgPool,
+    folder_ids: &[Uuid],
+    destination_id: Uuid,
+) -> Result<Vec<NodeRecord>, FolderMutationError> {
+    let mut ids = folder_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let mut transaction = pool.begin().await?;
+    ensure_active_folder(&mut transaction, destination_id).await?;
+    let folders = load_move_folders(&mut transaction, &ids).await?;
+    if folders.len() != ids.len() {
+        return Err(FolderError::NotFound.into());
+    }
+
+    let conflicts = find_move_conflicts(&mut transaction, &folders, &ids, destination_id).await?;
+    if !conflicts.is_empty() {
+        return Err(FolderMutationError::MoveConflict(conflicts));
+    }
+
+    let moved = execute_folder_move(&mut transaction, &folders, &ids, destination_id).await?;
+    transaction.commit().await?;
+    Ok(moved)
+}
+
+async fn load_move_folders(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ids: &[Uuid],
+) -> Result<Vec<NodeRecord>, sqlx::Error> {
+    sqlx::query_as::<_, NodeRecord>(
+        r"
+        SELECT
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        FROM nodes
+        WHERE id = ANY($1)
+          AND kind = 'folder'
+          AND lifecycle_state = 'active'
+        ORDER BY name, id
+        FOR UPDATE
+        ",
+    )
+    .bind(ids)
+    .fetch_all(&mut **transaction)
+    .await
+}
+
+async fn find_move_conflicts(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    folders: &[NodeRecord],
+    ids: &[Uuid],
+    destination_id: Uuid,
+) -> Result<Vec<FolderMoveConflict>, sqlx::Error> {
+    let mut conflicts = Vec::new();
+    for folder in folders {
+        let descendants = descendant_ids(transaction, folder.id).await?;
+        if FolderRules::validate_move_target(
+            NodeId::new(folder.id),
+            NodeId::new(destination_id),
+            &descendants,
+        )
+        .is_err()
+        {
+            conflicts.push(FolderMoveConflict {
+                id: folder.id,
+                name: folder.name.clone(),
+                reason: FolderMoveConflictReason::CycleDetected,
+            });
+        }
+    }
+
+    for folder in folders {
+        let duplicate_count = folders
+            .iter()
+            .filter(|candidate| candidate.name == folder.name)
+            .count();
+        let destination_conflict = sqlx::query_scalar::<_, bool>(
+            r"
+            SELECT EXISTS (
+                SELECT 1
+                FROM nodes
+                WHERE parent_id = $1
+                  AND name = $2
+                  AND lifecycle_state = 'active'
+                  AND NOT (id = ANY($3))
+            )
+            ",
+        )
+        .bind(destination_id)
+        .bind(&folder.name)
+        .bind(ids)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if (duplicate_count > 1 || destination_conflict)
+            && !conflicts.iter().any(|conflict| conflict.id == folder.id)
+        {
+            conflicts.push(FolderMoveConflict {
+                id: folder.id,
+                name: folder.name.clone(),
+                reason: FolderMoveConflictReason::NameConflict,
+            });
+        }
+    }
+
+    Ok(conflicts)
+}
+
+async fn execute_folder_move(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    folders: &[NodeRecord],
+    ids: &[Uuid],
+    destination_id: Uuid,
+) -> Result<Vec<NodeRecord>, FolderMutationError> {
+    sqlx::query_as::<_, NodeRecord>(
+        r"
+        UPDATE nodes
+        SET parent_id = $2, updated_at = now()
+        WHERE id = ANY($1)
+          AND kind = 'folder'
+          AND lifecycle_state = 'active'
+        RETURNING
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        ",
+    )
+    .bind(ids)
+    .bind(destination_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|error| {
+        if is_unique_violation(&error) {
+            FolderMutationError::MoveConflict(
+                folders
+                    .iter()
+                    .map(|folder| FolderMoveConflict {
+                        id: folder.id,
+                        name: folder.name.clone(),
+                        reason: FolderMoveConflictReason::NameConflict,
+                    })
+                    .collect(),
+            )
+        } else {
+            FolderMutationError::Database(error)
+        }
+    })
+}
+
 async fn ensure_active_folder(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     folder_id: Uuid,
@@ -368,11 +554,13 @@ async fn descendant_ids(
 }
 
 fn map_mutation_error(error: sqlx::Error) -> FolderMutationError {
-    if let sqlx::Error::Database(database_error) = &error
-        && database_error.code().as_deref() == Some("23505")
-    {
+    if is_unique_violation(&error) {
         return FolderError::NameConflict.into();
     }
 
     FolderMutationError::Database(error)
+}
+
+fn is_unique_violation(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Database(database_error) if database_error.code().as_deref() == Some("23505"))
 }

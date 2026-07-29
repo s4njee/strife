@@ -635,12 +635,28 @@ As a user, I want a dialog to move a folder (or selected folders) to another loc
 
 **Acceptance Criteria:**
 
-- [ ] "Move to…" from the context menu opens a modal with a folder tree browser.
-- [ ] The tree browser loads folders lazily from `GET /api/folders/:id/children` (folders only).
-- [ ] The selected item(s) and their descendants are disabled/greyed out (to prevent cycles).
-- [ ] Clicking "Move" calls `PATCH /api/folders/:id` with the new `parent_id` for each selected item. The entire batch fails or succeeds atomically.
-- [ ] On success, items disappear from the current view and the table refreshes.
-- [ ] On conflict, the dialog shows which items conflicted and why.
+- [x] "Move to…" from the context menu opens a modal with a folder tree browser.
+- [x] The tree browser loads folders lazily from `GET /api/folders/:id/children` (folders only).
+- [x] The selected item(s) and their descendants are disabled/greyed out (to prevent cycles).
+- [x] Clicking "Move" calls `PATCH /api/folders/:id` with the new `parent_id` for each selected item. The entire batch fails or succeeds atomically.
+- [x] On success, items disappear from the current view and the table refreshes.
+- [x] On conflict, the dialog shows which items conflicted and why.
+
+**Implementation report:** Added a lazy folder-only destination tree and an atomic batch PATCH endpoint that validates all sources, cycle targets, and sibling-name conflicts in one PostgreSQL transaction. API integration and browser tests confirmed all-or-nothing behavior, disabled selected descendants, item-specific conflict reasons, and immediate removal of a successful multi-folder move from the current table.
+
+**New files:**
+
+- `apps/web/src/components/MoveFolderDialog.css`
+- `apps/web/src/components/MoveFolderDialog.tsx`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/folders.rs`
+- `crates/api/tests/folders_api.rs`
+- `crates/db/src/lib.rs`
 
 ---
 

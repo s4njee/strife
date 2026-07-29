@@ -4,21 +4,29 @@ import type {
   FolderAncestor,
   FolderChildrenResponse,
   FolderItem,
+  MoveFolderConflict,
+  MoveFoldersResponse,
   ReadinessResponse,
 } from './types'
 
 export class ApiClientError extends Error {
   readonly status?: number
   readonly code?: string
+  readonly conflicts?: MoveFolderConflict[]
 
   constructor(
     message: string,
-    options?: ErrorOptions & { status?: number; code?: string },
+    options?: ErrorOptions & {
+      status?: number
+      code?: string
+      conflicts?: MoveFolderConflict[]
+    },
   ) {
     super(message, options)
     this.name = 'ApiClientError'
     this.status = options?.status
     this.code = options?.code
+    this.conflicts = options?.conflicts
   }
 }
 
@@ -207,6 +215,51 @@ export async function renameFolder(
   return { ...body, size_bytes: body.size_bytes ?? null }
 }
 
+export async function moveFolders(
+  folderIds: string[],
+  parentId: string,
+): Promise<MoveFoldersResponse> {
+  let response: Response
+
+  try {
+    response = await fetch('/api/folders/move', {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ folder_ids: folderIds, parent_id: parentId }),
+    })
+  } catch (error) {
+    throw new ApiClientError('The folders could not be moved.', {
+      cause: error,
+    })
+  }
+
+  if (!response.ok) {
+    const errorBody = await readErrorBody(response)
+    throw new ApiClientError(
+      errorBody?.message ?? `The move request failed (${response.status}).`,
+      {
+        status: response.status,
+        code: errorBody?.code,
+        conflicts: errorBody?.conflicts,
+      },
+    )
+  }
+
+  const body: unknown = await response.json()
+  if (!isMoveFoldersResponse(body)) {
+    throw new ApiClientError('The moved folders response was invalid.')
+  }
+  return {
+    items: body.items.map((item) => ({
+      ...item,
+      size_bytes: item.size_bytes ?? null,
+    })),
+  }
+}
+
 function isReadinessResponse(value: unknown): value is ReadinessResponse {
   if (!isRecord(value)) return false
 
@@ -256,15 +309,42 @@ function isFolderItem(value: unknown): value is FolderItem {
   )
 }
 
-async function readErrorBody(
-  response: Response,
-): Promise<{ code?: string; message?: string } | undefined> {
+function isMoveFoldersResponse(value: unknown): value is MoveFoldersResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.every(isFolderItem)
+  )
+}
+
+function isMoveFolderConflict(value: unknown): value is MoveFolderConflict {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    (value.reason === 'name_conflict' || value.reason === 'cycle_detected')
+  )
+}
+
+async function readErrorBody(response: Response): Promise<
+  | {
+      code?: string
+      message?: string
+      conflicts?: MoveFolderConflict[]
+    }
+  | undefined
+> {
   try {
     const body: unknown = await response.json()
     if (!isRecord(body)) return undefined
     return {
       code: typeof body.code === 'string' ? body.code : undefined,
       message: typeof body.message === 'string' ? body.message : undefined,
+      conflicts:
+        Array.isArray(body.conflicts) &&
+        body.conflicts.every(isMoveFolderConflict)
+          ? body.conflicts
+          : undefined,
     }
   } catch {
     return undefined

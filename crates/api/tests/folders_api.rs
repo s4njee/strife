@@ -237,3 +237,89 @@ async fn ancestors_are_ordered_from_root_to_current_folder() {
 
     remove_fixture_tree(&pool, fixture_id).await;
 }
+
+#[tokio::test]
+async fn batch_move_is_atomic_and_reports_conflicting_folders() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL API integration test");
+        return;
+    };
+    let fixture_id = create_fixture_parent(&pool).await;
+    let source = strife_db::create_folder(&pool, fixture_id, "Source")
+        .await
+        .expect("create source");
+    let alpha = strife_db::create_folder(&pool, source.id, "Alpha")
+        .await
+        .expect("create alpha");
+    let bravo = strife_db::create_folder(&pool, source.id, "Bravo")
+        .await
+        .expect("create bravo");
+    let conflicted_destination = strife_db::create_folder(&pool, fixture_id, "Conflicted")
+        .await
+        .expect("create conflicted destination");
+    strife_db::create_folder(&pool, conflicted_destination.id, "Alpha")
+        .await
+        .expect("create conflicting child");
+    let app = strife_api::folders::router(pool.clone());
+
+    let conflict = json_request(
+        app.clone(),
+        "PATCH",
+        "/api/folders/move",
+        json!({
+            "folder_ids": [alpha.id, bravo.id],
+            "parent_id": conflicted_destination.id
+        }),
+    )
+    .await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let conflict: Value = response_json(conflict).await;
+    assert_eq!(conflict["code"], "move_conflict");
+    assert_eq!(conflict["conflicts"][0]["id"], alpha.id.to_string());
+    assert_eq!(conflict["conflicts"][0]["reason"], "name_conflict");
+    assert_eq!(
+        strife_db::get_node_by_id(&pool, alpha.id)
+            .await
+            .expect("load alpha")
+            .expect("alpha exists")
+            .parent_id,
+        Some(source.id)
+    );
+    assert_eq!(
+        strife_db::get_node_by_id(&pool, bravo.id)
+            .await
+            .expect("load bravo")
+            .expect("bravo exists")
+            .parent_id,
+        Some(source.id)
+    );
+
+    let destination = strife_db::create_folder(&pool, fixture_id, "Destination")
+        .await
+        .expect("create destination");
+    let moved = json_request(
+        app,
+        "PATCH",
+        "/api/folders/move",
+        json!({
+            "folder_ids": [alpha.id, bravo.id],
+            "parent_id": destination.id
+        }),
+    )
+    .await;
+    assert_eq!(moved.status(), StatusCode::OK);
+    let moved: Value = response_json(moved).await;
+    assert_eq!(moved["items"].as_array().map(Vec::len), Some(2));
+    for folder_id in [alpha.id, bravo.id] {
+        assert_eq!(
+            strife_db::get_node_by_id(&pool, folder_id)
+                .await
+                .expect("load moved folder")
+                .expect("moved folder exists")
+                .parent_id,
+            Some(destination.id)
+        );
+    }
+
+    remove_fixture_tree(&pool, fixture_id).await;
+}
