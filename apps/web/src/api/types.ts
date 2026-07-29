@@ -67,3 +67,42 @@ export interface CreatedUploadSession {
   session_id: string
   staging_key: string
 }
+
+export type ImportEntryState =
+  'discovered' | 'stable' | 'importing' | 'imported' | 'failed'
+
+export interface ImportCounts {
+  discovered: number
+  stable: number
+  importing: number
+  imported: number
+  failed: number
+}
+
+export interface ImportSource {
+  id: string
+  watch_path: string
+  destination_folder_id: string
+  enabled: boolean
+  last_scan_at: string | null
+  counts: ImportCounts
+}
+
+export interface ImportEntry {
+  id: string
+  source_path: string
+  source_size: number
+  source_modified_at: string
+  state: ImportEntryState
+  resulting_node_id: string | null
+  error_message: string | null
+  updated_at: string
+}
+
+export interface ImportScanResult {
+  discovered: number
+  imported: number
+  failed: number
+  skipped_hidden: number
+  skipped_special: number
+}

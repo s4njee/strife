@@ -44,3 +44,13 @@
   border-radius: var(--radius-lg);
   background: var(--color-surface);
 }
+
+@media (max-width: 52rem) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace {
+    padding: var(--space-5) var(--space-4);
+  }
+}

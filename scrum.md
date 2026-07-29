@@ -1295,11 +1295,27 @@ As a user, I want to see import progress and errors in the UI so that I know wha
 
 **Acceptance Criteria:**
 
-- [ ] A section in the sidebar or a dedicated page shows configured import sources.
-- [ ] Each source displays: watch path, destination, enabled/disabled, last scan time, counts (discovered / importing / imported / failed).
-- [ ] Failed entries are listed with their error messages and a "Retry" button.
-- [ ] A toggle to enable/disable the source is available.
-- [ ] The status refreshes periodically (every 30 seconds) or on user action.
+- [x] A section in the sidebar or a dedicated page shows configured import sources.
+- [x] Each source displays: watch path, destination, enabled/disabled, last scan time, counts (discovered / importing / imported / failed).
+- [x] Failed entries are listed with their error messages and a "Retry" button.
+- [x] A toggle to enable/disable the source is available.
+- [x] The status refreshes periodically (every 30 seconds) or on user action.
+
+**Implementation report:** Added an Imports sidebar destination and responsive status page with the fixed path/destination, live lifecycle counts, last scan time, manual scan and enable controls, plus actionable failed-entry retry. The page refreshes every 30 seconds and after mutations, and includes representative static fixture data for the GitHub Pages preview.
+
+**New files:**
+
+- `apps/web/src/views/ImportStatusView.css`
+- `apps/web/src/views/ImportStatusView.tsx`
+
+**Modified files:**
+
+- `apps/web/src/App.css`
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/components/Sidebar.css`
+- `apps/web/src/components/Sidebar.tsx`
+- `apps/web/src/index.tsx`
 
 ---
 

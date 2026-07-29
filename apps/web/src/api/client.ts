@@ -5,6 +5,9 @@ import type {
   FolderAncestor,
   FolderChildrenResponse,
   FolderItem,
+  ImportEntry,
+  ImportScanResult,
+  ImportSource,
   MoveFolderConflict,
   MoveFoldersResponse,
   ReadinessResponse,
@@ -375,6 +378,96 @@ export async function cancelUpload(sessionId: string): Promise<void> {
   }
 }
 
+export async function getImportSources(
+  signal?: AbortSignal,
+): Promise<ImportSource[]> {
+  return requestJson('/api/import-sources', isImportSourceArray, signal)
+}
+
+export async function setImportSourceEnabled(
+  sourceId: string,
+  enabled: boolean,
+): Promise<ImportSource> {
+  return requestJson(
+    `/api/import-sources/${sourceId}`,
+    isImportSource,
+    undefined,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    },
+  )
+}
+
+export async function scanImportSource(
+  sourceId: string,
+): Promise<ImportScanResult> {
+  return requestJson(
+    `/api/import-sources/${sourceId}/scan`,
+    isImportScanResult,
+    undefined,
+    { method: 'POST' },
+  )
+}
+
+export async function getImportEntries(
+  sourceId: string,
+  state: 'failed',
+  signal?: AbortSignal,
+): Promise<ImportEntry[]> {
+  const query = new URLSearchParams({ state })
+  return requestJson(
+    `/api/import-sources/${sourceId}/entries?${query}`,
+    isImportEntryArray,
+    signal,
+  )
+}
+
+export async function retryImportEntry(
+  sourceId: string,
+  entryId: string,
+): Promise<ImportEntry> {
+  return requestJson(
+    `/api/import-sources/${sourceId}/entries/${entryId}/retry`,
+    isImportEntry,
+    undefined,
+    { method: 'POST' },
+  )
+}
+
+async function requestJson<T>(
+  url: string,
+  validate: (value: unknown) => value is T,
+  signal?: AbortSignal,
+  init?: RequestInit,
+): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { Accept: 'application/json', ...init?.headers },
+      signal,
+    })
+  } catch (error) {
+    throw new ApiClientError('Import status could not be loaded.', {
+      cause: error,
+    })
+  }
+  if (!response.ok) {
+    const errorBody = await readErrorBody(response)
+    throw new ApiClientError(
+      errorBody?.message ?? `The import request failed (${response.status}).`,
+      { status: response.status, code: errorBody?.code },
+    )
+  }
+  const body: unknown = await response.json()
+  if (!validate(body)) {
+    throw new ApiClientError('The import response was invalid.')
+  }
+  return body
+}
+
 async function requestUploadSessions(
   url: string,
   signal?: AbortSignal,
@@ -490,6 +583,59 @@ function isUploadSession(value: unknown): value is UploadSession {
     ) &&
     typeof value.created_at === 'string' &&
     typeof value.expires_at === 'string'
+  )
+}
+
+function isImportSourceArray(value: unknown): value is ImportSource[] {
+  return Array.isArray(value) && value.every(isImportSource)
+}
+
+function isImportSource(value: unknown): value is ImportSource {
+  if (!isRecord(value) || !isRecord(value.counts)) return false
+  const counts = value.counts
+  return (
+    typeof value.id === 'string' &&
+    typeof value.watch_path === 'string' &&
+    typeof value.destination_folder_id === 'string' &&
+    typeof value.enabled === 'boolean' &&
+    (value.last_scan_at === null || typeof value.last_scan_at === 'string') &&
+    ['discovered', 'stable', 'importing', 'imported', 'failed'].every(
+      (key) => typeof counts[key] === 'number',
+    )
+  )
+}
+
+function isImportEntryArray(value: unknown): value is ImportEntry[] {
+  return Array.isArray(value) && value.every(isImportEntry)
+}
+
+function isImportEntry(value: unknown): value is ImportEntry {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.source_path === 'string' &&
+    typeof value.source_size === 'number' &&
+    typeof value.source_modified_at === 'string' &&
+    ['discovered', 'stable', 'importing', 'imported', 'failed'].includes(
+      String(value.state),
+    ) &&
+    (value.resulting_node_id === null ||
+      typeof value.resulting_node_id === 'string') &&
+    (value.error_message === null || typeof value.error_message === 'string') &&
+    typeof value.updated_at === 'string'
+  )
+}
+
+function isImportScanResult(value: unknown): value is ImportScanResult {
+  return (
+    isRecord(value) &&
+    [
+      'discovered',
+      'imported',
+      'failed',
+      'skipped_hidden',
+      'skipped_special',
+    ].every((key) => typeof value[key] === 'number')
   )
 }
 

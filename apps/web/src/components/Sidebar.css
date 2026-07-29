@@ -140,3 +140,42 @@
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+
+@media (max-width: 52rem) {
+  .sidebar {
+    position: relative;
+    width: 100%;
+    height: auto;
+    padding: var(--space-3) var(--space-4);
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border-structural);
+  }
+
+  .sidebar__brand {
+    padding: 0 0 var(--space-3);
+  }
+
+  .sidebar__nav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .sidebar__nav-link {
+    justify-content: center;
+    gap: var(--space-2);
+    padding-inline: var(--space-2);
+  }
+
+  .sidebar__spacer,
+  .storage-summary,
+  .sidebar__theme-toggle {
+    display: none;
+  }
+}
+
+@media (max-width: 30rem) {
+  .sidebar__nav-link {
+    display: grid;
+    justify-items: center;
+    font-size: var(--font-size-xs);
+  }
+}
