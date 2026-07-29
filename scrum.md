@@ -371,13 +371,31 @@ As an API consumer, I want endpoints to list, create, rename, and move folders s
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/folders/:id/children` returns paginated children (cursor-based) sorted by name by default. Response includes `id`, `name`, `kind`, `created_at`, `updated_at`, and a `next_cursor` if more results exist.
-- [ ] `POST /api/folders` with `{ "parent_id": UUID, "name": string }` creates a folder. Returns `201` with the created folder. Returns `409 Conflict` with details if a sibling with the same name exists.
-- [ ] `PATCH /api/folders/:id` with `{ "name": string }` renames a folder. Returns `200` with the updated folder. Returns `409` on name conflict.
-- [ ] `PATCH /api/folders/:id` with `{ "parent_id": UUID }` moves a folder. Returns `200`. Returns `409` on name conflict at the destination. Returns `400` if the move would create a cycle (moving a folder into its own descendant).
-- [ ] All mutations are wrapped in database transactions.
-- [ ] A cycle-detection query (recursive CTE) prevents moving a folder under itself.
-- [ ] API tests cover: create, rename, move, conflict rejection, cycle rejection, and listing with pagination.
+- [x] `GET /api/folders/:id/children` returns paginated children (cursor-based) sorted by name by default. Response includes `id`, `name`, `kind`, `created_at`, `updated_at`, and a `next_cursor` if more results exist.
+- [x] `POST /api/folders` with `{ "parent_id": UUID, "name": string }` creates a folder. Returns `201` with the created folder. Returns `409 Conflict` with details if a sibling with the same name exists.
+- [x] `PATCH /api/folders/:id` with `{ "name": string }` renames a folder. Returns `200` with the updated folder. Returns `409` on name conflict.
+- [x] `PATCH /api/folders/:id` with `{ "parent_id": UUID }` moves a folder. Returns `200`. Returns `409` on name conflict at the destination. Returns `400` if the move would create a cycle (moving a folder into its own descendant).
+- [x] All mutations are wrapped in database transactions.
+- [x] A cycle-detection query (recursive CTE) prevents moving a folder under itself.
+- [x] API tests cover: create, rename, move, conflict rejection, cycle rejection, and listing with pagination.
+
+**Implementation report:** Added cursor-paginated folder listing plus transactional create, rename, and move endpoints under `/api`, with structured conflict/not-found errors and recursive-CTE cycle rejection. PostgreSQL-backed API tests exercise the complete mutation workflow, name conflicts, cycles, and multi-page name ordering while legacy health paths remain available.
+
+**New files:**
+
+- `crates/api/src/folders.rs`
+- `crates/api/tests/folders_api.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `Cargo.toml`
+- `apps/web/vite.config.ts`
+- `crates/api/Cargo.toml`
+- `crates/api/src/health.rs`
+- `crates/api/src/lib.rs`
+- `crates/db/Cargo.toml`
+- `crates/db/src/lib.rs`
 
 ---
 

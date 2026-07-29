@@ -1842,6 +1842,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "fs2",
  "reqwest",
  "serde",
@@ -1852,6 +1853,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1860,6 +1862,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "sqlx",
+ "thiserror",
  "tokio",
  "uuid",
 ]

@@ -108,6 +108,8 @@ fn router_from_arc(dependencies: Arc<dyn DependencyChecker>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .route("/api/health", get(health))
+        .route("/api/ready", get(ready))
         .with_state(AppState { dependencies })
 }
 

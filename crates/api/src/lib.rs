@@ -1,4 +1,5 @@
 pub mod config;
+pub mod folders;
 pub mod health;
 
 use std::{
@@ -10,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use config::Config;
-use health::{LiveDependencyChecker, router};
+use health::LiveDependencyChecker;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::{net::TcpListener, time::timeout};
 use tracing::info;
@@ -55,10 +56,14 @@ pub async fn run(config: Config) -> Result<()> {
         "Strife API started"
     );
 
-    let dependencies =
-        LiveDependencyChecker::new(pool, config.storage_root.clone(), config.tika_url.clone());
+    let dependencies = LiveDependencyChecker::new(
+        pool.clone(),
+        config.storage_root.clone(),
+        config.tika_url.clone(),
+    );
+    let app = health::router(dependencies).merge(folders::router(pool));
 
-    axum::serve(listener, router(dependencies))
+    axum::serve(listener, app)
         .await
         .context("API server failed")
 }

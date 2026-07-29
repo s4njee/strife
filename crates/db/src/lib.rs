@@ -41,6 +41,19 @@ pub struct NodeRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Expected failures from a transactional folder mutation.
+#[derive(Debug, thiserror::Error)]
+pub enum FolderMutationError {
+    #[error("folder or destination was not found")]
+    NotFound,
+    #[error("an active sibling already has that name")]
+    NameConflict,
+    #[error("the move would create a folder cycle")]
+    CycleDetected,
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+}
+
 /// Confirms that a pool can execute a minimal query.
 ///
 /// # Errors
@@ -108,4 +121,217 @@ pub async fn list_children(pool: &PgPool, parent_id: Uuid) -> Result<Vec<NodeRec
     .bind(parent_id)
     .fetch_all(pool)
     .await
+}
+
+/// Lists one page of active children after an optional opaque node cursor.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn list_children_page(
+    pool: &PgPool,
+    parent_id: Uuid,
+    cursor: Option<Uuid>,
+    limit: u32,
+) -> Result<Vec<NodeRecord>, sqlx::Error> {
+    sqlx::query_as::<_, NodeRecord>(
+        r"
+        SELECT
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        FROM nodes
+        WHERE parent_id = $1
+          AND lifecycle_state = 'active'
+          AND (
+              $2::uuid IS NULL
+              OR (name, id) > (
+                  SELECT name, id
+                  FROM nodes
+                  WHERE id = $2 AND parent_id = $1
+              )
+          )
+        ORDER BY name, id
+        LIMIT $3
+        ",
+    )
+    .bind(parent_id)
+    .bind(cursor)
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await
+}
+
+/// Creates an active folder below an existing active folder in one transaction.
+///
+/// # Errors
+///
+/// Returns `NotFound` for an invalid parent, `NameConflict` for duplicate active
+/// sibling names, or `Database` for an unexpected database failure.
+pub async fn create_folder(
+    pool: &PgPool,
+    parent_id: Uuid,
+    name: &str,
+) -> Result<NodeRecord, FolderMutationError> {
+    let mut transaction = pool.begin().await?;
+    ensure_active_folder(&mut transaction, parent_id).await?;
+
+    let result = sqlx::query_as::<_, NodeRecord>(
+        r"
+        INSERT INTO nodes (id, parent_id, name, kind)
+        VALUES ($1, $2, $3, 'folder')
+        RETURNING
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(parent_id)
+    .bind(name)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(map_mutation_error)?;
+
+    transaction.commit().await?;
+    Ok(result)
+}
+
+/// Renames and/or moves an active folder in one transaction.
+///
+/// # Errors
+///
+/// Returns an expected mutation error for missing folders, name conflicts, and
+/// cycles, or `Database` for an unexpected database failure.
+pub async fn update_folder(
+    pool: &PgPool,
+    folder_id: Uuid,
+    name: Option<&str>,
+    parent_id: Option<Uuid>,
+) -> Result<NodeRecord, FolderMutationError> {
+    let mut transaction = pool.begin().await?;
+    ensure_active_folder(&mut transaction, folder_id).await?;
+
+    if let Some(destination_id) = parent_id {
+        ensure_active_folder(&mut transaction, destination_id).await?;
+        if destination_id == folder_id
+            || is_descendant(&mut transaction, folder_id, destination_id).await?
+        {
+            return Err(FolderMutationError::CycleDetected);
+        }
+    }
+
+    let result = sqlx::query_as::<_, NodeRecord>(
+        r"
+        UPDATE nodes
+        SET
+            name = COALESCE($2, name),
+            parent_id = COALESCE($3, parent_id),
+            updated_at = now()
+        WHERE id = $1
+          AND kind = 'folder'
+          AND lifecycle_state = 'active'
+        RETURNING
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        ",
+    )
+    .bind(folder_id)
+    .bind(name)
+    .bind(parent_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(map_mutation_error)?
+    .ok_or(FolderMutationError::NotFound)?;
+
+    transaction.commit().await?;
+    Ok(result)
+}
+
+async fn ensure_active_folder(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    folder_id: Uuid,
+) -> Result<(), FolderMutationError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1
+            FROM nodes
+            WHERE id = $1
+              AND kind = 'folder'
+              AND lifecycle_state = 'active'
+        )
+        ",
+    )
+    .bind(folder_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+
+    if exists {
+        Ok(())
+    } else {
+        Err(FolderMutationError::NotFound)
+    }
+}
+
+async fn is_descendant(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    folder_id: Uuid,
+    possible_descendant_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        r"
+        WITH RECURSIVE descendants AS (
+            SELECT id
+            FROM nodes
+            WHERE parent_id = $1
+              AND lifecycle_state = 'active'
+
+            UNION ALL
+
+            SELECT child.id
+            FROM nodes AS child
+            JOIN descendants AS parent ON child.parent_id = parent.id
+            WHERE child.lifecycle_state = 'active'
+        )
+        SELECT EXISTS (
+            SELECT 1
+            FROM descendants
+            WHERE id = $2
+        )
+        ",
+    )
+    .bind(folder_id)
+    .bind(possible_descendant_id)
+    .fetch_one(&mut **transaction)
+    .await
+}
+
+fn map_mutation_error(error: sqlx::Error) -> FolderMutationError {
+    if let sqlx::Error::Database(database_error) = &error
+        && database_error.code().as_deref() == Some("23505")
+    {
+        return FolderMutationError::NameConflict;
+    }
+
+    FolderMutationError::Database(error)
 }

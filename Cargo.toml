@@ -36,6 +36,7 @@ tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "t
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+thiserror = "2.0.19"
 uuid = { version = "1.24.0", features = ["serde", "v4"] }
 
 [workspace.lints.rust]

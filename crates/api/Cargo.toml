@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+chrono.workspace = true
 fs2.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -16,6 +17,7 @@ strife-db = { path = "../db" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
