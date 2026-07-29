@@ -1,4 +1,5 @@
 pub mod config;
+pub mod files;
 pub mod folders;
 pub mod health;
 pub mod uploads;
@@ -77,6 +78,7 @@ pub async fn run(config: Config) -> Result<()> {
     spawn_upload_cleanup(pool.clone(), storage.clone());
     let app = health::router(dependencies)
         .merge(folders::router(pool.clone()))
+        .merge(files::router(pool.clone(), storage.clone()))
         .merge(uploads::router(pool, storage, upload_ttl, 90));
 
     axum::serve(listener, app)

@@ -927,12 +927,24 @@ As a user, I want to download a file and have video/audio seek via HTTP ranges s
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/files/:node_id/download` returns the original file with correct `Content-Type`, `Content-Length`, and `Content-Disposition: attachment; filename="<display_name>"` headers.
-- [ ] If the request includes a `Range` header, respond with `206 Partial Content`, `Content-Range`, and the requested byte range.
-- [ ] Support multi-range requests (or at minimum single-range).
-- [ ] Stream the file from storage — do **not** load the entire file into memory.
-- [ ] Return `404` for non-existent or trashed nodes.
-- [ ] Tests verify full download, single range, and that the downloaded content matches the uploaded content byte-for-byte.
+- [x] `GET /api/files/:node_id/download` returns the original file with correct `Content-Type`, `Content-Length`, and `Content-Disposition: attachment; filename="<display_name>"` headers.
+- [x] If the request includes a `Range` header, respond with `206 Partial Content`, `Content-Range`, and the requested byte range.
+- [x] Support multi-range requests (or at minimum single-range).
+- [x] Stream the file from storage — do **not** load the entire file into memory.
+- [x] Return `404` for non-existent or trashed nodes.
+- [x] Tests verify full download, single range, and that the downloaded content matches the uploaded content byte-for-byte.
+
+**Implementation report:** Added a dedicated original-file download route that streams full bodies or closed, open-ended, and suffix byte ranges with safe attachment headers and standards-compliant 206/416 responses. Live filesystem/PostgreSQL tests compare full and partial bytes exactly and verify missing and trashed files remain inaccessible.
+
+**New files:**
+
+- `crates/api/src/files.rs`
+- `crates/api/tests/files_api.rs`
+
+**Modified files:**
+
+- `crates/api/src/lib.rs`
+- `crates/db/src/lib.rs`
 
 ---
 

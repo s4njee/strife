@@ -75,6 +75,16 @@ pub struct FileObjectRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Active finalized file fields needed to serve a download.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct DownloadFileRecord {
+    pub node_id: Uuid,
+    pub display_name: String,
+    pub storage_key: String,
+    pub byte_size: i64,
+    pub mime_type: Option<String>,
+}
+
 /// Typed representation of a row in `upload_sessions`.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct UploadSessionRecord {
@@ -292,6 +302,36 @@ pub async fn get_file_object_by_node_id(
         FROM file_objects
         WHERE node_id = $1
           AND upload_state = 'finalized'
+        ",
+    )
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Loads an active file and its finalized object for streaming.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn get_download_file(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Option<DownloadFileRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DownloadFileRecord>(
+        r"
+        SELECT
+            nodes.id AS node_id,
+            nodes.name AS display_name,
+            file_objects.storage_key,
+            file_objects.byte_size,
+            file_objects.mime_type
+        FROM nodes
+        JOIN file_objects ON file_objects.node_id = nodes.id
+        WHERE nodes.id = $1
+          AND nodes.kind = 'file'
+          AND nodes.lifecycle_state = 'active'
+          AND file_objects.upload_state = 'finalized'
         ",
     )
     .bind(node_id)
