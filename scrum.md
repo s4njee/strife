@@ -1081,11 +1081,24 @@ As a user, I want a persistent notification when disk usage is high so that I kn
 
 **Acceptance Criteria:**
 
-- [ ] The app periodically checks `GET /api/ready` (or a dedicated endpoint) for `disk_usage_percent`.
-- [ ] When usage ≥ 80%, a persistent warning banner appears at the top of the content area: "Storage is almost full (X% used)".
-- [ ] When usage ≥ 90%, the banner becomes an error state: "Storage is full. Uploads and imports are disabled."
-- [ ] The banner is not dismissible while the condition persists.
-- [ ] When usage drops below 80%, the banner disappears.
+- [x] The app periodically checks `GET /api/ready` (or a dedicated endpoint) for `disk_usage_percent`.
+- [x] When usage ≥ 80%, a persistent warning banner appears at the top of the content area: "Storage is almost full (X% used)".
+- [x] When usage ≥ 90%, the banner becomes an error state: "Storage is full. Uploads and imports are disabled."
+- [x] The banner is not dismissible while the condition persists.
+- [x] When usage drops below 80%, the banner disappears.
+
+**Implementation report:** Added a route-persistent content banner that reads readiness immediately and every 60 seconds, staying hidden below 80%, warning with the live percentage from 80–89%, and switching to a non-dismissible alert at 90% or above. Browser checks against 84% and 92% preview fixtures verified the exact warning and error copy, semantic status roles, and themed presentation.
+
+**New files:**
+
+- `apps/web/src/components/StorageWarning.css`
+- `apps/web/src/components/StorageWarning.tsx`
+
+**Modified files:**
+
+- `.env.example`
+- `apps/web/src/App.tsx`
+- `apps/web/src/styles/tokens.css`
 
 ---
 

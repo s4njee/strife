@@ -35,6 +35,7 @@
   --color-accent-soft: oklch(0.58 0.22 258 / 12%);
   --color-success: oklch(0.52 0.16 150);
   --color-success-soft: oklch(0.52 0.16 150 / 12%);
+  --color-warning: #9a6500;
   --color-error: #b34f3d;
   --color-error-soft: rgb(179 79 61 / 12%);
   --font-sans: 'Inter', Helvetica, system-ui, sans-serif;
@@ -86,6 +87,7 @@
   --color-accent-soft: oklch(0.7 0.2 258 / 16%);
   --color-success: oklch(0.78 0.16 150);
   --color-success-soft: oklch(0.78 0.16 150 / 14%);
+  --color-warning: #e5a62b;
   --color-error: #d06a52;
   --color-error-soft: rgb(208 106 82 / 15%);
   --shadow-popover: 0 0.75rem 2.5rem rgb(0 0 0 / 80%);
