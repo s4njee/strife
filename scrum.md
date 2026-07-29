@@ -1139,10 +1139,22 @@ As a developer, I want `import_sources` and `import_entries` tables so that the 
 
 **Acceptance Criteria:**
 
-- [ ] `import_sources` has: `id`, `watch_path` (text, unique), `destination_folder_id` (FK), `enabled` (bool), `last_scan_at`, `created_at`, `updated_at`, and seeds the fixed `/mnt/ext/watch` → root source.
-- [ ] `import_entries` has: `id`, `source_id` (FK), `source_path` (text), `source_size` (bigint), `source_modified_at`, `source_checksum` (text, nullable), `state` (enum: `discovered` | `stable` | `importing` | `imported` | `failed`), `resulting_node_id` (FK, nullable), `error_message` (text, nullable), `created_at`, `updated_at`.
-- [ ] A unique constraint on `(source_id, source_path)` prevents duplicate tracking of the same file.
-- [ ] DB queries: `upsert_import_entry`, `list_pending_entries`, `mark_imported`, `mark_failed`.
+- [x] `import_sources` has: `id`, `watch_path` (text, unique), `destination_folder_id` (FK), `enabled` (bool), `last_scan_at`, `created_at`, `updated_at`, and seeds the fixed `/mnt/ext/watch` → root source.
+- [x] `import_entries` has: `id`, `source_id` (FK), `source_path` (text), `source_size` (bigint), `source_modified_at`, `source_checksum` (text, nullable), `state` (enum: `discovered` | `stable` | `importing` | `imported` | `failed`), `resulting_node_id` (FK, nullable), `error_message` (text, nullable), `created_at`, `updated_at`.
+- [x] A unique constraint on `(source_id, source_path)` prevents duplicate tracking of the same file.
+- [x] DB queries: `upsert_import_entry`, `list_pending_entries`, `mark_imported`, `mark_failed`.
+
+**Implementation report:** Added a migration for the fixed import source and durable per-file lifecycle, including constraints and a pending-work index. Added typed database records and idempotent discovery, pending-list, imported, and failed operations with a PostgreSQL lifecycle test.
+
+**New files:**
+
+- `crates/db/migrations/0006_import_sources.down.sql`
+- `crates/db/migrations/0006_import_sources.up.sql`
+- `crates/db/tests/import_entries.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
 
 ---
 

@@ -11,6 +11,9 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// Stable identifier for the single root folder created by migrations.
 pub const ROOT_NODE_ID: Uuid = Uuid::from_u128(1);
 
+/// Stable identifier for the single v1 watched-folder source.
+pub const DEFAULT_IMPORT_SOURCE_ID: Uuid = Uuid::from_u128(3);
+
 /// Persisted node kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "node_kind", rename_all = "lowercase")]
@@ -45,6 +48,185 @@ pub enum UploadSessionState {
     Completed,
     Cancelled,
     Expired,
+}
+
+/// Durable lifecycle of a file discovered in the import inbox.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "import_entry_state", rename_all = "lowercase")]
+pub enum ImportEntryState {
+    Discovered,
+    Stable,
+    Importing,
+    Imported,
+    Failed,
+}
+
+/// The fixed watched-folder source persisted by the v1 schema.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct ImportSourceRecord {
+    pub id: Uuid,
+    pub watch_path: String,
+    pub destination_folder_id: Uuid,
+    pub enabled: bool,
+    pub last_scan_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One source file tracked across discovery, import, and retry.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct ImportEntryRecord {
+    pub id: Uuid,
+    pub source_id: Uuid,
+    pub source_path: String,
+    pub source_size: i64,
+    pub source_modified_at: DateTime<Utc>,
+    pub source_checksum: Option<String>,
+    pub state: ImportEntryState,
+    pub resulting_node_id: Option<Uuid>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Filesystem observations used to create or refresh an import entry.
+pub struct UpsertImportEntry<'a> {
+    pub source_id: Uuid,
+    pub source_path: &'a str,
+    pub source_size: i64,
+    pub source_modified_at: DateTime<Utc>,
+}
+
+/// Fetches an import source by identifier.
+///
+/// # Errors
+///
+/// Returns the database error when the source cannot be queried.
+pub async fn get_import_source(
+    pool: &PgPool,
+    source_id: Uuid,
+) -> Result<Option<ImportSourceRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportSourceRecord>("SELECT * FROM import_sources WHERE id = $1")
+        .bind(source_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Creates or refreshes a discovered entry. A path that reappears after its
+/// previous source was moved is treated as a new attempt on the same row.
+///
+/// # Errors
+///
+/// Returns the database error when the entry cannot be persisted.
+pub async fn upsert_import_entry(
+    pool: &PgPool,
+    input: UpsertImportEntry<'_>,
+) -> Result<ImportEntryRecord, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        INSERT INTO import_entries (
+            id, source_id, source_path, source_size, source_modified_at
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (source_id, source_path) DO UPDATE
+        SET
+            source_size = EXCLUDED.source_size,
+            source_modified_at = EXCLUDED.source_modified_at,
+            state = CASE
+                WHEN import_entries.state = 'imported' THEN 'discovered'
+                ELSE import_entries.state
+            END,
+            resulting_node_id = CASE
+                WHEN import_entries.state = 'imported' THEN NULL
+                ELSE import_entries.resulting_node_id
+            END,
+            source_checksum = CASE
+                WHEN import_entries.state = 'imported' THEN NULL
+                ELSE import_entries.source_checksum
+            END,
+            updated_at = now()
+        RETURNING *
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(input.source_id)
+    .bind(input.source_path)
+    .bind(input.source_size)
+    .bind(input.source_modified_at)
+    .fetch_one(pool)
+    .await
+}
+
+/// Lists work eligible for this source's next manual import pass.
+///
+/// # Errors
+///
+/// Returns the database error when pending entries cannot be queried.
+pub async fn list_pending_entries(
+    pool: &PgPool,
+    source_id: Uuid,
+) -> Result<Vec<ImportEntryRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        SELECT * FROM import_entries
+        WHERE source_id = $1 AND state IN ('discovered', 'stable', 'importing')
+        ORDER BY created_at, id
+        ",
+    )
+    .bind(source_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Records a successfully finalized import and its integrity checksum.
+///
+/// # Errors
+///
+/// Returns the database error when the entry cannot be updated.
+pub async fn mark_imported(
+    pool: &PgPool,
+    entry_id: Uuid,
+    node_id: Uuid,
+    checksum: &str,
+) -> Result<ImportEntryRecord, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        UPDATE import_entries
+        SET state = 'imported', resulting_node_id = $2, source_checksum = $3,
+            error_message = NULL, updated_at = now()
+        WHERE id = $1
+        RETURNING *
+        ",
+    )
+    .bind(entry_id)
+    .bind(node_id)
+    .bind(checksum)
+    .fetch_one(pool)
+    .await
+}
+
+/// Persists an actionable import failure for later inspection and retry.
+///
+/// # Errors
+///
+/// Returns the database error when the entry cannot be updated.
+pub async fn mark_import_failed(
+    pool: &PgPool,
+    entry_id: Uuid,
+    message: &str,
+) -> Result<ImportEntryRecord, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        UPDATE import_entries
+        SET state = 'failed', error_message = $2, updated_at = now()
+        WHERE id = $1
+        RETURNING *
+        ",
+    )
+    .bind(entry_id)
+    .bind(message)
+    .fetch_one(pool)
+    .await
 }
 
 /// Typed representation of a row in `nodes`.
