@@ -666,11 +666,22 @@ As a user, I want a toggle button to switch between dark and light themes so tha
 
 **Acceptance Criteria:**
 
-- [ ] A theme toggle button is visible in the top bar or sidebar footer.
-- [ ] Clicking it toggles `data-theme` between `"dark"` and `"light"` on the root element.
-- [ ] The chosen theme is persisted to `localStorage` and restored on page load.
-- [ ] Default theme is dark (true-black).
-- [ ] All existing components render correctly in both themes (visual spot-check).
+- [x] A theme toggle button is visible in the top bar or sidebar footer.
+- [x] Clicking it toggles `data-theme` between `"dark"` and `"light"` on the root element.
+- [x] The chosen theme is persisted to `localStorage` and restored on page load.
+- [x] Default theme is dark (true-black).
+- [x] All existing components render correctly in both themes (visual spot-check).
+
+**Implementation report:** Made theme restoration synchronous and added a pre-render bootstrap so persisted preferences apply without a flash while new users reliably receive the true-black dark default. Browser spot-checks covered the sidebar, folder table, create dialog, and move tree in both themes and confirmed light/dark persistence across reloads.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `apps/web/index.html`
+- `apps/web/src/theme/ThemeProvider.tsx`
 
 ---
 

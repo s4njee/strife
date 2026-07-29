@@ -2,7 +2,6 @@ import {
   createContext,
   createEffect,
   createSignal,
-  onMount,
   useContext,
   type Accessor,
   type ParentProps,
@@ -19,9 +18,7 @@ const STORAGE_KEY = 'strife-theme'
 const ThemeContext = createContext<ThemeContextValue>()
 
 export function ThemeProvider(props: ParentProps) {
-  const [theme, setTheme] = createSignal<Theme>('dark')
-
-  onMount(() => setTheme(readInitialTheme()))
+  const [theme, setTheme] = createSignal<Theme>(readInitialTheme())
 
   createEffect(() => {
     const selectedTheme = theme()
@@ -58,8 +55,8 @@ function readInitialTheme(): Theme {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored === 'light' || stored === 'dark') return stored
   } catch {
-    // Fall through to the operating-system preference.
+    // Fall through to Strife's default theme.
   }
 
-  return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  return 'dark'
 }
