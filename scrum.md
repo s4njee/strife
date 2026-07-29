@@ -526,14 +526,25 @@ As a user, I want desktop file-manager style selection with single click, Shift-
 
 **Acceptance Criteria:**
 
-- [ ] Single click on a row selects it and deselects all others.
-- [ ] Cmd-click (Mac) / Ctrl-click (Windows/Linux) toggles the clicked row's selection without affecting others.
-- [ ] Shift-click selects a contiguous range from the last selected item (anchor) to the clicked item.
-- [ ] Clicking the row checkbox toggles that single row without clearing other selections.
-- [ ] A "Select All" checkbox in the header toggles all visible items.
-- [ ] Selection state is stored in a SolidJS signal/store, not in the DOM.
-- [ ] Selected rows have a distinct background color in both themes.
-- [ ] A selection count is displayed somewhere visible (e.g., status bar or toolbar) when ≥ 1 item is selected.
+- [x] Single click on a row selects it and deselects all others.
+- [x] Cmd-click (Mac) / Ctrl-click (Windows/Linux) toggles the clicked row's selection without affecting others.
+- [x] Shift-click selects a contiguous range from the last selected item (anchor) to the clicked item.
+- [x] Clicking the row checkbox toggles that single row without clearing other selections.
+- [x] A "Select All" checkbox in the header toggles all visible items.
+- [x] Selection state is stored in a SolidJS signal/store, not in the DOM.
+- [x] Selected rows have a distinct background color in both themes.
+- [x] A selection count is displayed somewhere visible (e.g., status bar or toolbar) when ≥ 1 item is selected.
+
+**Implementation report:** Added a signal-backed selection model with single replacement, Cmd/Ctrl additive toggles, anchor-based Shift ranges, independent row checkboxes, select-all and indeterminate states, selected-row theming, and a live count. Browser interaction checks confirmed every selection path and the exact selected item sets across the hosted-preview rows.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `apps/web/src/components/FileTable.css`
+- `apps/web/src/components/FileTable.tsx`
 
 ---
 

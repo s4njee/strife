@@ -10,6 +10,15 @@
   font-size: var(--font-size-md);
 }
 
+.file-table-selection {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-row);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
 .file-table th,
 .file-table td {
   height: 2.65rem;
@@ -38,6 +47,11 @@
 
 .file-table__row:hover {
   background: var(--color-surface-raised);
+}
+
+.file-table__row.is-selected,
+.file-table__row.is-selected:hover {
+  background: var(--color-surface-selected);
 }
 
 .file-table__row[data-kind='folder'] {

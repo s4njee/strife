@@ -1,5 +1,5 @@
 import { useNavigate } from '@solidjs/router'
-import { createMemo, For, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
 import type { FolderItem } from '../api/types'
 import './FileTable.css'
 
@@ -20,19 +20,94 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
 
 export function FileTable(props: FileTableProps) {
   const navigate = useNavigate()
+  const [selectedIds, setSelectedIds] = createSignal<Set<string>>(new Set())
+  const [anchorId, setAnchorId] = createSignal<string>()
+  let selectAllCheckbox: HTMLInputElement | undefined
   const sortedItems = createMemo(() =>
     [...props.items].sort((left, right) => {
       if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1
       return left.name.localeCompare(right.name)
     }),
   )
+  const selectedCount = () => selectedIds().size
+  const allSelected = () =>
+    sortedItems().length > 0 && selectedCount() === sortedItems().length
+
+  createEffect(() => {
+    const visibleIds = new Set(sortedItems().map((item) => item.id))
+    setSelectedIds(
+      (current) => new Set([...current].filter((id) => visibleIds.has(id))),
+    )
+  })
+
+  createEffect(() => {
+    if (selectAllCheckbox) {
+      selectAllCheckbox.indeterminate = selectedCount() > 0 && !allSelected()
+    }
+  })
 
   const openFolder = (item: FolderItem) => {
     if (item.kind === 'folder') navigate(`/folder/${item.id}`)
   }
 
+  const selectRow = (item: FolderItem, event: MouseEvent) => {
+    if (event.shiftKey && anchorId()) {
+      selectRange(item.id)
+      return
+    }
+
+    if (event.metaKey || event.ctrlKey) {
+      toggleItem(item.id)
+      setAnchorId(item.id)
+      return
+    }
+
+    setSelectedIds(new Set([item.id]))
+    setAnchorId(item.id)
+  }
+
+  const toggleItem = (itemId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  const selectRange = (itemId: string) => {
+    const items = sortedItems()
+    const anchorIndex = items.findIndex((item) => item.id === anchorId())
+    const itemIndex = items.findIndex((item) => item.id === itemId)
+    if (anchorIndex < 0 || itemIndex < 0) {
+      setSelectedIds(new Set([itemId]))
+      setAnchorId(itemId)
+      return
+    }
+
+    const start = Math.min(anchorIndex, itemIndex)
+    const end = Math.max(anchorIndex, itemIndex)
+    setSelectedIds(new Set(items.slice(start, end + 1).map((item) => item.id)))
+  }
+
+  const toggleAll = () => {
+    if (allSelected()) {
+      setSelectedIds(new Set<string>())
+      setAnchorId(undefined)
+    } else {
+      const items = sortedItems()
+      setSelectedIds(new Set(items.map((item) => item.id)))
+      setAnchorId(items[0]?.id)
+    }
+  }
+
   return (
     <div class="file-table-wrap">
+      <Show when={selectedCount() > 0}>
+        <div class="file-table-selection" role="status">
+          {selectedCount()} {selectedCount() === 1 ? 'item' : 'items'} selected
+        </div>
+      </Show>
       <Show when={!props.loading} fallback={<FileTableSkeleton />}>
         <Show
           when={!props.error}
@@ -60,8 +135,14 @@ export function FileTable(props: FileTableProps) {
                 <tr>
                   <th class="file-table__check">
                     <input
+                      ref={selectAllCheckbox}
                       type="checkbox"
                       aria-label="Select all visible items"
+                      checked={allSelected()}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        toggleAll()
+                      }}
                     />
                   </th>
                   <th class="file-table__icon">
@@ -77,7 +158,12 @@ export function FileTable(props: FileTableProps) {
                 <For each={sortedItems()}>
                   {(item) => (
                     <tr
-                      class="file-table__row"
+                      classList={{
+                        'file-table__row': true,
+                        'is-selected': selectedIds().has(item.id),
+                      }}
+                      aria-selected={selectedIds().has(item.id)}
+                      onClick={(event) => selectRow(item, event)}
                       onDblClick={() => openFolder(item)}
                       data-kind={item.kind}
                     >
@@ -85,7 +171,12 @@ export function FileTable(props: FileTableProps) {
                         <input
                           type="checkbox"
                           aria-label={`Select ${item.name}`}
-                          onClick={(event) => event.stopPropagation()}
+                          checked={selectedIds().has(item.id)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            toggleItem(item.id)
+                            setAnchorId(item.id)
+                          }}
                         />
                       </td>
                       <td class="file-table__icon">
