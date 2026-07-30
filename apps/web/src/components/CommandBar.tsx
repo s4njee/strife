@@ -45,7 +45,7 @@ export function CommandBar() {
         const target = pendingRm()!
         setPendingRm(undefined)
         setValue('')
-        await executeRm(target, true)
+        await executeRm(target)
         return
       }
       setPendingRm(undefined)
@@ -112,7 +112,7 @@ export function CommandBar() {
             setValue('')
             return
           }
-          await executeRm(parsed.target, true)
+          await executeRm(parsed.target)
           break
         }
         case 'restore': {
@@ -139,7 +139,7 @@ export function CommandBar() {
     }
   }
 
-  const executeRm = async (target: string, _force: boolean) => {
+  const executeRm = async (target: string) => {
     const entry = await resolvePathEntry(target, currentFolderId())
     await trashNodes([entry.id])
     setOutput(`moved ${entry.name} to trash`)

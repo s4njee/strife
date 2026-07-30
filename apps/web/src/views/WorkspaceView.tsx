@@ -413,27 +413,31 @@ function FolderContents(props: { folderId: string }) {
         </button>
       </div>
       <div class="folder-filters" role="toolbar" aria-label="Kind filters">
-        {(
-          [
-            ['folder', 'Folders'],
-            ['image', 'Images'],
-            ['document', 'Documents'],
-            ['video', 'Video'],
-            ['audio', 'Audio'],
-          ] as const
-        ).map(([kind, label]) => (
-          <button
-            type="button"
-            classList={{
-              'folder-filters__chip': true,
-              'is-active': kindFilters().includes(kind),
-            }}
-            aria-pressed={kindFilters().includes(kind)}
-            onClick={() => toggleKindFilter(kind)}
-          >
-            {label}
-          </button>
-        ))}
+        <For
+          each={
+            [
+              ['folder', 'Folders'],
+              ['image', 'Images'],
+              ['document', 'Documents'],
+              ['video', 'Video'],
+              ['audio', 'Audio'],
+            ] as const
+          }
+        >
+          {([kind, label]) => (
+            <button
+              type="button"
+              classList={{
+                'folder-filters__chip': true,
+                'is-active': kindFilters().includes(kind),
+              }}
+              aria-pressed={kindFilters().includes(kind)}
+              onClick={() => toggleKindFilter(kind)}
+            >
+              {label}
+            </button>
+          )}
+        </For>
       </div>
       <Show when={dropResults().length > 0}>
         <div class="upload-drop-report" role="status">

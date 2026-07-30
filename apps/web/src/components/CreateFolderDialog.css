@@ -1,59 +1,111 @@
 .folder-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: 0 var(--space-4) var(--space-3);
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.75rem var(--page-pad-x);
 }
 
 .folder-filters__chip {
   border: 1px solid var(--color-border-control);
-  border-radius: 999px;
-  padding: var(--space-1) var(--space-3);
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
+  border-radius: var(--radius-xs);
+  padding: 0.125rem 0.375rem;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-label);
+  line-height: 1.3;
   cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
-.folder-filters__chip.is-active,
-.folder-filters__chip:hover {
-  border-color: var(--color-accent);
+.folder-filters__chip.is-active {
+  border-color: transparent;
   color: var(--color-accent);
   background: var(--color-accent-soft);
 }
 
+.folder-filters__chip:hover:not(.is-active) {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-raised);
+}
+
 .folder-toolbar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem var(--page-pad-x);
   border-bottom: 1px solid var(--color-border-row);
 }
 
-.folder-toolbar button,
-.dialog-card button {
-  border: 1px solid var(--color-border-raised);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-surface-input);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
+.folder-upload {
+  display: inline-flex;
 }
 
+.folder-upload__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Primary / secondary controls — handoff: 12.5px/500, pad 9×12, radius 7 */
 .folder-toolbar button,
-.dialog-card button.is-primary {
-  border-color: var(--color-accent);
+.dialog-card button,
+.btn {
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  padding: 0.5625rem 0.75rem;
+  background: var(--color-surface-input);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.folder-toolbar button:hover,
+.dialog-card button:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-raised);
+}
+
+.folder-toolbar .btn--primary,
+.dialog-card button.is-primary,
+.btn--primary {
+  border-color: transparent;
   color: var(--color-accent-contrast);
   background: var(--color-accent);
+}
+
+.folder-toolbar .btn--primary:hover,
+.dialog-card button.is-primary:hover:not(:disabled) {
+  color: var(--color-accent-contrast);
+  filter: brightness(1.05);
+}
+
+/* Secondary outline buttons in the workspace toolbar */
+.folder-toolbar .folder-upload button:not(.btn--primary) {
+  background: transparent;
 }
 
 .folder-toolbar button:focus-visible,
 .dialog-card button:focus-visible,
 .dialog-card input:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .dialog-backdrop {
@@ -63,16 +115,16 @@
   display: grid;
   place-items: center;
   padding: var(--space-6);
-  background: rgb(0 0 0 / 68%);
+  background: rgb(0 0 0 / 72%);
 }
 
 .dialog-card {
-  width: min(26rem, 100%);
+  width: min(24rem, 100%);
   border: 1px solid var(--color-border-raised);
   border-radius: var(--radius-lg);
-  padding: var(--space-6);
+  padding: 1.125rem;
   color: var(--color-text-primary);
-  background: var(--color-surface);
+  background: var(--color-surface-popover);
   box-shadow: var(--shadow-popover);
   text-align: left;
 }
@@ -84,35 +136,38 @@
 
 .dialog-card header p {
   color: var(--color-text-muted);
-  font: var(--font-weight-medium) var(--font-size-xs) / 1.4 var(--font-mono);
-  letter-spacing: 0.08em;
+  font: var(--font-weight-medium) var(--font-size-xs) / 1.3 var(--font-mono);
+  letter-spacing: var(--letter-spacing-label);
   text-transform: uppercase;
 }
 
 .dialog-card header h2 {
-  margin-top: var(--space-1);
-  font-size: 1.25rem;
+  margin-top: 0.25rem;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-title);
 }
 
 .dialog-card form {
   display: grid;
-  margin-top: var(--space-5);
+  margin-top: 1rem;
 }
 
 .dialog-card label {
-  margin-bottom: var(--space-2);
+  margin-bottom: 0.375rem;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
 }
 
 .dialog-card input {
   width: 100%;
   border: 1px solid var(--color-border-control);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  padding: 0.5rem 0.75rem;
   color: var(--color-text-primary);
   background: var(--color-surface-input);
+  font-size: var(--font-size-base);
 }
 
 .dialog-card input[aria-invalid='true'] {
@@ -120,16 +175,16 @@
 }
 
 .dialog-card__error {
-  margin: var(--space-2) 0 0;
+  margin: 0.375rem 0 0;
   color: var(--color-error);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 .dialog-card__actions {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-2);
-  margin-top: var(--space-6);
+  gap: 0.5rem;
+  margin-top: 1.125rem;
 }
 
 .dialog-card button:disabled {

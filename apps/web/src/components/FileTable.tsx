@@ -490,14 +490,9 @@ function capitalize(value: string): string {
 
 function NodeIcon(props: { kind: FolderItem['kind'] }) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <Show
-        when={props.kind === 'folder'}
-        fallback={<path d="M7 3h7l4 4v14H7zM14 3v5h5" />}
-      >
-        <path d="M3 7h7l2 2h9v11H3z" />
-      </Show>
-    </svg>
+    <span class="file-table__glyph" data-kind={props.kind} aria-hidden="true">
+      {props.kind === 'folder' ? 'FLD' : 'FILE'}
+    </span>
   )
 }
 

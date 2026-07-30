@@ -36,10 +36,11 @@ export function FileUploadControl(props: FileUploadControlProps) {
       />
       <button
         type="button"
+        class="btn--primary"
         disabled={uploading()}
         onClick={() => input.click()}
       >
-        {uploading() ? 'Uploading…' : 'Upload files'}
+        {uploading() ? 'Uploading…' : '+ Upload'}
       </button>
     </div>
   )
