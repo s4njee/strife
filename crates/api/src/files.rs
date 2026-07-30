@@ -28,6 +28,7 @@ pub fn router(pool: PgPool, storage: Arc<dyn StorageBackend>) -> Router {
         .route("/api/files/{id}", get(file_details))
         .route("/api/files/{id}/metadata", get(file_metadata))
         .route("/api/files/{id}/streams", get(file_streams))
+        .route("/api/files/{id}/preview-native", get(preview_native))
         .route("/api/files/{id}/download", get(download_file))
         .with_state(FileState { pool, storage })
 }
@@ -225,21 +226,44 @@ async fn download_file(
     Path(node_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Response {
-    try_download(&state, node_id, &headers)
+    try_serve_original(&state, node_id, &headers, false)
         .await
         .unwrap_or_else(DownloadError::into_response)
 }
 
-async fn try_download(
+async fn preview_native(
+    State(state): State<FileState>,
+    Path(node_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Response {
+    try_serve_original(&state, node_id, &headers, true)
+        .await
+        .unwrap_or_else(DownloadError::into_response)
+}
+
+async fn try_serve_original(
     state: &FileState,
     node_id: Uuid,
     headers: &HeaderMap,
+    inline: bool,
 ) -> Result<Response, DownloadError> {
     let file = strife_db::get_download_file(&state.pool, node_id)
         .await
         .map_err(|_| DownloadError::Internal)?
         .ok_or(DownloadError::NotFound)?;
     let object_id = Uuid::parse_str(&file.storage_key).map_err(|_| DownloadError::Internal)?;
+    let mime = file
+        .mime_type
+        .as_deref()
+        .unwrap_or("application/octet-stream");
+    if inline
+        && !(mime.starts_with("image/")
+            || mime.starts_with("video/")
+            || mime.starts_with("audio/")
+            || mime == "application/pdf")
+    {
+        return Err(DownloadError::NotFound);
+    }
     let total = u64::try_from(file.byte_size).map_err(|_| DownloadError::Internal)?;
     let requested_range = headers
         .get(header::RANGE)
@@ -265,19 +289,19 @@ async fn try_download(
         .status(status)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, length.to_string())
-        .header(
-            header::CONTENT_TYPE,
-            file.mime_type
-                .as_deref()
-                .unwrap_or("application/octet-stream"),
-        )
+        .header(header::CONTENT_TYPE, mime)
         .header(
             header::CONTENT_DISPOSITION,
             format!(
-                "attachment; filename=\"{}\"",
+                "{}; filename=\"{}\"",
+                if inline { "inline" } else { "attachment" },
                 safe_filename(&file.display_name)
             ),
-        );
+        )
+        .header("x-content-type-options", "nosniff");
+    if inline {
+        response = response.header(header::CACHE_CONTROL, "private, max-age=3600");
+    }
     if let Some(range) = requested_range {
         response = response.header(
             header::CONTENT_RANGE,

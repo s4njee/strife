@@ -1760,11 +1760,19 @@ As a developer, I want video and audio playback using browser-native codecs so t
 
 **Acceptance Criteria:**
 
-- [ ] The preview endpoint for video/audio serves the original file with HTTP range support (reuses Story 2.9's download logic with `Content-Disposition: inline`).
-- [ ] The UI renders a `<video>` or `<audio>` element pointing to the preview URL.
-- [ ] If the browser can't play the codec, the UI shows "Preview not available — download instead" with a download button.
-- [ ] No transcoding occurs in v1 — this is a hard constraint.
-- [ ] Correct MIME types are set (`video/mp4`, `audio/mpeg`, etc.).
+- [x] The preview endpoint for video/audio serves the original file with HTTP range support (reuses Story 2.9's download logic with `Content-Disposition: inline`).
+- [x] The UI renders a `<video>` or `<audio>` element pointing to the preview URL.
+- [x] If the browser can't play the codec, the UI shows "Preview not available — download instead" with a download button.
+- [x] No transcoding occurs in v1 — this is a hard constraint.
+- [x] Correct MIME types are set (`video/mp4`, `audio/mpeg`, etc.).
+
+**Implementation report:** Added a safe inline-original endpoint reusing the existing byte-range streamer for native image, video, and audio playback with original MIME types and no transcoding. The preview UI uses native media controls and exposes a download fallback on playback errors.
+
+**New files:** None.
+
+**Modified files:**
+
+- `crates/api/src/files.rs`
 
 ---
 
