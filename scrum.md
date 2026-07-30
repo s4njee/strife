@@ -1437,11 +1437,21 @@ As a developer, I want a MIME detection module in `crates/media` so that every f
 
 **Acceptance Criteria:**
 
-- [ ] `crates/media` exports a `detect_mime(path: &Path) -> Result<String>` function.
-- [ ] Uses `libmagic` (via `tree_magic_mini`, `file` command, or an FFI binding) to detect MIME from the file's content bytes.
-- [ ] Falls back to `application/octet-stream` if detection fails.
-- [ ] Does **not** trust file extensions.
-- [ ] Tests: verify correct MIME for JPEG, PNG, PDF, MP4, MP3, DOCX, and an extensionless file.
+- [x] `crates/media` exports a `detect_mime(path: &Path) -> Result<String>` function.
+- [x] Uses `libmagic` (via `tree_magic_mini`, `file` command, or an FFI binding) to detect MIME from the file's content bytes.
+- [x] Falls back to `application/octet-stream` if detection fails.
+- [x] Does **not** trust file extensions.
+- [x] Tests: verify correct MIME for JPEG, PNG, PDF, MP4, MP3, DOCX, and an extensionless file.
+
+**Implementation report:** Added a content-only MIME adapter backed by the host `file`/libmagic database, with a stable binary fallback when the detector is missing or rejects a file. Byte fixtures cover the required image, document, audio, video, OOXML, misleading-extension, and extensionless cases.
+
+**New files:** None.
+
+**Modified files:**
+
+- `Cargo.lock`
+- `crates/media/Cargo.toml`
+- `crates/media/src/lib.rs`
 
 ---
 

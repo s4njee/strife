@@ -1948,6 +1948,10 @@ dependencies = [
 [[package]]
 name = "strife-media"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "uuid",
+]
 
 [[package]]
 name = "strife-storage"
