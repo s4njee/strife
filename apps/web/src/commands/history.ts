@@ -7,7 +7,9 @@ export function loadCommandHistory(): string[] {
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((item): item is string => typeof item === 'string').slice(0, MAX_HISTORY)
+    return parsed
+      .filter((item): item is string => typeof item === 'string')
+      .slice(0, MAX_HISTORY)
   } catch {
     return []
   }

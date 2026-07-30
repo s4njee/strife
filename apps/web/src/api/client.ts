@@ -308,10 +308,9 @@ export async function addFavorite(nodeId: string): Promise<void> {
     headers: { Accept: 'application/json' },
   })
   if (!response.ok) {
-    throw new ApiClientError(
-      `Could not favorite item (${response.status}).`,
-      { status: response.status },
-    )
+    throw new ApiClientError(`Could not favorite item (${response.status}).`, {
+      status: response.status,
+    })
   }
 }
 
@@ -338,9 +337,12 @@ export async function trashNodes(nodeIds: string[]): Promise<void> {
     body: JSON.stringify({ node_ids: nodeIds }),
   })
   if (!response.ok) {
-    throw new ApiClientError(`Could not move items to trash (${response.status}).`, {
-      status: response.status,
-    })
+    throw new ApiClientError(
+      `Could not move items to trash (${response.status}).`,
+      {
+        status: response.status,
+      },
+    )
   }
 }
 
@@ -443,9 +445,7 @@ export async function getStorageUsage(
   return body as unknown as StorageUsage
 }
 
-export async function getActiveJobCount(
-  signal?: AbortSignal,
-): Promise<number> {
+export async function getActiveJobCount(signal?: AbortSignal): Promise<number> {
   const response = await fetch('/api/jobs?state=pending,leased&count=true', {
     headers: { Accept: 'application/json' },
     signal,

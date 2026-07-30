@@ -53,9 +53,7 @@ export function ErrorsView() {
         <Show when={!entries.loading} fallback={<p>Loading errors…</p>}>
           <Show
             when={(entries() ?? []).length > 0}
-            fallback={
-              <p class="errors-view__empty">No unresolved errors.</p>
-            }
+            fallback={<p class="errors-view__empty">No unresolved errors.</p>}
           >
             <ul class="errors-view__list">
               <For each={entries() ?? []}>

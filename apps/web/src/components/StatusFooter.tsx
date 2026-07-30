@@ -19,9 +19,7 @@ export function StatusFooter(props: StatusFooterProps) {
         {props.itemCount} {props.itemCount === 1 ? 'item' : 'items'}
       </span>
       <Show when={props.selectedCount > 0}>
-        <span>
-          {props.selectedCount} selected
-        </span>
+        <span>{props.selectedCount} selected</span>
       </Show>
       <Show when={(processing() ?? 0) > 0}>
         <span>

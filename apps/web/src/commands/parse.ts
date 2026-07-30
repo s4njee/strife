@@ -72,7 +72,8 @@ export function parseCommand(input: string): ParsedCommand | { error: string } {
     case 'rm': {
       const force = args.includes('-f') || args.includes('--force')
       const targets = args.filter((arg) => arg !== '-f' && arg !== '--force')
-      if (targets.length !== 1) return { error: 'usage: rm [-f|--force] <target>' }
+      if (targets.length !== 1)
+        return { error: 'usage: rm [-f|--force] <target>' }
       return { cmd: 'rm', target: targets[0], force }
     }
     case 'restore':

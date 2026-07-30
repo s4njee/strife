@@ -910,9 +910,7 @@ export function FavoritesView() {
         items={items()}
         loading={favorites.loading}
         error={
-          favorites.error instanceof Error
-            ? favorites.error.message
-            : undefined
+          favorites.error instanceof Error ? favorites.error.message : undefined
         }
         onRetry={() => void refetch()}
         onToggleFavorite={(item) => void handleToggleFavorite(item)}

@@ -108,7 +108,11 @@
 }
 
 .file-table__row:hover {
-  background: color-mix(in oklab, var(--color-surface-selected) 50%, transparent);
+  background: color-mix(
+    in oklab,
+    var(--color-surface-selected) 50%,
+    transparent
+  );
 }
 
 .file-table__row.is-selected,

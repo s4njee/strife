@@ -13,11 +13,7 @@ import { ContextMenu, type ContextMenuAction } from './ContextMenu'
 import './FileTable.css'
 
 export type FileTableSortColumn =
-  | 'name'
-  | 'kind'
-  | 'size'
-  | 'updated_at'
-  | 'created_at'
+  'name' | 'kind' | 'size' | 'updated_at' | 'created_at'
 
 interface FileTableProps {
   items: FolderItem[]
@@ -294,7 +290,9 @@ export function FileTable(props: FileTableProps) {
                 type="button"
                 onClick={() => {
                   const selected = selectedItems()
-                  const allFavorited = selected.every((item) => item.is_favorite)
+                  const allFavorited = selected.every(
+                    (item) => item.is_favorite,
+                  )
                   props.onFavoriteSelected?.(selected, !allFavorited)
                 }}
               >

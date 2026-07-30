@@ -82,7 +82,11 @@
 .sidebar__nav-link:hover,
 .sidebar__theme-toggle:hover {
   color: var(--color-text-primary);
-  background: color-mix(in oklab, var(--color-surface-selected) 50%, transparent);
+  background: color-mix(
+    in oklab,
+    var(--color-surface-selected) 50%,
+    transparent
+  );
 }
 
 .sidebar__nav-link.is-active,

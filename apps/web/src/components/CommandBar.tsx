@@ -79,7 +79,9 @@ export function CommandBar() {
           const children = await getFolderChildren(folderId)
           setOutput(
             children.items
-              .map((item) => `${item.kind === 'folder' ? 'd' : '-'}  ${item.name}`)
+              .map(
+                (item) => `${item.kind === 'folder' ? 'd' : '-'}  ${item.name}`,
+              )
               .join('\n') || '(empty)',
           )
           break
@@ -108,7 +110,9 @@ export function CommandBar() {
         case 'rm': {
           if (!parsed.force) {
             setPendingRm(parsed.target)
-            setError(`Confirm rm ${parsed.target}? Type y and Enter, or anything else to cancel.`)
+            setError(
+              `Confirm rm ${parsed.target}? Type y and Enter, or anything else to cancel.`,
+            )
             setValue('')
             return
           }
@@ -121,11 +125,12 @@ export function CommandBar() {
           break
         }
         case 'open': {
-          const resolved = await resolvePathEntry(parsed.target, currentFolderId())
+          const resolved = await resolvePathEntry(
+            parsed.target,
+            currentFolderId(),
+          )
           if (resolved.kind === 'folder') {
-            navigate(
-              resolved.id === ROOT_ID ? '/' : `/folder/${resolved.id}`,
-            )
+            navigate(resolved.id === ROOT_ID ? '/' : `/folder/${resolved.id}`)
           } else {
             window.open(`/api/files/${resolved.id}/download`, '_blank')
           }
@@ -189,9 +194,13 @@ export function CommandBar() {
     try {
       const parentId =
         dirPart.length > 0
-          ? await resolvePath(dirPart === '/' ? '/' : dirPart.replace(/\/$/, '') || '/', currentFolderId(), {
-              foldersOnly: true,
-            })
+          ? await resolvePath(
+              dirPart === '/' ? '/' : dirPart.replace(/\/$/, '') || '/',
+              currentFolderId(),
+              {
+                foldersOnly: true,
+              },
+            )
           : currentFolderId()
       const children = await getFolderChildren(parentId)
       const matches = children.items.filter((item) =>
@@ -225,7 +234,7 @@ export function CommandBar() {
           type="text"
           autocomplete="off"
           spellcheck={false}
-          placeholder='pwd · ls · cd · mkdir · mv · rm · restore · open'
+          placeholder="pwd · ls · cd · mkdir · mv · rm · restore · open"
           value={value()}
           onInput={(event) => setValue(event.currentTarget.value)}
           onKeyDown={onKeyDown}
@@ -369,4 +378,3 @@ function longestCommonPrefix(values: string[]): string {
   }
   return prefix
 }
-
