@@ -1950,6 +1950,8 @@ name = "strife-media"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 

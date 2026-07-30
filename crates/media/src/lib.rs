@@ -4,6 +4,10 @@ use std::{path::Path, process::Command};
 
 use anyhow::Result;
 
+mod exif;
+
+pub use exif::{ExifResult, extract_exif, extract_exif_with_limits};
+
 /// Detects a file's MIME type from its bytes using the host's libmagic database.
 ///
 /// Detection failures deliberately become `application/octet-stream` so an unknown file can

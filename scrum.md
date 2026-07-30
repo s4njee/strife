@@ -1461,14 +1461,26 @@ As a developer, I want an ExifTool adapter in `crates/media` so that images and 
 
 **Acceptance Criteria:**
 
-- [ ] `crates/media` exports an `extract_exif(path: &Path) -> Result<ExifResult>` function.
-- [ ] Invokes `exiftool -json -n <path>` as a child process.
-- [ ] Enforces a timeout (configurable, default: 30s) and kills the process if exceeded.
-- [ ] Enforces max output size (e.g., 5 MB) to prevent memory exhaustion.
-- [ ] Parses the JSON output into a structured `ExifResult` with normalized fields: `width`, `height`, `orientation`, `capture_time`, `camera_make`, `camera_model`, `gps_latitude`, `gps_longitude`, `color_space`.
-- [ ] Preserves the full raw JSON as `raw_payload` for storage in `metadata_records`.
-- [ ] Records warnings for missing or suspicious fields.
-- [ ] Tests with representative JPEG, PNG, and a raw camera file (e.g., CR2 or ARW).
+- [x] `crates/media` exports an `extract_exif(path: &Path) -> Result<ExifResult>` function.
+- [x] Invokes `exiftool -json -n <path>` as a child process.
+- [x] Enforces a timeout (configurable, default: 30s) and kills the process if exceeded.
+- [x] Enforces max output size (e.g., 5 MB) to prevent memory exhaustion.
+- [x] Parses the JSON output into a structured `ExifResult` with normalized fields: `width`, `height`, `orientation`, `capture_time`, `camera_make`, `camera_model`, `gps_latitude`, `gps_longitude`, `color_space`.
+- [x] Preserves the full raw JSON as `raw_payload` for storage in `metadata_records`.
+- [x] Records warnings for missing or suspicious fields.
+- [x] Tests with representative JPEG, PNG, and a raw camera file (e.g., CR2 or ARW).
+
+**Implementation report:** Added a bounded asynchronous ExifTool adapter that preserves every successful JSON field while normalizing image, camera, capture-time, color, and GPS facts and flagging suspicious results. Its 16 MiB process ceiling fails oversized extraction atomically—never truncating stored metadata—and tests cover live JPEG/PNG extraction plus representative Nikon raw metadata.
+
+**New files:**
+
+- `crates/media/src/exif.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `crates/media/Cargo.toml`
+- `crates/media/src/lib.rs`
 
 ---
 
