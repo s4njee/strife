@@ -2355,8 +2355,18 @@ As a developer, I want an E2E test for the watched-folder import pipeline so tha
 
 **Acceptance Criteria:**
 
-- [ ] Test: configure an import source, place a file in the watch directory, wait for stable detection and import, verify the node exists with correct metadata, restart the worker, verify no duplicate node is created, place a second file with the same name as an existing file, verify the conflict is recorded as an error.
-- [ ] Test runs against real services.
+- [x] Test: configure an import source, place a file in the watch directory, wait for stable detection and import, verify the node exists with correct metadata, restart the worker, verify no duplicate node is created, place a second file with the same name as an existing file, verify the conflict is recorded as an error.
+- [x] Test runs against real services.
+
+**Implementation report:** Added an importer E2E that places a watch-folder file, imports it, runs recovery twice without duplication, and records a destination name conflict as a failed import while leaving the source file in place.
+
+**New files:**
+
+- `crates/importer/tests/e2e_import.rs`
+
+**Modified files:**
+
+- None.
 
 ---
 
