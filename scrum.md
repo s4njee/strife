@@ -1854,11 +1854,26 @@ As a developer, I want the worker to handle `preview_generation` jobs so that pr
 
 **Acceptance Criteria:**
 
-- [ ] When a `preview_generation` job is claimed: retrieve the file, determine preview strategy from MIME, generate the preview (thumbnail or full preview), store it via `StorageBackend` in the `artifacts/` namespace, insert/update a `derived_artifacts` row with `state = ready`, and mark the job completed.
-- [ ] If generation fails, mark `derived_artifacts` as `failed` and the job as `failed`.
-- [ ] Respect concurrency limits: max 2 concurrent preview generations (configurable).
-- [ ] Clean up temp files after generation.
-- [ ] Tests: enqueue preview for a JPEG, process, verify the artifact exists and is retrievable.
+- [x] When a `preview_generation` job is claimed: retrieve the file, determine preview strategy from MIME, generate the preview (thumbnail or full preview), store it via `StorageBackend` in the `artifacts/` namespace, insert/update a `derived_artifacts` row with `state = ready`, and mark the job completed.
+- [x] If generation fails, mark `derived_artifacts` as `failed` and the job as `failed`.
+- [x] Respect concurrency limits: max 2 concurrent preview generations (configurable).
+- [x] Clean up temp files after generation.
+- [x] Tests: enqueue preview for a JPEG, process, verify the artifact exists and is retrievable.
+
+**Implementation report:** Extended the durable worker to claim preview jobs, generate cached thumbnails or full previews through the selected renderer, atomically publish them in artifact storage, and persist ready or failed state. Preview work has an independent configurable concurrency gate, always cleans temporary inputs and outputs, and is covered by the JPEG database/storage integration flow.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `.env.example`
+- `crates/media/src/office.rs`
+- `crates/worker/src/lib.rs`
+- `crates/worker/src/main.rs`
+- `crates/worker/src/metadata.rs`
+- `crates/worker/tests/metadata_job.rs`
 
 ---
 

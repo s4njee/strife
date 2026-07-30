@@ -24,6 +24,7 @@ pub struct WorkerConfig {
     pub tika_url: String,
     pub concurrency: usize,
     pub extractor_concurrency: usize,
+    pub preview_concurrency: usize,
     pub poll_interval: Duration,
     pub lease_ttl: ChronoDuration,
 }
@@ -41,6 +42,7 @@ impl WorkerConfig {
             tika_url: required("TIKA_URL")?,
             concurrency: positive_usize("WORKER_CONCURRENCY", 2)?,
             extractor_concurrency: positive_usize("EXTRACTOR_CONCURRENCY", 1)?,
+            preview_concurrency: positive_usize("PREVIEW_CONCURRENCY", 2)?,
             poll_interval: Duration::from_secs(positive_u64("WORKER_POLL_INTERVAL_SECONDS", 5)?),
             lease_ttl: ChronoDuration::seconds(i64::try_from(positive_u64(
                 "WORKER_LEASE_TTL_SECONDS",
@@ -132,7 +134,12 @@ async fn processor_loop(
         if *shutdown.borrow() {
             return Ok(());
         }
-        match claim_job(&pool, JobType::MetadataExtraction, &owner, config.lease_ttl).await? {
+        let job = claim_job(&pool, JobType::MetadataExtraction, &owner, config.lease_ttl).await?;
+        let job = match job {
+            Some(job) => Some(job),
+            None => claim_job(&pool, JobType::PreviewGeneration, &owner, config.lease_ttl).await?,
+        };
+        match job {
             Some(job) => process_job(&pool, handler.as_ref(), job).await?,
             None => {
                 tokio::select! {

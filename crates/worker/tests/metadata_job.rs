@@ -2,7 +2,10 @@ use std::{fs, process::Command, sync::Arc};
 
 use chrono::Duration;
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use strife_db::{JobState, JobType, MIGRATOR, ROOT_NODE_ID, claim_job, complete_job, enqueue_job};
+use strife_db::{
+    ArtifactState, ArtifactType, JobState, JobType, MIGRATOR, ROOT_NODE_ID, UpsertArtifact,
+    claim_job, complete_job, create_or_update_artifact, enqueue_job, get_artifact,
+};
 use strife_storage::{LocalFsBackend, StorageBackend, StorageKey};
 use strife_worker::{JobHandler, MetadataHandler};
 use uuid::Uuid;
@@ -102,8 +105,13 @@ async fn jpeg_job_persists_raw_and_normalized_metadata() {
     .await
     .expect("claim metadata job")
     .expect("metadata job");
-    let handler =
-        MetadataHandler::new(pool.clone(), storage, "http://127.0.0.1:9998".to_owned(), 1);
+    let handler = MetadataHandler::new(
+        pool.clone(),
+        storage.clone(),
+        "http://127.0.0.1:9998".to_owned(),
+        1,
+        2,
+    );
     handler.handle(&job).await.expect("process JPEG metadata");
     let completed = complete_job(&pool, job.id)
         .await
@@ -135,6 +143,57 @@ async fn jpeg_job_persists_raw_and_normalized_metadata() {
     .await
     .expect("check raw ExifTool payload");
     assert!(raw_is_array);
+
+    let artifact_id = Uuid::new_v4();
+    let artifact_key = artifact_id.simple().to_string();
+    create_or_update_artifact(
+        &pool,
+        &UpsertArtifact {
+            node_id,
+            artifact_type: ArtifactType::Thumbnail,
+            format: "application/octet-stream",
+            width: None,
+            height: None,
+            storage_key: &artifact_key,
+            byte_size: 0,
+            generator_version: "preview-v1",
+            state: ArtifactState::Generating,
+        },
+    )
+    .await
+    .expect("create generating artifact");
+    enqueue_job(&pool, JobType::PreviewGeneration, node_id, 0)
+        .await
+        .expect("enqueue preview job");
+    let preview_job = claim_job(
+        &pool,
+        JobType::PreviewGeneration,
+        "preview-test",
+        Duration::minutes(1),
+    )
+    .await
+    .expect("claim preview job")
+    .expect("preview job");
+    handler
+        .handle(&preview_job)
+        .await
+        .expect("generate preview");
+    complete_job(&pool, preview_job.id)
+        .await
+        .expect("complete preview job")
+        .expect("leased preview job completed");
+    let artifact = get_artifact(&pool, node_id, ArtifactType::Thumbnail)
+        .await
+        .expect("load artifact")
+        .expect("artifact exists");
+    assert_eq!(artifact.state, ArtifactState::Ready);
+    assert_eq!((artifact.width, artifact.height), (Some(256), Some(192)));
+    assert!(
+        storage
+            .exists(StorageKey::artifact(artifact_id))
+            .await
+            .expect("check artifact storage")
+    );
 
     sqlx::query("DELETE FROM nodes WHERE id = $1")
         .bind(node_id)

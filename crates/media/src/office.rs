@@ -4,7 +4,7 @@ use std::{path::Path, time::Duration};
 use tokio::process::Command;
 use uuid::Uuid;
 
-/// Converts a DOC/DOCX file to PDF in an isolated headless LibreOffice profile.
+/// Converts a DOC/DOCX file to PDF in an isolated headless `LibreOffice` profile.
 ///
 /// # Errors
 /// Returns an error when conversion times out, fails, or produces no PDF.

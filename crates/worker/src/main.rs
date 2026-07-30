@@ -22,6 +22,7 @@ async fn main() -> Result<()> {
         storage.clone(),
         config.tika_url.clone(),
         config.extractor_concurrency,
+        config.preview_concurrency,
     ));
 
     run(config, pool, storage, handler).await
