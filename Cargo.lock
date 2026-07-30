@@ -1911,6 +1911,7 @@ name = "strife-db"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "serde_json",
  "sqlx",
  "strife-domain",
  "thiserror",

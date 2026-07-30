@@ -1411,10 +1411,23 @@ As a developer, I want `metadata_records` and `media_streams` tables so that ext
 
 **Acceptance Criteria:**
 
-- [ ] `metadata_records`: `id`, `node_id` (FK), `extractor_name` (text), `extractor_version` (text), `status` (enum: `pending` | `completed` | `failed` | `unsupported`), `raw_payload` (jsonb), `warnings` (text[]), `created_at`, `updated_at`.
-- [ ] `media_streams`: `id`, `node_id` (FK), `stream_index` (int), `stream_type` (enum: `video` | `audio` | `subtitle`), `codec` (text), `width` (int, nullable), `height` (int, nullable), `duration_ms` (bigint, nullable), `bitrate_bps` (bigint, nullable), `frame_rate` (text, nullable), `language` (text, nullable), `created_at`.
-- [ ] Add normalized typed columns to `nodes` or a separate `node_metadata` table (as decided in Story 4.1): `detected_mime`, `media_kind`, `duration_ms`, `width`, `height`, `capture_time`, `page_count`, `orientation`, `has_gps`.
-- [ ] Unique constraint on `(node_id, extractor_name)` — only one record per extractor per file.
+- [x] `metadata_records`: `id`, `node_id` (FK), `extractor_name` (text), `extractor_version` (text), `status` (enum: `pending` | `completed` | `failed` | `unsupported`), `raw_payload` (jsonb), `warnings` (text[]), `created_at`, `updated_at`.
+- [x] `media_streams`: `id`, `node_id` (FK), `stream_index` (int), `stream_type` (enum: `video` | `audio` | `subtitle`), `codec` (text), `width` (int, nullable), `height` (int, nullable), `duration_ms` (bigint, nullable), `bitrate_bps` (bigint, nullable), `frame_rate` (text, nullable), `language` (text, nullable), `created_at`.
+- [x] Add normalized typed columns to `nodes` or a separate `node_metadata` table (as decided in Story 4.1): `detected_mime`, `media_kind`, `duration_ms`, `width`, `height`, `capture_time`, `page_count`, `orientation`, `has_gps`.
+- [x] Unique constraint on `(node_id, extractor_name)` — only one record per extractor per file.
+
+**Implementation report:** Added the durable metadata schema for complete raw JSON payloads, extractor status and warnings, normalized file facts, and individual media streams. The schema also carries the additional camera, GPS, and document fields selected in Story 4.1, with cascading cleanup and integrity constraints.
+
+**New files:**
+
+- `crates/db/migrations/0007_metadata.up.sql`
+- `crates/db/migrations/0007_metadata.down.sql`
+- `crates/db/tests/metadata.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `crates/db/Cargo.toml`
 
 ---
 
