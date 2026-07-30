@@ -1782,10 +1782,18 @@ As a developer, I want PDF files to render in the browser so that users can view
 
 **Acceptance Criteria:**
 
-- [ ] The preview endpoint serves the original PDF with `Content-Type: application/pdf` and `Content-Disposition: inline`.
-- [ ] The UI embeds it using `<iframe>` or `<embed>` (relying on the browser's built-in PDF renderer).
-- [ ] If the PDF fails to load, fallback to a download button.
-- [ ] Response headers include `X-Content-Type-Options: nosniff`.
+- [x] The preview endpoint serves the original PDF with `Content-Type: application/pdf` and `Content-Disposition: inline`.
+- [x] The UI embeds it using `<iframe>` or `<embed>` (relying on the browser's built-in PDF renderer).
+- [x] If the PDF fails to load, fallback to a download button.
+- [x] Response headers include `X-Content-Type-Options: nosniff`.
+
+**Implementation report:** Extended the native inline-preview policy to PDFs with explicit MIME, inline disposition, range support, private caching, and `nosniff`; DOCX and arbitrary active content remain excluded. The modal embeds the route in the browser PDF renderer and switches to the shared download fallback on load failure.
+
+**New files:** None.
+
+**Modified files:**
+
+- `crates/api/src/files.rs`
 
 ---
 

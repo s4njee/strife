@@ -256,12 +256,7 @@ async fn try_serve_original(
         .mime_type
         .as_deref()
         .unwrap_or("application/octet-stream");
-    if inline
-        && !(mime.starts_with("image/")
-            || mime.starts_with("video/")
-            || mime.starts_with("audio/")
-            || mime == "application/pdf")
-    {
+    if inline && !is_native_preview_mime(mime) {
         return Err(DownloadError::NotFound);
     }
     let total = u64::try_from(file.byte_size).map_err(|_| DownloadError::Internal)?;
@@ -311,6 +306,13 @@ async fn try_serve_original(
     Ok(response
         .body(body)
         .unwrap_or_else(|_| status_response(StatusCode::INTERNAL_SERVER_ERROR)))
+}
+
+fn is_native_preview_mime(mime: &str) -> bool {
+    mime.starts_with("image/")
+        || mime.starts_with("video/")
+        || mime.starts_with("audio/")
+        || mime == "application/pdf"
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -405,7 +407,7 @@ fn status_response(status: StatusCode) -> Response {
 mod tests {
     use axum::http::HeaderValue;
 
-    use super::{ByteRange, parse_range, safe_filename};
+    use super::{ByteRange, is_native_preview_mime, parse_range, safe_filename};
 
     #[test]
     fn parses_closed_open_and_suffix_ranges() {
@@ -428,5 +430,15 @@ mod tests {
         assert!(parse_range(&HeaderValue::from_static("bytes=10-12"), 10).is_err());
         assert!(parse_range(&HeaderValue::from_static("bytes=0-1,3-4"), 10).is_err());
         assert_eq!(safe_filename("unsafe\r\n\"name"), "unsafe___name");
+    }
+
+    #[test]
+    fn permits_pdf_and_browser_native_media_only() {
+        for mime in ["application/pdf", "image/gif", "video/mp4", "audio/mpeg"] {
+            assert!(is_native_preview_mime(mime));
+        }
+        assert!(!is_native_preview_mime(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ));
     }
 }
