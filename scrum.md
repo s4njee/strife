@@ -418,7 +418,6 @@ As a developer, I want folder hierarchy rules encapsulated in `crates/domain` so
 
 **Modified files:**
 
-- `Cargo.lock`
 - `crates/api/Cargo.toml`
 - `crates/api/src/folders.rs`
 - `crates/db/Cargo.toml`
@@ -1602,10 +1601,20 @@ As an API client, I want endpoints to retrieve file metadata and processing stat
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/files/:node_id` returns the node with all normalized metadata fields plus `processing_status` (derived from job state: `processing`, `ready`, `partially_processed`, `failed`).
-- [ ] `GET /api/files/:node_id/metadata` returns all `metadata_records` for the file (raw payloads included or excluded via a `?raw=true` query param).
-- [ ] `GET /api/files/:node_id/streams` returns `media_streams` for video/audio files.
-- [ ] GPS coordinates are included when available; no location reverse-geocoding in v1.
+- [x] `GET /api/files/:node_id` returns the node with all normalized metadata fields plus `processing_status` (derived from job state: `processing`, `ready`, `partially_processed`, `failed`).
+- [x] `GET /api/files/:node_id/metadata` returns all `metadata_records` for the file (raw payloads included or excluded via a `?raw=true` query param).
+- [x] `GET /api/files/:node_id/streams` returns `media_streams` for video/audio files.
+- [x] GPS coordinates are included when available; no location reverse-geocoding in v1.
+
+**Implementation report:** Expanded the files API with normalized detail, extractor record, and media stream endpoints, including opt-in raw JSON and exact GPS coordinates. Processing status combines active/failed jobs with successful/failed extractor records to distinguish processing, ready, partial, and failed files.
+
+**New files:** None.
+
+**Modified files:**
+
+- `crates/api/Cargo.toml`
+- `crates/api/src/files.rs`
+- `crates/api/tests/files_api.rs`
 
 ---
 

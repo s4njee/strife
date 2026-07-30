@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
+    Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
     routing::get,
 };
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::PgPool;
 use strife_storage::{StorageBackend, StorageKey};
 use tokio_util::io::ReaderStream;
@@ -22,8 +25,199 @@ struct FileState {
 /// Builds the original-file download router.
 pub fn router(pool: PgPool, storage: Arc<dyn StorageBackend>) -> Router {
     Router::new()
+        .route("/api/files/{id}", get(file_details))
+        .route("/api/files/{id}/metadata", get(file_metadata))
+        .route("/api/files/{id}/streams", get(file_streams))
         .route("/api/files/{id}/download", get(download_file))
         .with_state(FileState { pool, storage })
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct FileDetailsResponse {
+    pub id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub name: String,
+    pub byte_size: i64,
+    pub checksum_sha256: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub detected_mime: Option<String>,
+    pub media_kind: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub capture_time: Option<DateTime<Utc>>,
+    pub page_count: Option<i32>,
+    pub orientation: Option<i32>,
+    pub has_gps: Option<bool>,
+    pub gps_latitude: Option<f64>,
+    pub gps_longitude: Option<f64>,
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
+    pub document_title: Option<String>,
+    pub document_author: Option<String>,
+    pub document_created_at: Option<DateTime<Utc>>,
+    pub document_modified_at: Option<DateTime<Utc>>,
+    #[sqlx(skip)]
+    pub processing_status: ProcessingStatus,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingStatus {
+    #[default]
+    Processing,
+    Ready,
+    PartiallyProcessed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct MetadataResponse {
+    pub id: Uuid,
+    pub extractor_name: String,
+    pub extractor_version: String,
+    pub status: String,
+    pub raw_payload: Option<Value>,
+    pub warnings: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct MediaStreamResponse {
+    pub id: Uuid,
+    pub stream_index: i32,
+    pub stream_type: String,
+    pub codec: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_ms: Option<i64>,
+    pub bitrate_bps: Option<i64>,
+    pub frame_rate: Option<String>,
+    pub language: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+struct MetadataQuery {
+    #[serde(default)]
+    raw: bool,
+}
+
+async fn file_details(
+    State(state): State<FileState>,
+    Path(node_id): Path<Uuid>,
+) -> Result<Json<FileDetailsResponse>, StatusCode> {
+    let mut details = sqlx::query_as::<_, FileDetailsResponse>(
+        r"
+        SELECT n.id, n.parent_id, n.name, f.byte_size, f.checksum_sha256,
+            n.created_at, n.updated_at, m.detected_mime, m.media_kind::text AS media_kind,
+            m.duration_ms, m.width, m.height, m.capture_time, m.page_count, m.orientation,
+            m.has_gps, m.gps_latitude, m.gps_longitude, m.camera_make, m.camera_model,
+            m.document_title, m.document_author, m.document_created_at, m.document_modified_at
+        FROM nodes n
+        JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+        LEFT JOIN node_metadata m ON m.node_id = n.id
+        WHERE n.id = $1 AND n.kind = 'file' AND n.lifecycle_state = 'active'
+        ",
+    )
+    .bind(node_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+    details.processing_status = processing_status(&state.pool, node_id).await?;
+    Ok(Json(details))
+}
+
+async fn processing_status(pool: &PgPool, node_id: Uuid) -> Result<ProcessingStatus, StatusCode> {
+    let (active, failed_jobs, successful, failed_metadata): (i64, i64, i64, i64) =
+        sqlx::query_as(
+            r"
+            SELECT
+                count(*) FILTER (WHERE source = 'job' AND state IN ('pending', 'leased')),
+                count(*) FILTER (WHERE source = 'job' AND state = 'failed'),
+                count(*) FILTER (WHERE source = 'metadata' AND state IN ('completed', 'unsupported')),
+                count(*) FILTER (WHERE source = 'metadata' AND state = 'failed')
+            FROM (
+                SELECT 'job' AS source, state::text AS state FROM jobs WHERE target_node_id = $1
+                UNION ALL
+                SELECT 'metadata', status::text FROM metadata_records WHERE node_id = $1
+            ) states
+            ",
+        )
+        .bind(node_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(if active > 0 {
+        ProcessingStatus::Processing
+    } else if successful > 0 && failed_metadata > 0 {
+        ProcessingStatus::PartiallyProcessed
+    } else if failed_jobs > 0 || failed_metadata > 0 {
+        ProcessingStatus::Failed
+    } else if successful > 0 {
+        ProcessingStatus::Ready
+    } else {
+        ProcessingStatus::Processing
+    })
+}
+
+async fn file_metadata(
+    State(state): State<FileState>,
+    Path(node_id): Path<Uuid>,
+    Query(query): Query<MetadataQuery>,
+) -> Result<Json<Vec<MetadataResponse>>, StatusCode> {
+    ensure_active_file(&state.pool, node_id).await?;
+    let records = sqlx::query_as::<_, MetadataResponse>(
+        r"
+        SELECT id, extractor_name, extractor_version, status::text AS status,
+            CASE WHEN $2 THEN raw_payload ELSE NULL END AS raw_payload,
+            warnings, created_at, updated_at
+        FROM metadata_records WHERE node_id = $1 ORDER BY extractor_name
+        ",
+    )
+    .bind(node_id)
+    .bind(query.raw)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(records))
+}
+
+async fn file_streams(
+    State(state): State<FileState>,
+    Path(node_id): Path<Uuid>,
+) -> Result<Json<Vec<MediaStreamResponse>>, StatusCode> {
+    ensure_active_file(&state.pool, node_id).await?;
+    let streams = sqlx::query_as::<_, MediaStreamResponse>(
+        r"
+        SELECT id, stream_index, stream_type::text AS stream_type, codec, width, height,
+            duration_ms, bitrate_bps, frame_rate, language, created_at
+        FROM media_streams WHERE node_id = $1 ORDER BY stream_index
+        ",
+    )
+    .bind(node_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(streams))
+}
+
+async fn ensure_active_file(pool: &PgPool, node_id: Uuid) -> Result<(), StatusCode> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1 AND kind = 'file' AND lifecycle_state = 'active')",
+    )
+    .bind(node_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if exists {
+        Ok(())
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
 }
 
 async fn download_file(
