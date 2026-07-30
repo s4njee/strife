@@ -2,16 +2,6 @@
 
 Only unresolved questions that can affect v1 belong here. Settled decisions are recorded in [`README.md`](README.md); questions deliberately postponed until v2 or later are in [`deferred.md`](deferred.md).
 
-## Milestone 5 — Office and Raw Previews
-
-### Which tool should render DOCX and other supported office files?
-
-Options to evaluate on ARM64 include headless LibreOffice and a dedicated conversion service. Compare fidelity, cold-start time, memory use, package/container size, malformed-input behavior, and output determinism.
-
-### Which tool should decode raw camera images for thumbnails and previews?
-
-Evaluate an ARM64-available libraw-based option using representative camera files. Metadata extraction alone does not guarantee preview decoding.
-
 ## Milestone 6 — Command Bar
 
 ### Which filesystem-like commands are in v1?

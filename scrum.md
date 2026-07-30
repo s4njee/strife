@@ -1664,9 +1664,20 @@ As a developer, I want M5 questions decided (DOCX renderer, RAW decoder) so that
 
 **Acceptance Criteria:**
 
-- [ ] Decision recorded for DOCX/office preview tool (headless LibreOffice vs dedicated converter) with ARM64 benchmarks.
-- [ ] Decision recorded for raw camera image decoder with representative test files.
-- [ ] `questions.md` M5 section cleared.
+- [x] Decision recorded for DOCX/office preview tool (headless LibreOffice vs dedicated converter) with ARM64 benchmarks.
+- [x] Decision recorded for raw camera image decoder with representative test files.
+- [x] `questions.md` M5 section cleared.
+
+**Implementation report:** Selected serialized headless LibreOffice for office-to-PDF rendering and LibRaw embedded-preview/half-decode paths for NEF and DNG, recording ARM64 timing, memory, malformed-input, and determinism observations in ADR 0006. The settled choices are reflected in the architecture plan and removed from the active question list.
+
+**New files:**
+
+- `docs/decisions/0006-preview-renderers.md`
+
+**Modified files:**
+
+- `README.md`
+- `questions.md`
 
 ---
 

@@ -286,7 +286,7 @@ Previews are requested on demand, generated asynchronously when necessary, then 
 
 Do not transcode video in v1. If a browser cannot preview a file or codec, download the original instead. Do not generate audio waveforms or extracted cover art.
 
-The first request for a missing preview may return a processing state and job identifier. The UI polls or refreshes durable job state, so preview progress survives a reload. Office-preview tooling remains an active design question.
+The first request for a missing preview may return a processing state and job identifier. The UI polls or refreshes durable job state, so preview progress survives a reload. DOC/DOCX previews use serialized headless LibreOffice conversion to PDF. NEF/DNG previews use LibRaw, preferring embedded JPEG previews and falling back to a half-resolution decode; see [ADR 0006](docs/decisions/0006-preview-renderers.md).
 
 ## 12. v1 API Capabilities
 
