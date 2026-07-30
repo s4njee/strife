@@ -2376,14 +2376,24 @@ As a developer, I want tests for low disk, missing storage, interrupted uploads,
 
 **Acceptance Criteria:**
 
-- [ ] Test: mock disk at 91% → upload initiation returns `507`.
-- [ ] Test: start API with unreachable PostgreSQL → exits with non-zero code.
-- [ ] Test: start API with missing `STORAGE_ROOT` → exits with non-zero code.
-- [ ] Test: upload 3 chunks, kill the API, restart, resume from chunk 4 → succeeds.
-- [ ] Test: submit a malformed/corrupt file to metadata extraction → job fails, file remains accessible with generic metadata.
-- [ ] Test: submit a file that causes ExifTool to hang → killed after timeout, job fails gracefully.
-- [ ] Test: permanently delete a file whose storage key is already missing → job completes (idempotent).
-- [ ] Test: trash cleanup with 100 expired items → all purged without errors.
+- [x] Test: mock disk at 91% → upload initiation returns `507`.
+- [x] Test: start API with unreachable PostgreSQL → exits with non-zero code.
+- [x] Test: start API with missing `STORAGE_ROOT` → exits with non-zero code.
+- [x] Test: upload 3 chunks, kill the API, restart, resume from chunk 4 → succeeds.
+- [x] Test: submit a malformed/corrupt file to metadata extraction → job fails, file remains accessible with generic metadata.
+- [x] Test: submit a file that causes ExifTool to hang → killed after timeout, job fails gracefully.
+- [x] Test: permanently delete a file whose storage key is already missing → job completes (idempotent).
+- [x] Test: trash cleanup with 100 expired items → all purged without errors.
+
+**Implementation report:** Added edge-case integration tests for 91% disk 507s, unreachable PostgreSQL and missing storage startup failures, multi-chunk upload resume after router restart, malformed-file metadata handling, ExifTool timeout enforcement, missing-object permanent deletion, and batch expired-trash purge.
+
+**New files:**
+
+- `crates/api/tests/edge_cases.rs`
+
+**Modified files:**
+
+- `crates/api/Cargo.toml`
 
 ---
 
