@@ -1576,11 +1576,23 @@ As a developer, I want a mechanism to re-extract metadata when an extractor vers
 
 **Acceptance Criteria:**
 
-- [ ] A function `enqueue_reprocessing(extractor_name, old_version)` creates low-priority `metadata_extraction` jobs for all files whose `metadata_records` for that extractor have a version less than the current.
-- [ ] Reprocessing jobs have lower priority than new-file metadata jobs.
-- [ ] Reprocessing runs gradually (e.g., max 10 jobs enqueued at a time) to avoid flooding the queue.
-- [ ] The reprocessing is idempotent: running it twice doesn't create duplicate jobs.
-- [ ] Can be triggered via an internal API or admin endpoint: `POST /api/admin/reprocess?extractor=exiftool`.
+- [x] A function `enqueue_reprocessing(extractor_name, old_version)` creates low-priority `metadata_extraction` jobs for all files whose `metadata_records` for that extractor have a version less than the current.
+- [x] Reprocessing jobs have lower priority than new-file metadata jobs.
+- [x] Reprocessing runs gradually (e.g., max 10 jobs enqueued at a time) to avoid flooding the queue.
+- [x] The reprocessing is idempotent: running it twice doesn't create duplicate jobs.
+- [x] Can be triggered via an internal API or admin endpoint: `POST /api/admin/reprocess?extractor=exiftool`.
+
+**Implementation report:** Added gradual extractor-version reprocessing that selects at most ten stale records per call, enqueues them at priority -100, and relies on active-job uniqueness for repeat-safe operation. The internal admin endpoint supports the three specialized extractors and rejects unknown names.
+
+**New files:**
+
+- `crates/api/src/admin.rs`
+- `crates/db/tests/reprocessing.rs`
+
+**Modified files:**
+
+- `crates/api/src/lib.rs`
+- `crates/db/src/lib.rs`
 
 ---
 

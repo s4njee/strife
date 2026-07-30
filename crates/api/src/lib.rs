@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod config;
 pub mod files;
 pub mod folders;
@@ -79,6 +80,7 @@ pub async fn run(config: Config) -> Result<()> {
     recover_watched_imports(&pool, storage.as_ref(), config.disk_guard_percent).await;
     spawn_upload_cleanup(pool.clone(), storage.clone());
     let app = health::router(dependencies)
+        .merge(admin::router(pool.clone()))
         .merge(folders::router(pool.clone()))
         .merge(files::router(pool.clone(), storage.clone()))
         .merge(imports::router(

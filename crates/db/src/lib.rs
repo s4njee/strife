@@ -292,6 +292,43 @@ pub async fn release_expired_leases(pool: &PgPool) -> Result<u64, sqlx::Error> {
     Ok(result.rows_affected())
 }
 
+/// Enqueues at most ten low-priority jobs whose extractor record is not at `current_version`.
+///
+/// Active queue uniqueness makes repeated calls safe and allows gradual reprocessing batches.
+///
+/// # Errors
+///
+/// Returns a database error when candidates cannot be selected or enqueued.
+pub async fn enqueue_reprocessing(
+    pool: &PgPool,
+    extractor_name: &str,
+    current_version: &str,
+) -> Result<u64, sqlx::Error> {
+    let node_ids = sqlx::query_scalar::<_, Uuid>(
+        r"
+        SELECT node_id
+        FROM metadata_records
+        WHERE extractor_name = $1 AND extractor_version <> $2
+        ORDER BY updated_at, node_id
+        LIMIT 10
+        ",
+    )
+    .bind(extractor_name)
+    .bind(current_version)
+    .fetch_all(pool)
+    .await?;
+    let mut enqueued = 0;
+    for node_id in node_ids {
+        if enqueue_job(pool, JobType::MetadataExtraction, node_id, -100)
+            .await?
+            .is_some()
+        {
+            enqueued += 1;
+        }
+    }
+    Ok(enqueued)
+}
+
 /// The fixed watched-folder source persisted by the v1 schema.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct ImportSourceRecord {
