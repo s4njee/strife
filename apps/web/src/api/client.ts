@@ -227,17 +227,31 @@ export async function getFolderAncestors(
   return body
 }
 
+export interface FolderChildrenQuery {
+  sort?: string
+  order?: 'asc' | 'desc'
+  kind?: string[]
+}
+
 export async function getFolderChildren(
   folderId: string,
   signal?: AbortSignal,
+  query: FolderChildrenQuery = {},
 ): Promise<FolderChildrenResponse> {
   let response: Response
+  const params = new URLSearchParams({ limit: '100' })
+  if (query.sort) params.set('sort', query.sort)
+  if (query.order) params.set('order', query.order)
+  for (const kind of query.kind ?? []) params.append('kind', kind)
 
   try {
-    response = await fetch(`/api/folders/${folderId}/children?limit=100`, {
-      headers: { Accept: 'application/json' },
-      signal,
-    })
+    response = await fetch(
+      `/api/folders/${folderId}/children?${params.toString()}`,
+      {
+        headers: { Accept: 'application/json' },
+        signal,
+      },
+    )
   } catch (error) {
     throw new ApiClientError('The folder contents could not be loaded.', {
       cause: error,

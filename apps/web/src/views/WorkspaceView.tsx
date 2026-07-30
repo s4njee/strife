@@ -1,4 +1,4 @@
-import { useParams } from '@solidjs/router'
+import { useParams, useSearchParams } from '@solidjs/router'
 import {
   createEffect,
   createResource,
@@ -105,8 +105,13 @@ export function FolderView() {
   )
 }
 
+type SortColumn = 'name' | 'kind' | 'size' | 'updated_at' | 'created_at'
+type SortDir = 'asc' | 'desc' | undefined
+type KindFilter = 'folder' | 'image' | 'document' | 'video' | 'audio'
+
 function FolderContents(props: { folderId: string }) {
   const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
+  const [searchParams, setSearchParams] = useSearchParams()
   const [showCreateDialog, setShowCreateDialog] = createSignal(false)
   const [renameItem, setRenameItem] = createSignal<FolderItem>()
   const [moveItems, setMoveItems] = createSignal<FolderItem[]>()
@@ -116,9 +121,48 @@ function FolderContents(props: { folderId: string }) {
   const [detailsItem, setDetailsItem] = createSignal<FolderItem>()
   const [previewItem, setPreviewItem] = createSignal<FolderItem>()
   const uploads = useUploads()
+
+  const sortColumn = (): SortColumn => {
+    const value = searchParams.sort
+    if (
+      value === 'kind' ||
+      value === 'size' ||
+      value === 'updated_at' ||
+      value === 'created_at'
+    ) {
+      return value
+    }
+    return 'name'
+  }
+  const sortOrder = (): SortDir => {
+    const value = searchParams.order
+    if (value === 'asc' || value === 'desc') return value
+    return sortColumn() === 'name' ? undefined : 'asc'
+  }
+  const kindFilters = (): KindFilter[] => {
+    const raw = searchParams.kind
+    const values = Array.isArray(raw) ? raw : raw ? [raw] : []
+    return values.filter((value): value is KindFilter =>
+      ['folder', 'image', 'document', 'video', 'audio'].includes(value),
+    )
+  }
+
   const [children, { mutate, refetch }] = createResource(
-    () => (staticPreview ? false : props.folderId),
-    (folderId) => getFolderChildren(folderId),
+    () =>
+      staticPreview
+        ? false
+        : {
+            folderId: props.folderId,
+            sort: sortColumn(),
+            order: sortOrder() ?? 'asc',
+            kind: kindFilters(),
+          },
+    (query) =>
+      getFolderChildren(query.folderId, undefined, {
+        sort: query.sort,
+        order: query.order,
+        kind: query.kind,
+      }),
   )
   createEffect(() => {
     if (!staticPreview) {
@@ -127,6 +171,32 @@ function FolderContents(props: { folderId: string }) {
   })
   const items = () =>
     staticPreview ? staticItems() : (children()?.items ?? [])
+
+  const cycleSort = (column: SortColumn) => {
+    const current = sortColumn()
+    const order = sortOrder()
+    if (current !== column) {
+      setSearchParams({ sort: column, order: 'asc' }, { resolve: false })
+      return
+    }
+    if (order === 'asc' || order === undefined) {
+      setSearchParams({ sort: column, order: 'desc' }, { resolve: false })
+      return
+    }
+    // Third click returns to default name sort.
+    setSearchParams({ sort: undefined, order: undefined }, { resolve: false })
+  }
+
+  const toggleKindFilter = (kind: KindFilter) => {
+    const active = new Set(kindFilters())
+    if (active.has(kind)) active.delete(kind)
+    else active.add(kind)
+    const next = [...active]
+    setSearchParams(
+      { kind: next.length > 0 ? next : undefined },
+      { resolve: false },
+    )
+  }
 
   const handleCreate = async (name: string) => {
     if (staticPreview) {
@@ -289,6 +359,29 @@ function FolderContents(props: { folderId: string }) {
           New Folder
         </button>
       </div>
+      <div class="folder-filters" role="toolbar" aria-label="Kind filters">
+        {(
+          [
+            ['folder', 'Folders'],
+            ['image', 'Images'],
+            ['document', 'Documents'],
+            ['video', 'Video'],
+            ['audio', 'Audio'],
+          ] as const
+        ).map(([kind, label]) => (
+          <button
+            type="button"
+            classList={{
+              'folder-filters__chip': true,
+              'is-active': kindFilters().includes(kind),
+            }}
+            aria-pressed={kindFilters().includes(kind)}
+            onClick={() => toggleKindFilter(kind)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <Show when={dropResults().length > 0}>
         <div class="upload-drop-report" role="status">
           {dropResults().length - dropFailures().length} of{' '}
@@ -313,6 +406,9 @@ function FolderContents(props: { folderId: string }) {
           children.error instanceof Error ? children.error.message : undefined
         }
         onRetry={() => void refetch()}
+        sortColumn={sortColumn()}
+        sortOrder={sortOrder() ?? (sortColumn() === 'name' ? 'asc' : 'asc')}
+        onSort={cycleSort}
         onRename={setRenameItem}
         onMove={setMoveItems}
         onTrash={(selected) => void handleTrash(selected)}

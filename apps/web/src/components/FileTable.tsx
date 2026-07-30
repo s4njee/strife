@@ -4,11 +4,21 @@ import type { FolderItem } from '../api/types'
 import { ContextMenu, type ContextMenuAction } from './ContextMenu'
 import './FileTable.css'
 
+export type FileTableSortColumn =
+  | 'name'
+  | 'kind'
+  | 'size'
+  | 'updated_at'
+  | 'created_at'
+
 interface FileTableProps {
   items: FolderItem[]
   loading: boolean
   error?: string
   onRetry: () => void
+  sortColumn?: FileTableSortColumn
+  sortOrder?: 'asc' | 'desc'
+  onSort?: (column: FileTableSortColumn) => void
   onRename?: (item: FolderItem) => void
   onMove?: (items: FolderItem[]) => void
   onTrash?: (items: FolderItem[]) => void
@@ -38,11 +48,29 @@ export function FileTable(props: FileTableProps) {
   const [anchorId, setAnchorId] = createSignal<string>()
   const [contextMenu, setContextMenu] = createSignal<ContextMenuState>()
   let selectAllCheckbox: HTMLInputElement | undefined
-  const sortedItems = createMemo(() =>
-    [...props.items].sort((left, right) => {
+  const sortedItems = createMemo(() => {
+    // Server already sorts; keep a stable client order for static preview.
+    if (props.sortColumn) return props.items
+    return [...props.items].sort((left, right) => {
       if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1
       return left.name.localeCompare(right.name)
-    }),
+    })
+  })
+
+  const sortIndicator = (column: FileTableSortColumn) => {
+    if (props.sortColumn !== column) return ''
+    return props.sortOrder === 'desc' ? ' ↓' : ' ↑'
+  }
+
+  const headerButton = (column: FileTableSortColumn, label: string) => (
+    <button
+      type="button"
+      class="file-table__sort"
+      onClick={() => props.onSort?.(column)}
+    >
+      {label}
+      {sortIndicator(column)}
+    </button>
   )
   const selectedCount = () => selectedIds().size
   const selectedItems = () =>
@@ -226,10 +254,10 @@ export function FileTable(props: FileTableProps) {
                   <th class="file-table__favorite">
                     <span class="sr-only">Favorite</span>
                   </th>
-                  <th>Name</th>
-                  <th>Kind</th>
-                  <th>Size</th>
-                  <th>Date Modified</th>
+                  <th>{headerButton('name', 'Name')}</th>
+                  <th>{headerButton('kind', 'Kind')}</th>
+                  <th>{headerButton('size', 'Size')}</th>
+                  <th>{headerButton('updated_at', 'Date Modified')}</th>
                 </tr>
               </thead>
               <tbody>

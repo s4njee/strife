@@ -1887,6 +1887,35 @@ pub async fn active_child_name_exists(
     .await
 }
 
+/// Column used to sort folder children (folders always sort before files).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ChildrenSort {
+    #[default]
+    Name,
+    Kind,
+    Size,
+    UpdatedAt,
+    CreatedAt,
+}
+
+/// Sort direction for folder children.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SortOrder {
+    #[default]
+    Asc,
+    Desc,
+}
+
+/// Kind filter applied to folder children listings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChildrenKindFilter {
+    Folder,
+    Image,
+    Document,
+    Video,
+    Audio,
+}
+
 /// Lists one page of active children after an optional opaque node cursor.
 ///
 /// # Errors
@@ -1898,38 +1927,118 @@ pub async fn list_children_page(
     cursor: Option<Uuid>,
     limit: u32,
 ) -> Result<Vec<NodeRecord>, sqlx::Error> {
-    sqlx::query_as::<_, NodeRecord>(
+    list_children_page_sorted(
+        pool,
+        parent_id,
+        cursor,
+        limit,
+        ChildrenSort::Name,
+        SortOrder::Asc,
+        &[],
+    )
+    .await
+}
+
+/// Lists active children with sort column, direction, and optional kind filters.
+///
+/// Folders always appear before files. Name-ascending cursor pagination is
+/// preserved for the default sort; other modes return a single limited page.
+///
+/// # Errors
+///
+/// Returns the database error when the query cannot be completed.
+pub async fn list_children_page_sorted(
+    pool: &PgPool,
+    parent_id: Uuid,
+    cursor: Option<Uuid>,
+    limit: u32,
+    sort: ChildrenSort,
+    order: SortOrder,
+    kinds: &[ChildrenKindFilter],
+) -> Result<Vec<NodeRecord>, sqlx::Error> {
+    let order_sql = match order {
+        SortOrder::Asc => "ASC",
+        SortOrder::Desc => "DESC",
+    };
+    let sort_sql = match sort {
+        ChildrenSort::Name => "n.name",
+        ChildrenSort::Kind => "n.kind::text",
+        ChildrenSort::Size => "COALESCE(fo.byte_size, 0)",
+        ChildrenSort::UpdatedAt => "n.updated_at",
+        ChildrenSort::CreatedAt => "n.created_at",
+    };
+
+    let mut kind_clauses = Vec::new();
+    for kind in kinds {
+        kind_clauses.push(match kind {
+            ChildrenKindFilter::Folder => "n.kind = 'folder'".to_owned(),
+            ChildrenKindFilter::Image => {
+                "n.kind = 'file' AND nm.media_kind = 'image'".to_owned()
+            }
+            ChildrenKindFilter::Document => {
+                "n.kind = 'file' AND nm.media_kind = 'document'".to_owned()
+            }
+            ChildrenKindFilter::Video => {
+                "n.kind = 'file' AND nm.media_kind = 'video'".to_owned()
+            }
+            ChildrenKindFilter::Audio => {
+                "n.kind = 'file' AND nm.media_kind = 'audio'".to_owned()
+            }
+        });
+    }
+    let kind_filter = if kind_clauses.is_empty() {
+        "TRUE".to_owned()
+    } else {
+        format!("({})", kind_clauses.join(" OR "))
+    };
+
+    let use_name_cursor =
+        matches!(sort, ChildrenSort::Name) && matches!(order, SortOrder::Asc) && kinds.is_empty();
+
+    let sql = format!(
         r"
         SELECT
-            id,
-            parent_id,
-            name,
-            kind,
-            lifecycle_state,
-            source_created_at,
-            source_modified_at,
-            created_at,
-            updated_at
-        FROM nodes
-        WHERE parent_id = $1
-          AND lifecycle_state = 'active'
+            n.id,
+            n.parent_id,
+            n.name,
+            n.kind,
+            n.lifecycle_state,
+            n.source_created_at,
+            n.source_modified_at,
+            n.created_at,
+            n.updated_at
+        FROM nodes AS n
+        LEFT JOIN file_objects AS fo
+            ON fo.node_id = n.id AND fo.upload_state = 'finalized'
+        LEFT JOIN node_metadata AS nm ON nm.node_id = n.id
+        WHERE n.parent_id = $1
+          AND n.lifecycle_state = 'active'
+          AND ({kind_filter})
           AND (
-              $2::uuid IS NULL
-              OR (name, id) > (
+              NOT $4::bool
+              OR $2::uuid IS NULL
+              OR (n.name, n.id) > (
                   SELECT name, id
                   FROM nodes
                   WHERE id = $2 AND parent_id = $1
               )
           )
-        ORDER BY name, id
+        ORDER BY
+            CASE WHEN n.kind = 'folder' THEN 0 ELSE 1 END,
+            {sort_sql} {order_sql},
+            n.id
         LIMIT $3
-        ",
-    )
-    .bind(parent_id)
-    .bind(cursor)
-    .bind(i64::from(limit))
-    .fetch_all(pool)
-    .await
+        "
+    );
+
+    // Sort/filter fragments come only from enums above, never user input.
+    sqlx::query_as::<_, NodeRecord>(sqlx::AssertSqlSafe(sql))
+        .bind(parent_id)
+        .bind(cursor)
+        .bind(i64::from(limit))
+        .bind(use_name_cursor)
+        .fetch_all(pool)
+        .await
 }
 
 /// Returns an active folder path ordered from the root to the requested node.

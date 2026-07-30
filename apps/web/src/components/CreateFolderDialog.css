@@ -1,3 +1,28 @@
+.folder-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.folder-filters__chip {
+  border: 1px solid var(--color-border-control);
+  border-radius: 999px;
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.folder-filters__chip.is-active,
+.folder-filters__chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
 .folder-toolbar {
   display: flex;
   justify-content: flex-end;

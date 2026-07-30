@@ -59,6 +59,21 @@
   text-transform: uppercase;
 }
 
+.file-table__sort {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.file-table__sort:hover {
+  color: var(--color-text-primary);
+}
+
 .file-table__row:nth-child(even) {
   background: color-mix(in oklab, var(--color-surface-raised) 40%, transparent);
 }

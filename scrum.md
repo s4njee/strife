@@ -2078,12 +2078,27 @@ As a user, I want to sort the file table by clicking column headers so that I ca
 
 **Acceptance Criteria:**
 
-- [ ] Clicking a column header sorts by that column (ascending). Clicking again reverses to descending. A third click returns to default.
-- [ ] Sortable columns: Name, Kind/Type, Size, Date Modified, Date Created.
-- [ ] Sort direction is indicated by an arrow icon in the column header.
-- [ ] Sorting is done server-side: `GET /api/folders/:id/children?sort=name&order=asc`.
-- [ ] Folders always sort before files (within the chosen sort column).
-- [ ] Sort preferences persist in the URL query string (so they survive navigation).
+- [x] Clicking a column header sorts by that column (ascending). Clicking again reverses to descending. A third click returns to default.
+- [x] Sortable columns: Name, Kind/Type, Size, Date Modified, Date Created.
+- [x] Sort direction is indicated by an arrow icon in the column header.
+- [x] Sorting is done server-side: `GET /api/folders/:id/children?sort=name&order=asc`.
+- [x] Folders always sort before files (within the chosen sort column).
+- [x] Sort preferences persist in the URL query string (so they survive navigation).
+
+**Implementation report:** Extended children listing with server-side sort columns and direction (folders first), header click cycling asc→desc→default with arrow indicators, and sort state stored in the URL query string.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/components/FileTable.css`
+- `apps/web/src/components/FileTable.tsx`
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/folders.rs`
+- `crates/db/src/lib.rs`
 
 ---
 
@@ -2093,12 +2108,25 @@ As a user, I want to filter the file table by file kind (folders, images, docume
 
 **Acceptance Criteria:**
 
-- [ ] A filter bar (above the table or in the toolbar) has toggle buttons for: All, Folders, Images, Documents, Video, Audio.
-- [ ] Filters map to MIME prefixes or a `media_kind` enum on the server.
-- [ ] `GET /api/folders/:id/children?kind=image` returns only matching items.
-- [ ] Multiple filters can be combined (e.g., images + video).
-- [ ] Active filters are visually highlighted.
-- [ ] Filter state persists in the URL query string.
+- [x] A filter bar (above the table or in the toolbar) has toggle buttons for: All, Folders, Images, Documents, Video, Audio.
+- [x] Filters map to MIME prefixes or a `media_kind` enum on the server.
+- [x] `GET /api/folders/:id/children?kind=image` returns only matching items.
+- [x] Multiple filters can be combined (e.g., images + video).
+- [x] Active filters are visually highlighted.
+- [x] Filter state persists in the URL query string.
+
+**Implementation report:** Added multi-select kind chips (folder/image/document/video/audio) that map to `node_metadata.media_kind` and folder kind, combine via repeated `kind` query params, and stay highlighted with URL persistence.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `apps/web/src/components/CreateFolderDialog.css`
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/folders.rs`
+- `crates/db/src/lib.rs`
 
 ---
 

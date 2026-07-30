@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use strife_db::{
-    FolderMoveConflict, FolderMoveConflictReason, FolderMutationError, NodeKind, NodeRecord,
+    ChildrenKindFilter, ChildrenSort, FolderMoveConflict, FolderMoveConflictReason,
+    FolderMutationError, NodeKind, NodeRecord, SortOrder,
 };
 use strife_domain::{FolderError, FolderRules};
 use uuid::Uuid;
@@ -37,6 +38,13 @@ pub fn router(pool: PgPool) -> Router {
 struct ListChildrenQuery {
     cursor: Option<Uuid>,
     limit: Option<u32>,
+    /// Sort column: `name`, `kind`, `size`, `updated_at` / `modified`, `created_at` / `created`.
+    sort: Option<String>,
+    /// Sort direction: `asc` or `desc`.
+    order: Option<String>,
+    /// Kind filters: `folder`, `image`, `document`, `video`, `audio` (repeatable).
+    #[serde(default)]
+    kind: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,11 +220,17 @@ async fn list_children(
         .limit
         .unwrap_or(DEFAULT_PAGE_SIZE)
         .clamp(1, MAX_PAGE_SIZE);
-    let mut nodes = strife_db::list_children_page(
+    let sort = parse_sort(query.sort.as_deref())?;
+    let order = parse_order(query.order.as_deref())?;
+    let kinds = parse_kinds(&query.kind)?;
+    let mut nodes = strife_db::list_children_page_sorted(
         &state.pool,
         folder_id,
         query.cursor,
         limit.saturating_add(1),
+        sort,
+        order,
+        &kinds,
     )
     .await
     .map_err(|_| ApiError::Internal)?;
@@ -242,6 +256,48 @@ async fn list_children(
             .collect(),
         next_cursor,
     }))
+}
+
+fn parse_sort(value: Option<&str>) -> Result<ChildrenSort, ApiError> {
+    match value.unwrap_or("name") {
+        "name" => Ok(ChildrenSort::Name),
+        "kind" | "type" => Ok(ChildrenSort::Kind),
+        "size" => Ok(ChildrenSort::Size),
+        "updated_at" | "modified" | "date" => Ok(ChildrenSort::UpdatedAt),
+        "created_at" | "created" => Ok(ChildrenSort::CreatedAt),
+        _ => Err(ApiError::BadRequest("Unknown sort column")),
+    }
+}
+
+fn parse_order(value: Option<&str>) -> Result<SortOrder, ApiError> {
+    match value.unwrap_or("asc") {
+        "asc" => Ok(SortOrder::Asc),
+        "desc" => Ok(SortOrder::Desc),
+        _ => Err(ApiError::BadRequest("order must be asc or desc")),
+    }
+}
+
+fn parse_kinds(values: &[String]) -> Result<Vec<ChildrenKindFilter>, ApiError> {
+    let mut kinds = Vec::new();
+    for value in values {
+        for part in value.split(',') {
+            let part = part.trim();
+            if part.is_empty() || part == "all" {
+                continue;
+            }
+            kinds.push(match part {
+                "folder" | "folders" => ChildrenKindFilter::Folder,
+                "image" | "images" => ChildrenKindFilter::Image,
+                "document" | "documents" => ChildrenKindFilter::Document,
+                "video" | "videos" => ChildrenKindFilter::Video,
+                "audio" => ChildrenKindFilter::Audio,
+                _ => return Err(ApiError::BadRequest("Unknown kind filter")),
+            });
+        }
+    }
+    kinds.sort_by_key(|kind| format!("{kind:?}"));
+    kinds.dedup();
+    Ok(kinds)
 }
 
 async fn list_ancestors(
