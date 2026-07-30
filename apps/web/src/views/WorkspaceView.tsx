@@ -377,6 +377,54 @@ const previewItems: FolderItem[] = [
     created_at: '2026-07-22T02:11:00Z',
     updated_at: '2026-07-22T02:11:00Z',
   },
+  {
+    id: '20000000-0000-0000-0000-000000000006',
+    name: 'Neighborhood newsletter.docx',
+    kind: 'file',
+    size_bytes: 846_000,
+    created_at: '2026-07-23T16:40:00Z',
+    updated_at: '2026-07-24T01:12:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000007',
+    name: 'Porch interview.mp3',
+    kind: 'file',
+    size_bytes: 12_840_000,
+    created_at: '2026-07-24T19:08:00Z',
+    updated_at: '2026-07-24T19:08:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000008',
+    name: 'Mountain sequence.gif',
+    kind: 'file',
+    size_bytes: 6_240_000,
+    created_at: '2026-07-25T13:54:00Z',
+    updated_at: '2026-07-25T13:54:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000009',
+    name: 'DSC_4821.nef',
+    kind: 'file',
+    size_bytes: 62_400_000,
+    created_at: '2026-07-26T03:22:00Z',
+    updated_at: '2026-07-26T03:22:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000010',
+    name: 'Scanned hardware receipt.png',
+    kind: 'file',
+    size_bytes: 4_190_000,
+    created_at: '2026-07-27T21:31:00Z',
+    updated_at: '2026-07-27T21:34:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000011',
+    name: 'Cold storage archive.zip',
+    kind: 'file',
+    size_bytes: 1_482_000_000,
+    created_at: '2026-07-28T04:05:00Z',
+    updated_at: '2026-07-28T04:05:00Z',
+  },
 ]
 
 function makePreviewDetails(
@@ -454,6 +502,71 @@ const previewFileDetails = new Map<string, FileDetails>([
       processing_status: 'partially_processed',
     }),
   ],
+  [
+    previewItems[5].id,
+    makePreviewDetails(previewItems[5], {
+      detected_mime:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      media_kind: 'document',
+      page_count: 8,
+      document_title: 'Lakeside Neighborhood Newsletter',
+      document_author: 'Community Association',
+      document_created_at: '2026-07-23T16:40:00Z',
+      document_modified_at: '2026-07-24T01:12:00Z',
+    }),
+  ],
+  [
+    previewItems[6].id,
+    makePreviewDetails(previewItems[6], {
+      detected_mime: 'audio/mpeg',
+      media_kind: 'audio',
+      duration_ms: 401_000,
+    }),
+  ],
+  [
+    previewItems[7].id,
+    makePreviewDetails(previewItems[7], {
+      detected_mime: 'image/gif',
+      media_kind: 'image',
+      width: 1280,
+      height: 720,
+      orientation: 1,
+    }),
+  ],
+  [
+    previewItems[8].id,
+    makePreviewDetails(previewItems[8], {
+      detected_mime: 'image/x-nikon-nef',
+      media_kind: 'image',
+      width: 8256,
+      height: 5504,
+      orientation: 1,
+      camera_make: 'Nikon',
+      camera_model: 'Z 8',
+      capture_time: '2026-07-25T22:22:00Z',
+      has_gps: true,
+      gps_latitude: 46.8523,
+      gps_longitude: -121.7603,
+    }),
+  ],
+  [
+    previewItems[9].id,
+    makePreviewDetails(previewItems[9], {
+      detected_mime: 'image/png',
+      media_kind: 'image',
+      width: 1800,
+      height: 2600,
+      orientation: 1,
+      processing_status: 'partially_processed',
+    }),
+  ],
+  [
+    previewItems[10].id,
+    makePreviewDetails(previewItems[10], {
+      detected_mime: 'application/zip',
+      media_kind: 'other',
+    }),
+  ],
 ])
 
 const previewStreams = new Map<string, MediaStream[]>([
@@ -488,6 +601,24 @@ const previewStreams = new Map<string, MediaStream[]>([
       },
     ],
   ],
+  [
+    previewItems[6].id,
+    [
+      {
+        id: 'stream-interview-audio',
+        stream_index: 0,
+        stream_type: 'audio',
+        codec: 'mp3',
+        width: null,
+        height: null,
+        duration_ms: 401_000,
+        bitrate_bps: 256_000,
+        frame_rate: null,
+        language: 'eng',
+        created_at: previewItems[6].created_at,
+      },
+    ],
+  ],
 ])
 
 const demoDocument = `data:text/html,${encodeURIComponent(`
@@ -496,10 +627,29 @@ const demoDocument = `data:text/html,${encodeURIComponent(`
 <p style="color:#667;text-transform:uppercase;letter-spacing:.12em">Home inventory · 2026</p><h1 style="font-size:2.6rem">Household Inventory</h1><hr><h2>Living room</h2><p>Furniture, electronics, art, and insured valuables.</p><table style="width:100%;border-collapse:collapse"><tr><th style="text-align:left;border-bottom:1px solid #bbb;padding:.8rem">Item</th><th style="text-align:right;border-bottom:1px solid #bbb">Value</th></tr><tr><td style="padding:.8rem">Camera kit</td><td style="text-align:right">$4,200</td></tr><tr><td style="padding:.8rem">Stereo system</td><td style="text-align:right">$1,800</td></tr></table>
 </main></body></html>`)}`
 
+const demoNewsletter = `data:text/html,${encodeURIComponent(`
+<!doctype html><html><body style="font-family:Georgia,serif;margin:0;background:#d8dad3;padding:3rem">
+<main style="box-sizing:border-box;max-width:48rem;min-height:62rem;margin:auto;padding:4rem;background:#fffdf6;color:#273027;box-shadow:0 1rem 3rem #0003">
+<p style="color:#58705b;text-transform:uppercase;letter-spacing:.16em">July 2026 · Volume 12</p><h1 style="font-size:2.8rem;color:#244b35">Lakeside Notes</h1><hr style="border-color:#9bb29f"><h2>Summer on the block</h2><p>Meet your neighbors at the annual picnic, browse the garden tour, and help stock the community pantry.</p><blockquote style="border-left:.3rem solid #d39745;margin:2rem 0;padding:1rem 1.5rem;background:#faf1df">Saturday, August 8 · Lakeside Park Pavilion</blockquote><h2>In this issue</h2><ol><li>Picnic schedule and volunteer list</li><li>Water-wise gardening</li><li>Library book exchange</li></ol>
+</main></body></html>`)}`
+
+const demoReceipt = `data:image/svg+xml,${encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1300">
+  <rect width="900" height="1300" fill="#d9d3c8"/><path d="M150 65h600v1170l-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12-22 12-22-12 12V65Z" fill="#fffdf6"/>
+  <g fill="#242424" font-family="monospace" text-anchor="middle"><text x="450" y="150" font-size="42" font-weight="bold">NORTHSIDE HARDWARE</text><text x="450" y="202" font-size="25">THANK YOU FOR SHOPPING LOCAL</text></g>
+  <g fill="#333" font-family="monospace" font-size="28"><text x="205" y="310">DECK SCREWS 3 IN.</text><text x="690" y="310" text-anchor="end">24.98</text><text x="205" y="365">CEDAR BOARD 8 FT.</text><text x="690" y="365" text-anchor="end">52.40</text><text x="205" y="420">EXTERIOR STAIN</text><text x="690" y="420" text-anchor="end">38.99</text><path d="M205 470h485" stroke="#333" stroke-dasharray="12 10"/><text x="205" y="535">SUBTOTAL</text><text x="690" y="535" text-anchor="end">116.37</text><text x="205" y="590">TAX</text><text x="690" y="590" text-anchor="end">11.06</text><text x="205" y="660" font-weight="bold">TOTAL</text><text x="690" y="660" text-anchor="end" font-weight="bold">$127.43</text><text x="450" y="790" text-anchor="middle">VISA •••• 4821</text><text x="450" y="850" text-anchor="middle">07/27/2026  4:31 PM</text></g>
+</svg>`)}`
+
 const previewSources = new Map<string, string>([
   [previewItems[2].id, demoDocument],
   [previewItems[3].id, demoImage],
   [previewItems[4].id, ''],
+  [previewItems[5].id, demoNewsletter],
+  [previewItems[6].id, ''],
+  [previewItems[7].id, demoImage],
+  [previewItems[8].id, demoImage],
+  [previewItems[9].id, demoReceipt],
+  [previewItems[10].id, ''],
 ])
 
 export function FavoritesView() {

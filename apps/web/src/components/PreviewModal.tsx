@@ -158,7 +158,7 @@ export function PreviewModal(props: PreviewModalProps) {
                   <div class="preview-modal__audio">
                     <div aria-hidden="true">♫</div>
                     <audio
-                      src={source()}
+                      src={source() || undefined}
                       controls
                       onError={() => setPlaybackError(true)}
                     />
@@ -223,9 +223,11 @@ function mimeFromName(name: string): string {
         jpeg: 'image/jpeg',
         png: 'image/png',
         gif: 'image/gif',
+        nef: 'image/x-nikon-nef',
         mp4: 'video/mp4',
         mp3: 'audio/mpeg',
         pdf: 'application/pdf',
+        zip: 'application/zip',
         docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       } as Record<string, string>
     )[extension ?? ''] ?? 'application/octet-stream'
