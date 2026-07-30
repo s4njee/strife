@@ -60,19 +60,27 @@ impl MetadataHandler {
         let result = async {
             copy_to_path(self.storage.as_ref(), storage_id, &source).await?;
             let mime = detect_mime(&source)?;
+            let mut found = false;
             for artifact_type in [ArtifactType::Thumbnail, ArtifactType::Preview] {
                 let Some(artifact) =
                     get_artifact(&self.pool, job.target_node_id, artifact_type).await?
                 else {
                     continue;
                 };
+                if artifact.state == ArtifactState::Failed {
+                    bail!("preview artifact previously failed");
+                }
                 if artifact.state != ArtifactState::Generating {
                     continue;
                 }
+                found = true;
                 if let Err(error) = self.generate_artifact(&artifact, &source, &mime).await {
                     self.mark_artifact_failed(&artifact).await?;
                     return Err(error);
                 }
+            }
+            if !found {
+                bail!("preview job has no generating artifact");
             }
             Ok(())
         }

@@ -23,6 +23,7 @@ import { FileDetailsPanel } from '../components/FileDetailsPanel'
 import { FileUploadControl } from '../components/FileUploadControl'
 import { FolderUploadControl } from '../components/FolderUploadControl'
 import { MoveFolderDialog } from '../components/MoveFolderDialog'
+import { demoImage, PreviewModal } from '../components/PreviewModal'
 import { RenameFolderDialog } from '../components/RenameFolderDialog'
 import '../components/UploadDropZone.css'
 import { useUploads } from '../uploads/UploadContext'
@@ -109,6 +110,7 @@ function FolderContents(props: { folderId: string }) {
   const [dragDepth, setDragDepth] = createSignal(0)
   const [dropResults, setDropResults] = createSignal<FolderUploadResult[]>([])
   const [detailsItem, setDetailsItem] = createSignal<FolderItem>()
+  const [previewItem, setPreviewItem] = createSignal<FolderItem>()
   const uploads = useUploads()
   const [children, { mutate, refetch }] = createResource(
     () => (staticPreview ? false : props.folderId),
@@ -263,6 +265,7 @@ function FolderContents(props: { folderId: string }) {
         onRename={setRenameItem}
         onMove={setMoveItems}
         onDetails={setDetailsItem}
+        onPreview={setPreviewItem}
         onSelectionChange={(selected) => {
           if (
             detailsItem() &&
@@ -273,6 +276,22 @@ function FolderContents(props: { folderId: string }) {
           }
         }}
       />
+      <Show when={previewItem()}>
+        {(item) => (
+          <PreviewModal
+            item={item()}
+            files={items().filter((candidate) => candidate.kind === 'file')}
+            staticDetails={
+              staticPreview ? previewFileDetails.get(item().id) : undefined
+            }
+            staticSource={
+              staticPreview ? previewSources.get(item().id) : undefined
+            }
+            onNavigate={setPreviewItem}
+            onClose={() => setPreviewItem(undefined)}
+          />
+        )}
+      </Show>
       <Show when={detailsItem()}>
         {(item) => (
           <FileDetailsPanel
@@ -469,6 +488,18 @@ const previewStreams = new Map<string, MediaStream[]>([
       },
     ],
   ],
+])
+
+const demoDocument = `data:text/html,${encodeURIComponent(`
+<!doctype html><html><body style="font-family:system-ui;margin:0;background:#d9d9dc;padding:3rem">
+<main style="box-sizing:border-box;max-width:48rem;min-height:62rem;margin:auto;padding:5rem;background:white;color:#202024;box-shadow:0 1rem 3rem #0003">
+<p style="color:#667;text-transform:uppercase;letter-spacing:.12em">Home inventory · 2026</p><h1 style="font-size:2.6rem">Household Inventory</h1><hr><h2>Living room</h2><p>Furniture, electronics, art, and insured valuables.</p><table style="width:100%;border-collapse:collapse"><tr><th style="text-align:left;border-bottom:1px solid #bbb;padding:.8rem">Item</th><th style="text-align:right;border-bottom:1px solid #bbb">Value</th></tr><tr><td style="padding:.8rem">Camera kit</td><td style="text-align:right">$4,200</td></tr><tr><td style="padding:.8rem">Stereo system</td><td style="text-align:right">$1,800</td></tr></table>
+</main></body></html>`)}`
+
+const previewSources = new Map<string, string>([
+  [previewItems[2].id, demoDocument],
+  [previewItems[3].id, demoImage],
+  [previewItems[4].id, ''],
 ])
 
 export function FavoritesView() {

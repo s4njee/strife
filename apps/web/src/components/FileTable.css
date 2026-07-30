@@ -32,6 +32,11 @@
   cursor: pointer;
 }
 
+.file-table-selection__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .file-table th,
 .file-table td {
   height: 2.65rem;

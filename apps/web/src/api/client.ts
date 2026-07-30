@@ -12,9 +12,82 @@ import type {
   MediaStream,
   MoveFolderConflict,
   MoveFoldersResponse,
+  PreviewJobStatus,
   ReadinessResponse,
   UploadSession,
 } from './types'
+
+export async function prepareFilePreview(
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const previewUrl = `/api/files/${fileId}/preview`
+  let response = await fetch(previewUrl, { signal })
+  if (response.ok) {
+    await response.body?.cancel()
+    return previewUrl
+  }
+  if (response.status === 404) {
+    throw new ApiClientError('A preview is not available for this file.', {
+      status: 404,
+      code: 'preview_not_supported',
+    })
+  }
+  if (response.status !== 202) {
+    throw new ApiClientError(`Preview request failed (${response.status}).`)
+  }
+
+  const pending: unknown = await response.json()
+  if (!isRecord(pending) || typeof pending.job_id !== 'string') {
+    throw new ApiClientError('The preview response was invalid.')
+  }
+  while (!signal?.aborted) {
+    await waitForPreviewPoll(signal)
+    response = await fetch(`/api/jobs/${pending.job_id}`, {
+      headers: { Accept: 'application/json' },
+      signal,
+    })
+    if (!response.ok) {
+      throw new ApiClientError(`Preview status failed (${response.status}).`)
+    }
+    const status: unknown = await response.json()
+    if (!isPreviewJobStatus(status)) {
+      throw new ApiClientError('The preview status response was invalid.')
+    }
+    if (status.status === 'completed') return previewUrl
+    if (status.status === 'failed' || status.status === 'cancelled') {
+      throw new ApiClientError(
+        status.error ?? 'The preview could not be generated.',
+      )
+    }
+  }
+  throw new DOMException('Preview request aborted', 'AbortError')
+}
+
+function waitForPreviewPoll(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(resolve, 750)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        window.clearTimeout(timeout)
+        reject(new DOMException('Preview request aborted', 'AbortError'))
+      },
+      { once: true },
+    )
+  })
+}
+
+function isPreviewJobStatus(value: unknown): value is PreviewJobStatus {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    ['pending', 'leased', 'completed', 'failed', 'cancelled'].includes(
+      String(value.status),
+    ) &&
+    (value.error === null || typeof value.error === 'string')
+  )
+}
 
 export async function getFileDetails(
   fileId: string,

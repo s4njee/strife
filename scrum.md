@@ -1883,17 +1883,34 @@ As a user, I want to preview a file by double-clicking it or pressing a "Preview
 
 **Acceptance Criteria:**
 
-- [ ] Double-clicking a file row opens a preview modal/lightbox.
-- [ ] The modal shows a loading spinner while the preview is being generated.
-- [ ] For images: displays the preview image (zoomable).
-- [ ] For video: shows a `<video>` player with controls.
-- [ ] For audio: shows an `<audio>` player with controls.
-- [ ] For PDF: embeds the PDF viewer.
-- [ ] For DOCX: shows the converted PDF.
-- [ ] For unsupported types: shows file info and a "Download" button.
-- [ ] Pressing Escape or clicking outside closes the modal.
-- [ ] Arrow keys navigate to the next/previous file in the table.
-- [ ] Works in both themes.
+- [x] Double-clicking a file row opens a preview modal/lightbox.
+- [x] The modal shows a loading spinner while the preview is being generated.
+- [x] For images: displays the preview image (zoomable).
+- [x] For video: shows a `<video>` player with controls.
+- [x] For audio: shows an `<audio>` player with controls.
+- [x] For PDF: embeds the PDF viewer.
+- [x] For DOCX: shows the converted PDF.
+- [x] For unsupported types: shows file info and a "Download" button.
+- [x] Pressing Escape or clicking outside closes the modal.
+- [x] Arrow keys navigate to the next/previous file in the table.
+- [x] Works in both themes.
+
+**Implementation report:** Added a responsive preview lightbox with generation polling, media-specific image/video/audio/PDF renderers, DOCX-to-PDF display, zoom, fallback download details, backdrop and Escape dismissal, and file-to-file keyboard navigation. Fixture previews and browser checks verified the spinner, toolbar and double-click launch paths, image zoom, PDF and video renderers, navigation, dismissal, and both color themes without console errors.
+
+**New files:**
+
+- `apps/web/src/components/PreviewModal.css`
+- `apps/web/src/components/PreviewModal.tsx`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/components/FileTable.css`
+- `apps/web/src/components/FileTable.tsx`
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/files.rs`
+- `crates/worker/src/metadata.rs`
 
 ---
 

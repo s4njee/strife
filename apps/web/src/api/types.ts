@@ -65,6 +65,12 @@ export interface FileDetails {
   processing_status: ProcessingStatus
 }
 
+export interface PreviewJobStatus {
+  id: string
+  status: 'pending' | 'leased' | 'completed' | 'failed' | 'cancelled'
+  error: string | null
+}
+
 export interface MediaStream {
   id: string
   stream_index: number

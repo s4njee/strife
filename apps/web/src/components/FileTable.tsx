@@ -13,6 +13,7 @@ interface FileTableProps {
   onMove?: (items: FolderItem[]) => void
   onTrash?: (items: FolderItem[]) => void
   onDetails?: (item: FolderItem) => void
+  onPreview?: (item: FolderItem) => void
   onSelectionChange?: (items: FolderItem[]) => void
 }
 
@@ -164,12 +165,20 @@ export function FileTable(props: FileTableProps) {
               selectedItems()[0]?.kind === 'file'
             }
           >
-            <button
-              type="button"
-              onClick={() => props.onDetails?.(selectedItems()[0])}
-            >
-              Details
-            </button>
+            <div class="file-table-selection__actions">
+              <button
+                type="button"
+                onClick={() => props.onPreview?.(selectedItems()[0])}
+              >
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => props.onDetails?.(selectedItems()[0])}
+              >
+                Details
+              </button>
+            </div>
           </Show>
         </div>
       </Show>
@@ -230,7 +239,11 @@ export function FileTable(props: FileTableProps) {
                       aria-selected={selectedIds().has(item.id)}
                       onClick={(event) => selectRow(item, event)}
                       onContextMenu={(event) => openContextMenu(item, event)}
-                      onDblClick={() => openFolder(item)}
+                      onDblClick={() =>
+                        item.kind === 'file'
+                          ? props.onPreview?.(item)
+                          : openFolder(item)
+                      }
                       data-kind={item.kind}
                     >
                       <td class="file-table__check">

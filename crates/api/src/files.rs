@@ -100,6 +100,8 @@ async fn artifact_request(state: &FileState, id: Uuid, kind: ArtifactType, mime:
                         .unwrap();
                 }
             }
+        } else if artifact.state == ArtifactState::Generating {
+            return generating_response(state, id).await;
         }
     }
     let key = Uuid::new_v4();
@@ -122,7 +124,24 @@ async fn artifact_request(state: &FileState, id: Uuid, kind: ArtifactType, mime:
     if artifact.is_err() {
         return status_response(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let job=match strife_db::enqueue_job(&state.pool,JobType::PreviewGeneration,id,0).await { Ok(Some(job))=>job, Ok(None)=>match sqlx::query_as::<_,strife_db::JobRecord>("SELECT * FROM jobs WHERE target_node_id=$1 AND job_type='preview_generation' AND state IN ('pending','leased')").bind(id).fetch_one(&state.pool).await {Ok(job)=>job,Err(_)=>return status_response(StatusCode::INTERNAL_SERVER_ERROR)},Err(_)=>return status_response(StatusCode::INTERNAL_SERVER_ERROR)};
+    generating_response(state, id).await
+}
+
+async fn generating_response(state: &FileState, id: Uuid) -> Response {
+    let job = match strife_db::enqueue_job(&state.pool, JobType::PreviewGeneration, id, 0).await {
+        Ok(Some(job)) => job,
+        Ok(None) => match sqlx::query_as::<_, strife_db::JobRecord>(
+            "SELECT * FROM jobs WHERE target_node_id=$1 AND job_type='preview_generation' AND state IN ('pending','leased')",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await
+        {
+            Ok(job) => job,
+            Err(_) => return status_response(StatusCode::INTERNAL_SERVER_ERROR),
+        },
+        Err(_) => return status_response(StatusCode::INTERNAL_SERVER_ERROR),
+    };
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({"status":"generating","job_id":job.id})),
