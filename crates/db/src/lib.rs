@@ -91,6 +91,82 @@ pub enum MediaStreamType {
     Subtitle,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "artifact_type", rename_all = "lowercase")]
+pub enum ArtifactType {
+    Thumbnail,
+    Preview,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "artifact_state", rename_all = "lowercase")]
+pub enum ArtifactState {
+    Generating,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct DerivedArtifactRecord {
+    pub id: Uuid,
+    pub node_id: Uuid,
+    pub artifact_type: ArtifactType,
+    pub format: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub storage_key: String,
+    pub byte_size: i64,
+    pub generator_version: String,
+    pub state: ArtifactState,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+pub struct UpsertArtifact<'a> {
+    pub node_id: Uuid,
+    pub artifact_type: ArtifactType,
+    pub format: &'a str,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub storage_key: &'a str,
+    pub byte_size: i64,
+    pub generator_version: &'a str,
+    pub state: ArtifactState,
+}
+
+/// Fetches one cached artifact.
+///
+/// # Errors
+/// Returns a database error when the artifact cannot be queried.
+pub async fn get_artifact(
+    pool: &PgPool,
+    node_id: Uuid,
+    artifact_type: ArtifactType,
+) -> Result<Option<DerivedArtifactRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM derived_artifacts WHERE node_id = $1 AND artifact_type = $2")
+        .bind(node_id)
+        .bind(artifact_type)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Creates or replaces the durable state for one artifact type.
+///
+/// # Errors
+/// Returns a database error when the artifact cannot be persisted.
+pub async fn create_or_update_artifact(
+    pool: &PgPool,
+    input: &UpsertArtifact<'_>,
+) -> Result<DerivedArtifactRecord, sqlx::Error> {
+    sqlx::query_as(r"INSERT INTO derived_artifacts (id,node_id,artifact_type,format,width,height,storage_key,byte_size,generator_version,state)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (node_id,artifact_type) DO UPDATE SET format=EXCLUDED.format,width=EXCLUDED.width,height=EXCLUDED.height,storage_key=EXCLUDED.storage_key,byte_size=EXCLUDED.byte_size,generator_version=EXCLUDED.generator_version,state=EXCLUDED.state,updated_at=now()
+        RETURNING *")
+        .bind(Uuid::new_v4()).bind(input.node_id).bind(input.artifact_type).bind(input.format)
+        .bind(input.width).bind(input.height).bind(input.storage_key).bind(input.byte_size)
+        .bind(input.generator_version).bind(input.state).fetch_one(pool).await
+}
+
 /// Normalized media stream values written after a successful probe.
 pub struct MediaStreamInput<'a> {
     pub stream_index: i32,

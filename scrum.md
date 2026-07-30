@@ -1687,9 +1687,21 @@ As a developer, I want a `derived_artifacts` table for cached previews and thumb
 
 **Acceptance Criteria:**
 
-- [ ] `derived_artifacts`: `id`, `node_id` (FK), `artifact_type` (enum: `thumbnail` | `preview`), `format` (text, e.g., `image/webp`, `image/jpeg`, `application/pdf`), `width` (int, nullable), `height` (int, nullable), `storage_key` (text), `byte_size` (bigint), `generator_version` (text), `state` (enum: `generating` | `ready` | `failed`), `created_at`.
-- [ ] Unique constraint on `(node_id, artifact_type)`.
-- [ ] DB queries: `get_artifact`, `create_or_update_artifact`.
+- [x] `derived_artifacts`: `id`, `node_id` (FK), `artifact_type` (enum: `thumbnail` | `preview`), `format` (text, e.g., `image/webp`, `image/jpeg`, `application/pdf`), `width` (int, nullable), `height` (int, nullable), `storage_key` (text), `byte_size` (bigint), `generator_version` (text), `state` (enum: `generating` | `ready` | `failed`), `created_at`.
+- [x] Unique constraint on `(node_id, artifact_type)`.
+- [x] DB queries: `get_artifact`, `create_or_update_artifact`.
+
+**Implementation report:** Added a constrained derived-artifact cache schema and typed upsert/read API covering generation, readiness, failure, dimensions, format, storage identity, size, and generator version. PostgreSQL integration coverage verifies repeated writes update the single node/type record.
+
+**New files:**
+
+- `crates/db/migrations/0008_derived_artifacts.up.sql`
+- `crates/db/migrations/0008_derived_artifacts.down.sql`
+- `crates/db/tests/artifacts.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
 
 ---
 
