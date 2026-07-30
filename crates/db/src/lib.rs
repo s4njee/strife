@@ -968,6 +968,34 @@ pub struct NodeRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Typed representation of a row in `trash_entries` joined with node details.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct TrashEntryRecord {
+    pub id: Uuid,
+    pub node_id: Uuid,
+    pub original_parent_id: Option<Uuid>,
+    pub trashed_at: DateTime<Utc>,
+    pub scheduled_purge_at: DateTime<Utc>,
+    pub name: String,
+    pub kind: NodeKind,
+    pub parent_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Expected failures for trash and restore mutations.
+#[derive(Debug, thiserror::Error)]
+pub enum TrashMutationError {
+    #[error(transparent)]
+    Rule(#[from] FolderError),
+    #[error("the root folder cannot be trashed")]
+    CannotTrashRoot,
+    #[error("the node is not in the trash")]
+    NotTrashed,
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+}
+
 /// Typed representation of a row in `file_objects`.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct FileObjectRecord {
@@ -2274,3 +2302,458 @@ fn map_finalize_error(error: sqlx::Error) -> FinalizeUploadError {
 fn is_unique_violation(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::Database(database_error) if database_error.code().as_deref() == Some("23505"))
 }
+
+/// Moves one active node and all of its active descendants into trash.
+///
+/// Only the explicitly trashed root receives a `trash_entries` row. Descendants
+/// become `trashed` in the same transaction so normal listings exclude them.
+///
+/// # Errors
+///
+/// Returns `CannotTrashRoot` for the stable root, `NotFound` for missing or
+/// already-trashed nodes, or a database error.
+pub async fn trash_node(pool: &PgPool, node_id: Uuid) -> Result<NodeRecord, TrashMutationError> {
+    trash_nodes(pool, &[node_id]).await?.into_iter().next().ok_or(FolderError::NotFound.into())
+}
+
+/// Moves one or more active nodes (and their active descendants) into trash.
+///
+/// All selected roots and every descendant transition in a single transaction.
+/// Nested selections under another selected root are de-duplicated.
+///
+/// # Errors
+///
+/// Returns `CannotTrashRoot` if the root is selected, `NotFound` if any id is
+/// missing or not active, or a database error.
+pub async fn trash_nodes(
+    pool: &PgPool,
+    node_ids: &[Uuid],
+) -> Result<Vec<NodeRecord>, TrashMutationError> {
+    let mut ids = node_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if ids.contains(&ROOT_NODE_ID) {
+        return Err(TrashMutationError::CannotTrashRoot);
+    }
+
+    let mut transaction = pool.begin().await?;
+    let roots = sqlx::query_as::<_, NodeRecord>(
+        r"
+        SELECT
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        FROM nodes
+        WHERE id = ANY($1)
+          AND lifecycle_state = 'active'
+        FOR UPDATE
+        ",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    if roots.len() != ids.len() {
+        return Err(FolderError::NotFound.into());
+    }
+
+    // Prefer outer roots when a selection includes both a folder and its child.
+    let ancestry = ancestor_map_for_nodes(&mut transaction, &ids).await?;
+    let mut top_level: Vec<NodeRecord> = Vec::new();
+    for root in roots {
+        let nested = ancestry
+            .get(&root.id)
+            .is_some_and(|ancestors| ancestors.iter().any(|ancestor| ids.contains(ancestor)));
+        if !nested {
+            top_level.push(root);
+        }
+    }
+
+    let top_level_ids: Vec<Uuid> = top_level.iter().map(|node| node.id).collect();
+    let all_ids = collect_active_subtree_ids(&mut transaction, &top_level_ids).await?;
+
+    sqlx::query(
+        r"
+        UPDATE nodes
+        SET lifecycle_state = 'trashed', updated_at = now()
+        WHERE id = ANY($1)
+          AND lifecycle_state = 'active'
+        ",
+    )
+    .bind(&all_ids)
+    .execute(&mut *transaction)
+    .await?;
+
+    for root in &top_level {
+        sqlx::query(
+            r"
+            INSERT INTO trash_entries (id, node_id, original_parent_id)
+            VALUES ($1, $2, $3)
+            ",
+        )
+        .bind(Uuid::new_v4())
+        .bind(root.id)
+        .bind(root.parent_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    let trashed = sqlx::query_as::<_, NodeRecord>(
+        r"
+        SELECT
+            id,
+            parent_id,
+            name,
+            kind,
+            lifecycle_state,
+            source_created_at,
+            source_modified_at,
+            created_at,
+            updated_at
+        FROM nodes
+        WHERE id = ANY($1)
+        ORDER BY name, id
+        ",
+    )
+    .bind(&top_level_ids)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+    Ok(trashed)
+}
+
+/// Restores a top-level trashed node and its trashed descendants to active.
+///
+/// When the original parent is missing or no longer active, the node is
+/// restored under the stable root.
+///
+/// # Errors
+///
+/// Returns `NotTrashed` when no trash entry exists, `NameConflict` when an
+/// active sibling blocks the restore destination, `NotFound` for missing nodes,
+/// or a database error.
+pub async fn restore_node(pool: &PgPool, node_id: Uuid) -> Result<NodeRecord, TrashMutationError> {
+    let mut transaction = pool.begin().await?;
+    let (entry_id, original_parent_id) = lock_trash_entry(&mut transaction, node_id).await?;
+    let node = lock_trashed_node(&mut transaction, node_id).await?;
+    let restore_parent =
+        resolve_restore_parent(&mut transaction, original_parent_id.or(node.parent_id)).await?;
+    ensure_restore_name_available(&mut transaction, restore_parent, &node.name, node_id).await?;
+
+    let subtree_ids = collect_trashed_subtree_ids(&mut transaction, node_id).await?;
+    reactivate_trashed_subtree(&mut transaction, node_id, restore_parent, &subtree_ids).await?;
+    sqlx::query("DELETE FROM trash_entries WHERE id = $1")
+        .bind(entry_id)
+        .execute(&mut *transaction)
+        .await?;
+
+    let restored = get_node_by_id_in_tx(&mut transaction, node_id)
+        .await?
+        .ok_or(FolderError::NotFound)?;
+    transaction.commit().await?;
+    Ok(restored)
+}
+
+/// Lists top-level trashed items ordered by most recently trashed first.
+///
+/// # Errors
+///
+/// Returns a database error when the query cannot be completed.
+pub async fn list_trash(pool: &PgPool) -> Result<Vec<TrashEntryRecord>, sqlx::Error> {
+    sqlx::query_as::<_, TrashEntryRecord>(
+        r"
+        SELECT
+            te.id,
+            te.node_id,
+            te.original_parent_id,
+            te.trashed_at,
+            te.scheduled_purge_at,
+            n.name,
+            n.kind,
+            n.parent_id,
+            n.created_at,
+            n.updated_at
+        FROM trash_entries AS te
+        JOIN nodes AS n ON n.id = te.node_id
+        WHERE n.lifecycle_state = 'trashed'
+        ORDER BY te.trashed_at DESC, n.name, n.id
+        ",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Returns trash entries whose scheduled purge time has elapsed.
+///
+/// # Errors
+///
+/// Returns a database error when the query cannot be completed.
+pub async fn list_expired_trash(
+    pool: &PgPool,
+    limit: u32,
+) -> Result<Vec<TrashEntryRecord>, sqlx::Error> {
+    sqlx::query_as::<_, TrashEntryRecord>(
+        r"
+        SELECT
+            te.id,
+            te.node_id,
+            te.original_parent_id,
+            te.trashed_at,
+            te.scheduled_purge_at,
+            n.name,
+            n.kind,
+            n.parent_id,
+            n.created_at,
+            n.updated_at
+        FROM trash_entries AS te
+        JOIN nodes AS n ON n.id = te.node_id
+        WHERE n.lifecycle_state = 'trashed'
+          AND te.scheduled_purge_at <= now()
+        ORDER BY te.scheduled_purge_at, te.id
+        LIMIT $1
+        ",
+    )
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await
+}
+
+async fn lock_trash_entry(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+) -> Result<(Uuid, Option<Uuid>), TrashMutationError> {
+    let entry = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        r"
+        SELECT id, original_parent_id
+        FROM trash_entries
+        WHERE node_id = $1
+        FOR UPDATE
+        ",
+    )
+    .bind(node_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    entry.ok_or(TrashMutationError::NotTrashed)
+}
+
+async fn lock_trashed_node(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+) -> Result<NodeRecord, TrashMutationError> {
+    sqlx::query_as::<_, NodeRecord>(
+        r"
+        SELECT
+            id, parent_id, name, kind, lifecycle_state,
+            source_created_at, source_modified_at, created_at, updated_at
+        FROM nodes
+        WHERE id = $1 AND lifecycle_state = 'trashed'
+        FOR UPDATE
+        ",
+    )
+    .bind(node_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or_else(|| FolderError::NotFound.into())
+}
+
+async fn resolve_restore_parent(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    preferred: Option<Uuid>,
+) -> Result<Uuid, sqlx::Error> {
+    let Some(parent_id) = preferred else {
+        return Ok(ROOT_NODE_ID);
+    };
+    let parent_active = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM nodes
+            WHERE id = $1 AND kind = 'folder' AND lifecycle_state = 'active'
+        )
+        ",
+    )
+    .bind(parent_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    Ok(if parent_active {
+        parent_id
+    } else {
+        ROOT_NODE_ID
+    })
+}
+
+async fn ensure_restore_name_available(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    parent_id: Uuid,
+    name: &str,
+    node_id: Uuid,
+) -> Result<(), TrashMutationError> {
+    let name_conflict = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM nodes
+            WHERE parent_id = $1 AND name = $2
+              AND lifecycle_state = 'active' AND id <> $3
+        )
+        ",
+    )
+    .bind(parent_id)
+    .bind(name)
+    .bind(node_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if name_conflict {
+        Err(FolderError::NameConflict.into())
+    } else {
+        Ok(())
+    }
+}
+
+async fn reactivate_trashed_subtree(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+    restore_parent: Uuid,
+    subtree_ids: &[Uuid],
+) -> Result<(), TrashMutationError> {
+    sqlx::query(
+        r"
+        UPDATE nodes
+        SET
+            parent_id = CASE WHEN id = $1 THEN $2 ELSE parent_id END,
+            lifecycle_state = 'active',
+            updated_at = now()
+        WHERE id = ANY($3)
+          AND lifecycle_state = 'trashed'
+        ",
+    )
+    .bind(node_id)
+    .bind(restore_parent)
+    .bind(subtree_ids)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| {
+        if is_unique_violation(&error) {
+            FolderError::NameConflict.into()
+        } else {
+            TrashMutationError::Database(error)
+        }
+    })?;
+    Ok(())
+}
+
+async fn get_node_by_id_in_tx(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+) -> Result<Option<NodeRecord>, sqlx::Error> {
+    sqlx::query_as::<_, NodeRecord>(
+        r"
+        SELECT
+            id, parent_id, name, kind, lifecycle_state,
+            source_created_at, source_modified_at, created_at, updated_at
+        FROM nodes
+        WHERE id = $1
+        ",
+    )
+    .bind(node_id)
+    .fetch_optional(&mut **transaction)
+    .await
+}
+
+async fn collect_active_subtree_ids(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    root_ids: &[Uuid],
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar::<_, Uuid>(
+        r"
+        WITH RECURSIVE tree AS (
+            SELECT id
+            FROM nodes
+            WHERE id = ANY($1)
+              AND lifecycle_state = 'active'
+
+            UNION
+
+            SELECT child.id
+            FROM nodes AS child
+            JOIN tree AS parent ON child.parent_id = parent.id
+            WHERE child.lifecycle_state = 'active'
+        )
+        SELECT id FROM tree
+        ",
+    )
+    .bind(root_ids)
+    .fetch_all(&mut **transaction)
+    .await
+}
+
+async fn collect_trashed_subtree_ids(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    root_id: Uuid,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar::<_, Uuid>(
+        r"
+        WITH RECURSIVE tree AS (
+            SELECT id
+            FROM nodes
+            WHERE id = $1
+              AND lifecycle_state = 'trashed'
+
+            UNION ALL
+
+            SELECT child.id
+            FROM nodes AS child
+            JOIN tree AS parent ON child.parent_id = parent.id
+            WHERE child.lifecycle_state = 'trashed'
+        )
+        SELECT id FROM tree
+        ",
+    )
+    .bind(root_id)
+    .fetch_all(&mut **transaction)
+    .await
+}
+
+async fn ancestor_map_for_nodes(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, Vec<Uuid>>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r"
+        WITH RECURSIVE ancestors AS (
+            SELECT id AS node_id, parent_id AS ancestor_id
+            FROM nodes
+            WHERE id = ANY($1)
+
+            UNION ALL
+
+            SELECT a.node_id, n.parent_id
+            FROM ancestors AS a
+            JOIN nodes AS n ON n.id = a.ancestor_id
+            WHERE a.ancestor_id IS NOT NULL
+        )
+        SELECT node_id, ancestor_id
+        FROM ancestors
+        WHERE ancestor_id IS NOT NULL
+        ",
+    )
+    .bind(node_ids)
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    let mut map = std::collections::HashMap::<Uuid, Vec<Uuid>>::new();
+    for (node_id, ancestor_id) in rows {
+        map.entry(node_id).or_default().push(ancestor_id);
+    }
+    Ok(map)
+}
+
+

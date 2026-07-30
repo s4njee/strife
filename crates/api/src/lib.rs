@@ -5,6 +5,7 @@ pub mod folders;
 pub mod health;
 pub mod imports;
 pub mod jobs;
+pub mod nodes;
 pub mod uploads;
 
 use std::{
@@ -84,6 +85,7 @@ pub async fn run(config: Config) -> Result<()> {
         .merge(admin::router(pool.clone()))
         .merge(jobs::router(pool.clone()))
         .merge(folders::router(pool.clone()))
+        .merge(nodes::router(pool.clone()))
         .merge(files::router(pool.clone(), storage.clone()))
         .merge(imports::router(
             pool.clone(),

@@ -1955,14 +1955,29 @@ As a user, I want to move items to trash and restore them so that deletion is re
 
 **Acceptance Criteria:**
 
-- [ ] Migration creates `trash_entries`: `id`, `node_id` (FK, unique), `original_parent_id` (FK), `trashed_at` (timestamptz), `scheduled_purge_at` (timestamptz, default: `trashed_at + 30 days`).
-- [ ] `DELETE /api/nodes/:id` (or `POST /api/nodes/:id/trash`) moves a node to trash: sets `lifecycle_state = trashed`, creates a `trash_entries` row.
-- [ ] Trashing a folder trashes all its descendants recursively in one transaction.
-- [ ] `POST /api/nodes/:id/restore` restores a node: sets `lifecycle_state = active`, deletes the `trash_entries` row. If the original parent no longer exists (was permanently deleted), restore to root.
-- [ ] `GET /api/trash` lists all trashed items with `trashed_at` and `scheduled_purge_at`.
-- [ ] Trashed items are excluded from normal folder listings.
-- [ ] Trashed items still count toward disk usage.
-- [ ] Tests: trash, verify exclusion from listing, restore, verify re-inclusion.
+- [x] Migration creates `trash_entries`: `id`, `node_id` (FK, unique), `original_parent_id` (FK), `trashed_at` (timestamptz), `scheduled_purge_at` (timestamptz, default: `trashed_at + 30 days`).
+- [x] `DELETE /api/nodes/:id` (or `POST /api/nodes/:id/trash`) moves a node to trash: sets `lifecycle_state = trashed`, creates a `trash_entries` row.
+- [x] Trashing a folder trashes all its descendants recursively in one transaction.
+- [x] `POST /api/nodes/:id/restore` restores a node: sets `lifecycle_state = active`, deletes the `trash_entries` row. If the original parent no longer exists (was permanently deleted), restore to root.
+- [x] `GET /api/trash` lists all trashed items with `trashed_at` and `scheduled_purge_at`.
+- [x] Trashed items are excluded from normal folder listings.
+- [x] Trashed items still count toward disk usage.
+- [x] Tests: trash, verify exclusion from listing, restore, verify re-inclusion.
+
+**Implementation report:** Added the `trash_entries` migration and transactional trash/restore for single items or batches, cascading folder descendants and restoring under root when the original parent is inactive. API routes and PostgreSQL tests cover listing exclusion, nested restore, root protection, and batch trash.
+
+**New files:**
+
+- `crates/api/src/nodes.rs`
+- `crates/api/tests/nodes_api.rs`
+- `crates/db/migrations/0009_trash.down.sql`
+- `crates/db/migrations/0009_trash.up.sql`
+- `crates/db/tests/trash.rs`
+
+**Modified files:**
+
+- `crates/api/src/lib.rs`
+- `crates/db/src/lib.rs`
 
 ---
 
