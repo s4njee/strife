@@ -148,6 +148,7 @@ async fn api_fails_fast_on_unreachable_postgres_and_missing_storage() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn interrupted_upload_resumes_remaining_chunks() {
     let Some(pool) = test_pool().await else {
         eprintln!("DATABASE_URL unset; skipping");

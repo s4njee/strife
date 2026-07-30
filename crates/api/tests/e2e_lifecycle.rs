@@ -29,7 +29,7 @@ async fn test_pool() -> Option<PgPool> {
     Some(pool)
 }
 
-fn app(pool: PgPool, storage: Arc<LocalFsBackend>) -> axum::Router {
+fn app(pool: PgPool, storage: &Arc<LocalFsBackend>) -> axum::Router {
     let storage_dyn: Arc<dyn StorageBackend> = storage.clone();
     strife_api::folders::router(pool.clone())
         .merge(strife_api::nodes::router(pool.clone()))
@@ -115,7 +115,7 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
             .await
             .expect("create storage"),
     );
-    let router = app(pool.clone(), storage.clone());
+    let router = app(pool.clone(), &storage);
 
     // 1. Create folder
     let (status, body) = request(
