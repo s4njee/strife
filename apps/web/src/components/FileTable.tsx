@@ -1,5 +1,13 @@
 import { useNavigate } from '@solidjs/router'
-import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+} from 'solid-js'
 import type { FolderItem } from '../api/types'
 import { ContextMenu, type ContextMenuAction } from './ContextMenu'
 import './FileTable.css'
@@ -25,7 +33,13 @@ interface FileTableProps {
   onDetails?: (item: FolderItem) => void
   onPreview?: (item: FolderItem) => void
   onToggleFavorite?: (item: FolderItem) => void
+  onFavoriteSelected?: (items: FolderItem[], favorite: boolean) => void
+  onDownload?: (item: FolderItem) => void
   onSelectionChange?: (items: FolderItem[]) => void
+  /** When true, shows trash-oriented actions instead of normal toolbar. */
+  trashMode?: boolean
+  onRestore?: (items: FolderItem[]) => void
+  onPermanentDelete?: (items: FolderItem[]) => void
 }
 
 interface ContextMenuState {
@@ -72,6 +86,50 @@ export function FileTable(props: FileTableProps) {
       {sortIndicator(column)}
     </button>
   )
+
+  const clearSelection = () => {
+    setSelectedIds(new Set<string>())
+    setAnchorId(undefined)
+  }
+
+  onMount(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+      const selected = selectedItems()
+      if (selected.length === 0) return
+      event.preventDefault()
+      if (props.trashMode) {
+        if (
+          window.confirm(
+            `Permanently delete ${selected.length} item${selected.length === 1 ? '' : 's'}? This cannot be undone.`,
+          )
+        ) {
+          props.onPermanentDelete?.(selected)
+          clearSelection()
+        }
+        return
+      }
+      if (
+        window.confirm(
+          `Move ${selected.length} item${selected.length === 1 ? '' : 's'} to trash?`,
+        )
+      ) {
+        props.onTrash?.(selected)
+        clearSelection()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    onCleanup(() => window.removeEventListener('keydown', onKeyDown))
+  })
   const selectedCount = () => selectedIds().size
   const selectedItems = () =>
     sortedItems().filter((item) => selectedIds().has(item.id))
@@ -188,27 +246,89 @@ export function FileTable(props: FileTableProps) {
             {selectedCount()} {selectedCount() === 1 ? 'item' : 'items'}{' '}
             selected
           </span>
-          <Show
-            when={
-              selectedItems().length === 1 &&
-              selectedItems()[0]?.kind === 'file'
-            }
-          >
-            <div class="file-table-selection__actions">
+          <div class="file-table-selection__actions">
+            <Show when={props.trashMode}>
               <button
                 type="button"
-                onClick={() => props.onPreview?.(selectedItems()[0])}
+                onClick={() => {
+                  props.onRestore?.(selectedItems())
+                  clearSelection()
+                }}
               >
-                Preview
+                Restore
               </button>
               <button
                 type="button"
-                onClick={() => props.onDetails?.(selectedItems()[0])}
+                class="is-danger"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `This will permanently delete ${selectedCount()} item${selectedCount() === 1 ? '' : 's'}. This action cannot be undone.`,
+                    )
+                  ) {
+                    props.onPermanentDelete?.(selectedItems())
+                    clearSelection()
+                  }
+                }}
               >
-                Details
+                Delete Permanently
               </button>
-            </div>
-          </Show>
+            </Show>
+            <Show when={!props.trashMode}>
+              <button
+                type="button"
+                onClick={() => props.onMove?.(selectedItems())}
+              >
+                Move to…
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  props.onTrash?.(selectedItems())
+                  clearSelection()
+                }}
+              >
+                Move to Trash
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const selected = selectedItems()
+                  const allFavorited = selected.every((item) => item.is_favorite)
+                  props.onFavoriteSelected?.(selected, !allFavorited)
+                }}
+              >
+                {selectedItems().every((item) => item.is_favorite)
+                  ? 'Unfavorite'
+                  : 'Favorite'}
+              </button>
+              <Show
+                when={
+                  selectedItems().length === 1 &&
+                  selectedItems()[0]?.kind === 'file'
+                }
+              >
+                <button
+                  type="button"
+                  onClick={() => props.onDownload?.(selectedItems()[0])}
+                >
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.onPreview?.(selectedItems()[0])}
+                >
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.onDetails?.(selectedItems()[0])}
+                >
+                  Details
+                </button>
+              </Show>
+            </Show>
+          </div>
         </div>
       </Show>
       <Show when={!props.loading} fallback={<FileTableSkeleton />}>

@@ -10,18 +10,23 @@ import {
 import {
   addFavorite,
   createFolder,
+  downloadFileUrl,
   getFavorites,
   getFolderAncestors,
   getFolderChildren,
+  getTrash,
   moveFolders,
+  permanentDeleteNode,
   removeFavorite,
   renameFolder,
+  restoreNode,
   trashNodes,
 } from '../api/client'
 import type { FolderAncestor, FolderItem } from '../api/types'
 import type { FileDetails, MediaStream } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
 import { CreateFolderDialog } from '../components/CreateFolderDialog'
+import '../components/CreateFolderDialog.css'
 import { FileTable } from '../components/FileTable'
 import { FileDetailsPanel } from '../components/FileDetailsPanel'
 import { FileUploadControl } from '../components/FileUploadControl'
@@ -309,6 +314,45 @@ function FolderContents(props: { folderId: string }) {
     )
   }
 
+  const handleFavoriteSelected = async (
+    items: FolderItem[],
+    favorite: boolean,
+  ) => {
+    if (staticPreview) {
+      const ids = new Set(items.map((item) => item.id))
+      setStaticItems((current) =>
+        current.map((item) =>
+          ids.has(item.id) ? { ...item, is_favorite: favorite } : item,
+        ),
+      )
+      return
+    }
+    await Promise.all(
+      items.map((item) =>
+        favorite ? addFavorite(item.id) : removeFavorite(item.id),
+      ),
+    )
+    const ids = new Set(items.map((item) => item.id))
+    mutate((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((item) =>
+              ids.has(item.id) ? { ...item, is_favorite: favorite } : item,
+            ),
+          }
+        : current,
+    )
+  }
+
+  const handleDownload = (item: FolderItem) => {
+    if (item.kind !== 'file') return
+    const anchor = document.createElement('a')
+    anchor.href = downloadFileUrl(item.id)
+    anchor.download = item.name
+    anchor.click()
+  }
+
   const loadPreviewFolders = async (folderId: string) => ({
     items:
       folderId === ROOT_FOLDER_ID
@@ -413,6 +457,10 @@ function FolderContents(props: { folderId: string }) {
         onMove={setMoveItems}
         onTrash={(selected) => void handleTrash(selected)}
         onToggleFavorite={(item) => void handleToggleFavorite(item)}
+        onFavoriteSelected={(selected, favorite) =>
+          void handleFavoriteSelected(selected, favorite)
+        }
+        onDownload={handleDownload}
         onDetails={setDetailsItem}
         onPreview={setPreviewItem}
         onSelectionChange={(selected) => {
@@ -856,11 +904,86 @@ export function FavoritesView() {
 }
 
 export function TrashView() {
+  const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
+  const [trash, { refetch }] = createResource(
+    () => (staticPreview ? false : 'trash'),
+    () => getTrash(),
+  )
+
+  const items = (): FolderItem[] => {
+    if (staticPreview) {
+      return [
+        {
+          id: 'trash-1',
+          name: 'Old notes.txt',
+          kind: 'file',
+          size_bytes: 1200,
+          created_at: '2026-06-01T00:00:00Z',
+          updated_at: '2026-07-01T00:00:00Z',
+        },
+      ]
+    }
+    return (
+      trash()?.items.map((item) => ({
+        id: item.node_id,
+        name: item.name,
+        kind: item.kind,
+        size_bytes: null,
+        created_at: item.created_at,
+        updated_at: item.trashed_at,
+      })) ?? []
+    )
+  }
+
+  const handleRestore = async (selected: FolderItem[]) => {
+    if (staticPreview) return
+    for (const item of selected) {
+      await restoreNode(item.id)
+    }
+    await refetch()
+  }
+
+  const handlePermanent = async (selected: FolderItem[]) => {
+    if (staticPreview) return
+    for (const item of selected) {
+      await permanentDeleteNode(item.id)
+    }
+    await refetch()
+  }
+
+  const emptyTrash = async () => {
+    const all = items()
+    if (all.length === 0) return
+    if (
+      !window.confirm(
+        `This will permanently delete ${all.length} item${all.length === 1 ? '' : 's'}. This action cannot be undone.`,
+      )
+    ) {
+      return
+    }
+    await handlePermanent(all)
+  }
+
   return (
     <WorkspaceView
       eyebrow="Library"
       title="Trash"
       description="Deleted items are retained for 30 days."
-    />
+    >
+      <div class="folder-toolbar">
+        <button type="button" onClick={() => void emptyTrash()}>
+          Empty Trash
+        </button>
+      </div>
+      <FileTable
+        items={items()}
+        loading={trash.loading}
+        error={trash.error instanceof Error ? trash.error.message : undefined}
+        onRetry={() => void refetch()}
+        trashMode
+        onRestore={(selected) => void handleRestore(selected)}
+        onPermanentDelete={(selected) => void handlePermanent(selected)}
+      />
+    </WorkspaceView>
   )
 }

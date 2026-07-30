@@ -32,6 +32,11 @@
   cursor: pointer;
 }
 
+.file-table-selection button.is-danger {
+  border-color: var(--color-danger, #c44);
+  color: var(--color-danger, #c44);
+}
+
 .file-table-selection__actions {
   display: flex;
   gap: var(--space-2);

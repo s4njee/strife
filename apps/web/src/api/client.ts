@@ -344,6 +344,73 @@ export async function trashNodes(nodeIds: string[]): Promise<void> {
   }
 }
 
+export async function restoreNode(nodeId: string): Promise<void> {
+  const response = await fetch(`/api/nodes/${nodeId}/restore`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) {
+    throw new ApiClientError(`Could not restore item (${response.status}).`, {
+      status: response.status,
+    })
+  }
+}
+
+export async function permanentDeleteNode(nodeId: string): Promise<void> {
+  const response = await fetch(`/api/nodes/${nodeId}/permanent`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok && response.status !== 200 && response.status !== 202) {
+    throw new ApiClientError(
+      `Could not permanently delete item (${response.status}).`,
+      { status: response.status },
+    )
+  }
+}
+
+export interface TrashListItem {
+  id: string
+  node_id: string
+  name: string
+  kind: 'folder' | 'file'
+  original_parent_id: string | null
+  trashed_at: string
+  scheduled_purge_at: string
+  created_at: string
+  updated_at: string
+}
+
+export async function getTrash(
+  signal?: AbortSignal,
+): Promise<{ items: TrashListItem[] }> {
+  const response = await fetch('/api/trash', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok) {
+    throw new ApiClientError(`Could not load trash (${response.status}).`)
+  }
+  const body: unknown = await response.json()
+  if (
+    !isRecord(body) ||
+    !Array.isArray(body.items) ||
+    !body.items.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.node_id === 'string' &&
+        typeof item.name === 'string',
+    )
+  ) {
+    throw new ApiClientError('The trash response was invalid.')
+  }
+  return body as { items: TrashListItem[] }
+}
+
+export function downloadFileUrl(nodeId: string): string {
+  return `/api/files/${nodeId}/download`
+}
+
 export async function createFolder(
   parentId: string,
   name: string,

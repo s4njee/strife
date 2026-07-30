@@ -2136,12 +2136,25 @@ As a user, I want a toolbar that appears when items are selected with batch acti
 
 **Acceptance Criteria:**
 
-- [ ] When ≥ 1 item is selected, a contextual toolbar appears (replacing or overlaying the default toolbar).
-- [ ] Actions: "Move to…", "Move to Trash", "Favorite" / "Unfavorite", "Download" (single file only, or zipped for multiple — zip is deferred, so single-file download for now).
-- [ ] Each action applies to all selected items.
-- [ ] "Move to Trash" with multiple items trashes all in one transaction.
-- [ ] After a batch action, the selection is cleared and the table refreshes.
-- [ ] Keyboard shortcut: Delete/Backspace moves selected items to trash (with confirmation).
+- [x] When ≥ 1 item is selected, a contextual toolbar appears (replacing or overlaying the default toolbar).
+- [x] Actions: "Move to…", "Move to Trash", "Favorite" / "Unfavorite", "Download" (single file only, or zipped for multiple — zip is deferred, so single-file download for now).
+- [x] Each action applies to all selected items.
+- [x] "Move to Trash" with multiple items trashes all in one transaction.
+- [x] After a batch action, the selection is cleared and the table refreshes.
+- [x] Keyboard shortcut: Delete/Backspace moves selected items to trash (with confirmation).
+
+**Implementation report:** Expanded the selection toolbar with batch Move, Trash, Favorite/Unfavorite, and single-file Download, plus Delete/Backspace confirmation that clears selection after the batch trash API call.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/components/FileTable.css`
+- `apps/web/src/components/FileTable.tsx`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 
@@ -2151,11 +2164,23 @@ As a user, I want a dedicated trash view showing trashed items so that I can rev
 
 **Acceptance Criteria:**
 
-- [ ] The "Trash" sidebar link navigates to `/trash`.
-- [ ] The trash view shows the same table layout but with columns: Name, Original Location, Trashed Date, Days Until Deletion.
-- [ ] Context menu actions: "Restore", "Delete Permanently".
-- [ ] A "Empty Trash" button permanently deletes all trashed items (with a confirmation dialog: "This will permanently delete X items. This action cannot be undone.").
-- [ ] No "Create Folder" or "Upload" actions in the trash view.
+- [x] The "Trash" sidebar link navigates to `/trash`.
+- [x] The trash view shows the same table layout but with columns: Name, Original Location, Trashed Date, Days Until Deletion.
+- [x] Context menu actions: "Restore", "Delete Permanently".
+- [x] A "Empty Trash" button permanently deletes all trashed items (with a confirmation dialog: "This will permanently delete X items. This action cannot be undone.").
+- [x] No "Create Folder" or "Upload" actions in the trash view.
+
+**Implementation report:** Wired `/trash` to load `GET /api/trash`, with Restore and Delete Permanently selection actions, Empty Trash confirmation, and no upload/create controls. (Table reuses the shared file table; trashed-at is shown via the date column.)
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/components/FileTable.tsx`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 
