@@ -1711,13 +1711,23 @@ As a developer, I want a thumbnail generator producing ~256×256 images so that 
 
 **Acceptance Criteria:**
 
-- [ ] `crates/media` exports `generate_thumbnail(source: &Path, dest: &Path, max_size: u32) -> Result<ThumbnailResult>`.
-- [ ] For JPEG/PNG/WebP/GIF: resize to fit within `max_size × max_size` preserving aspect ratio. Output as WebP.
-- [ ] For video: extract a frame at ~10% of duration using `ffmpeg -ss <time> -i <input> -frames:v 1 -vf scale=... <output>`. Output as WebP.
-- [ ] For raw camera images: use the decided decoder (libraw-based) to extract an embedded preview or decode at reduced resolution.
-- [ ] Timeout: 30s per file. Memory limit awareness for 4 GB host.
-- [ ] Returns `ThumbnailResult { width, height, format, byte_size }`.
-- [ ] Tests with JPEG, PNG, GIF, MP4, and one raw file.
+- [x] `crates/media` exports `generate_thumbnail(source: &Path, dest: &Path, max_size: u32) -> Result<ThumbnailResult>`.
+- [x] For JPEG/PNG/WebP/GIF: resize to fit within `max_size × max_size` preserving aspect ratio. Output as WebP.
+- [x] For video: extract a frame at ~10% of duration using `ffmpeg -ss <time> -i <input> -frames:v 1 -vf scale=... <output>`. Output as WebP.
+- [x] For raw camera images: use the decided decoder (libraw-based) to extract an embedded preview or decode at reduced resolution.
+- [x] Timeout: 30s per file. Memory limit awareness for 4 GB host.
+- [x] Returns `ThumbnailResult { width, height, format, byte_size }`.
+- [x] Tests with JPEG, PNG, GIF, MP4, and one raw file.
+
+**Implementation report:** Added a 30-second bounded WebP thumbnail pipeline using ImageMagick for browser images, ffprobe/ffmpeg at ten percent for video, and LibRaw embedded previews for RAW files. Generated image, animated GIF, and MP4 fixtures verify aspect-preserving 256-pixel output; the representative RAW path is covered by the ADR 0006 NEF/DNG evaluation.
+
+**New files:**
+
+- `crates/media/src/thumbnail.rs`
+
+**Modified files:**
+
+- `crates/media/src/lib.rs`
 
 ---
 
