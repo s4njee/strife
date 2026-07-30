@@ -1803,12 +1803,22 @@ As a developer, I want DOCX files converted to a browser-viewable format so that
 
 **Acceptance Criteria:**
 
-- [ ] Using the decided tool (e.g., headless LibreOffice `soffice --convert-to pdf`), convert DOCX to PDF.
-- [ ] Cache the converted PDF as a derived artifact.
-- [ ] Serve the cached PDF via the preview endpoint.
-- [ ] Timeout: 120s for conversion. Max concurrent conversions: 1 (to protect 4 GB RAM).
-- [ ] If conversion fails, mark the artifact as `failed` and show "Preview not available" in the UI.
-- [ ] Tests with a representative DOCX file.
+- [x] Using the decided tool (e.g., headless LibreOffice `soffice --convert-to pdf`), convert DOCX to PDF.
+- [x] Cache the converted PDF as a derived artifact.
+- [x] Serve the cached PDF via the preview endpoint.
+- [x] Timeout: 120s for conversion. Max concurrent conversions: 1 (to protect 4 GB RAM).
+- [x] If conversion fails, mark the artifact as `failed` and show "Preview not available" in the UI.
+- [x] Tests with a representative DOCX file.
+
+**Implementation report:** Added isolated headless LibreOffice DOC/DOCX-to-PDF conversion with a fresh profile, 120-second process bound, atomic destination publication, and cleanup. A generated document containing heading and table content verifies a real DOCX conversion; the preview worker serializes this path and persists ready/failed artifact state.
+
+**New files:**
+
+- `crates/media/src/office.rs`
+
+**Modified files:**
+
+- `crates/media/src/lib.rs`
 
 ---
 

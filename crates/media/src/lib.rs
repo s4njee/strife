@@ -6,6 +6,7 @@ use anyhow::Result;
 
 mod exif;
 mod ffprobe;
+mod office;
 mod process;
 mod thumbnail;
 mod tika;
@@ -14,6 +15,7 @@ pub use exif::{ExifResult, extract_exif, extract_exif_with_limits};
 pub use ffprobe::{
     FfprobeResult, StreamInfo, StreamType, extract_ffprobe, extract_ffprobe_with_limits,
 };
+pub use office::convert_office_to_pdf;
 pub use thumbnail::{ThumbnailResult, generate_image_preview, generate_thumbnail};
 pub use tika::{TikaResult, extract_tika, extract_tika_with_limits};
 
