@@ -159,6 +159,12 @@ async fn exposes_details_raw_metadata_streams_and_processing_status() {
     let (_, streams) = json_request(app, format!("/api/files/{node_id}/streams")).await;
     assert_eq!(streams[0]["codec"], "mjpeg");
 
+    // file_objects reference nodes with ON DELETE RESTRICT.
+    sqlx::query("DELETE FROM file_objects WHERE node_id = $1")
+        .bind(node_id)
+        .execute(&pool)
+        .await
+        .expect("delete file object fixture");
     sqlx::query("DELETE FROM nodes WHERE id = $1")
         .bind(node_id)
         .execute(&pool)

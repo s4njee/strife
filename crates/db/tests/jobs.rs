@@ -92,10 +92,9 @@ async fn queue_is_idempotent_and_supports_completion_and_retry() {
     .await
     .expect("claim expiring job")
     .expect("leased expiring job");
-    assert_eq!(
-        release_expired_leases(&pool).await.expect("release lease"),
-        1
-    );
+    // Other suites may leave expired leases; assert ours is recovered.
+    let released = release_expired_leases(&pool).await.expect("release lease");
+    assert!(released >= 1);
     let state: JobState = sqlx::query_scalar("SELECT state FROM jobs WHERE id = $1")
         .bind(expiring.id)
         .fetch_one(&pool)

@@ -392,35 +392,9 @@ async fn permanent_delete_is_idempotent_when_storage_already_missing() {
         .await
         .expect("enqueue")
         .expect("job");
-    // Drain until our high-priority job is claimed (queue may contain leftovers).
-    let mut leased = None;
-    for _ in 0..50 {
-        let Some(candidate) = claim_job(
-            &pool,
-            JobType::PermanentDeletion,
-            "edge-ghost",
-            ChronoDuration::minutes(1),
-        )
-        .await
-        .expect("claim") else {
-            break;
-        };
-        if candidate.id == job.id || candidate.target_node_id == node_id {
-            leased = Some(candidate);
-            break;
-        }
-        // Release unrelated job for later.
-        sqlx::query(
-            "UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL WHERE id = $1",
-        )
-        .bind(candidate.id)
-        .execute(&pool)
-        .await
-        .ok();
-    }
-    let leased = leased.expect("our permanent deletion job should be claimable");
+    // Process the job record directly so a polluted shared queue cannot starve us.
     deletion
-        .purge(&leased)
+        .purge(&job)
         .await
         .expect("purge with missing storage object");
     assert!(
@@ -429,6 +403,11 @@ async fn permanent_delete_is_idempotent_when_storage_already_missing() {
             .expect("query")
             .is_none()
     );
+    sqlx::query("DELETE FROM jobs WHERE id = $1")
+        .bind(job.id)
+        .execute(&pool)
+        .await
+        .ok();
     let _ = tokio::fs::remove_dir_all(storage_root).await;
 }
 

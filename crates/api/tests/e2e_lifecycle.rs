@@ -10,7 +10,7 @@ use chrono::Duration;
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_db::{
-    ArtifactState, ArtifactType, JobType, MIGRATOR, ROOT_NODE_ID, claim_job, complete_job,
+    ArtifactState, ArtifactType, JobRecord, JobType, MIGRATOR, ROOT_NODE_ID, complete_job,
     get_artifact, get_node_by_id, list_trash,
 };
 use strife_storage::{LocalFsBackend, StorageBackend, StorageKey};
@@ -202,7 +202,7 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
     .expect("finalize json");
     let node_id: Uuid = finalized["id"].as_str().unwrap().parse().unwrap();
 
-    // 3. Metadata extraction via worker handler
+    // 3. Metadata extraction via worker handler (target-scoped; queue may be shared)
     let handler = MetadataHandler::new(
         pool.clone(),
         storage.clone(),
@@ -210,15 +210,9 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
         1,
         2,
     );
-    let meta_job = claim_job(
-        &pool,
-        JobType::MetadataExtraction,
-        "e2e-meta",
-        Duration::minutes(2),
-    )
-    .await
-    .expect("claim meta")
-    .expect("metadata job enqueued on finalize");
+    let meta_job = job_for_target(&pool, JobType::MetadataExtraction, node_id)
+        .await
+        .expect("metadata job enqueued on finalize");
     handler.handle(&meta_job).await.expect("metadata");
     complete_job(&pool, meta_job.id)
         .await
@@ -250,15 +244,7 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
     );
     let _ = body;
 
-    if let Some(preview_job) = claim_job(
-        &pool,
-        JobType::PreviewGeneration,
-        "e2e-preview",
-        Duration::minutes(2),
-    )
-    .await
-    .expect("claim preview")
-    {
+    if let Some(preview_job) = job_for_target(&pool, JobType::PreviewGeneration, node_id).await {
         handler.handle(&preview_job).await.expect("preview");
         complete_job(&pool, preview_job.id)
             .await
@@ -349,15 +335,9 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
     let _ = body;
 
     let deletion = strife_worker::DeletionService::new(pool.clone(), storage.clone());
-    let job = claim_job(
-        &pool,
-        JobType::PermanentDeletion,
-        "e2e-delete",
-        Duration::minutes(2),
-    )
-    .await
-    .expect("claim delete")
-    .expect("deletion job");
+    let job = job_for_target(&pool, JobType::PermanentDeletion, node_id)
+        .await
+        .expect("deletion job");
     deletion.purge(&job).await.expect("purge");
 
     assert!(
@@ -382,29 +362,34 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
         &[],
     )
     .await;
-    if let Ok(Some(job)) = claim_job(
-        &pool,
-        JobType::PermanentDeletion,
-        "e2e-cleanup",
-        Duration::minutes(1),
-    )
-    .await
-    {
+    let _ = strife_db::request_permanent_deletion(&pool, folder_id).await;
+    if let Some(job) = job_for_target(&pool, JobType::PermanentDeletion, folder_id).await {
         let _ = deletion.purge(&job).await;
-    } else {
-        let _ = strife_db::request_permanent_deletion(&pool, folder_id).await;
-        if let Ok(Some(job)) = claim_job(
-            &pool,
-            JobType::PermanentDeletion,
-            "e2e-cleanup2",
-            Duration::minutes(1),
-        )
-        .await
-        {
-            let _ = deletion.purge(&job).await;
-        }
     }
 
     let _ = tokio::fs::remove_file(&jpeg_path).await;
     let _ = tokio::fs::remove_dir_all(&storage_root).await;
+}
+
+async fn job_for_target(
+    pool: &sqlx::PgPool,
+    job_type: JobType,
+    target_node_id: Uuid,
+) -> Option<JobRecord> {
+    sqlx::query_as::<_, JobRecord>(
+        r"
+        SELECT *
+        FROM jobs
+        WHERE job_type = $1
+          AND target_node_id = $2
+          AND state IN ('pending', 'leased')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        ",
+    )
+    .bind(job_type)
+    .bind(target_node_id)
+    .fetch_optional(pool)
+    .await
+    .expect("query job for target")
 }

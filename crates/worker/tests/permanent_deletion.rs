@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use chrono::Duration;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_db::{
-    ArtifactState, ArtifactType, JobType, MIGRATOR, ROOT_NODE_ID, UpsertArtifact, claim_job,
+    ArtifactState, ArtifactType, JobType, MIGRATOR, ROOT_NODE_ID, UpsertArtifact,
     create_file_object, create_folder, create_or_update_artifact, finalize_file_object,
     get_node_by_id, request_permanent_deletion, trash_node,
 };
@@ -104,21 +103,8 @@ async fn permanent_deletion_removes_storage_and_db_rows() {
         .expect("job created");
 
     let handler = DeletionService::new(pool.clone(), storage.clone());
-    let job_record = claim_job(
-        &pool,
-        JobType::PermanentDeletion,
-        "test-worker",
-        Duration::seconds(60),
-    )
-    .await
-    .expect("claim")
-    .expect("claimed job");
-    assert_eq!(job_record.id, job.id);
-
-    handler
-        .purge(&job_record)
-        .await
-        .expect("run permanent deletion");
+    // Use the enqueued job record directly; shared CI queues can starve claim_job.
+    handler.purge(&job).await.expect("run permanent deletion");
 
     assert!(
         get_node_by_id(&pool, node_id)
@@ -165,16 +151,7 @@ async fn permanent_deletion_removes_storage_and_db_rows() {
 
     // Cleanup parent folder (still active).
     trash_node(&pool, parent.id).await.expect("trash parent");
-    let _ = request_permanent_deletion(&pool, parent.id).await;
-    if let Some(parent_job) = claim_job(
-        &pool,
-        JobType::PermanentDeletion,
-        "test-worker-2",
-        Duration::seconds(60),
-    )
-    .await
-    .expect("claim parent")
-    {
+    if let Ok(Some(parent_job)) = request_permanent_deletion(&pool, parent.id).await {
         handler.purge(&parent_job).await.expect("purge parent");
     }
 
@@ -202,20 +179,10 @@ async fn worker_handler_routes_permanent_deletion() {
     .await
     .expect("create folder");
     trash_node(&pool, folder.id).await.expect("trash");
-    request_permanent_deletion(&pool, folder.id)
+    let job = request_permanent_deletion(&pool, folder.id)
         .await
         .expect("enqueue")
         .expect("job");
-
-    let job = claim_job(
-        &pool,
-        JobType::PermanentDeletion,
-        "handler-test",
-        Duration::seconds(60),
-    )
-    .await
-    .expect("claim")
-    .expect("job");
 
     let handler = WorkerHandler::new(pool.clone(), storage, "http://127.0.0.1:9".into(), 1, 1);
     handler.handle(&job).await.expect("handle deletion");
