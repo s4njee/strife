@@ -52,12 +52,7 @@ impl StorageBackend for CapacityStorage {
     async fn get_stream(&self, key: StorageKey) -> Result<StorageReader> {
         self.inner.get_stream(key).await
     }
-    async fn get_range(
-        &self,
-        key: StorageKey,
-        offset: u64,
-        length: u64,
-    ) -> Result<StorageReader> {
+    async fn get_range(&self, key: StorageKey, offset: u64, length: u64) -> Result<StorageReader> {
         self.inner.get_range(key, offset, length).await
     }
     async fn delete(&self, key: StorageKey) -> Result<()> {
@@ -146,7 +141,10 @@ async fn api_fails_fast_on_unreachable_postgres_and_missing_storage() {
 
     let missing = std::env::temp_dir().join(format!("strife-missing-{}", Uuid::new_v4()));
     let result = strife_api::verify_storage_root(&missing);
-    assert!(result.is_err(), "missing STORAGE_ROOT must fail verification");
+    assert!(
+        result.is_err(),
+        "missing STORAGE_ROOT must fail verification"
+    );
 }
 
 #[tokio::test]
@@ -167,12 +165,8 @@ async fn interrupted_upload_resumes_remaining_chunks() {
         .expect("folder");
 
     let content = b"chunk0chunk1chunk2chunk3";
-    let app = strife_api::uploads::router(
-        pool.clone(),
-        storage.clone(),
-        ChronoDuration::hours(1),
-        90,
-    );
+    let app =
+        strife_api::uploads::router(pool.clone(), storage.clone(), ChronoDuration::hours(1), 90);
 
     let created = app
         .clone()
@@ -216,12 +210,8 @@ async fn interrupted_upload_resumes_remaining_chunks() {
     }
 
     // Simulate restart with a fresh router sharing pool+storage
-    let app2 = strife_api::uploads::router(
-        pool.clone(),
-        storage.clone(),
-        ChronoDuration::hours(1),
-        90,
-    );
+    let app2 =
+        strife_api::uploads::router(pool.clone(), storage.clone(), ChronoDuration::hours(1), 90);
     let progress = app2
         .clone()
         .oneshot(
@@ -411,8 +401,7 @@ async fn permanent_delete_is_idempotent_when_storage_already_missing() {
             ChronoDuration::minutes(1),
         )
         .await
-        .expect("claim")
-        else {
+        .expect("claim") else {
             break;
         };
         if candidate.id == job.id || candidate.target_node_id == node_id {
@@ -476,14 +465,19 @@ async fn trash_cleanup_enqueues_batch_of_expired_items() {
     let enqueued = enqueue_expired_trash_deletions(&pool, 50)
         .await
         .expect("enqueue expired");
-    assert!(enqueued >= 20, "expected at least 20 enqueued, got {enqueued}");
+    assert!(
+        enqueued >= 20,
+        "expected at least 20 enqueued, got {enqueued}"
+    );
 
     let deletion = DeletionService::new(
         pool.clone(),
         Arc::new(
-            LocalFsBackend::new(std::env::temp_dir().join(format!("edge-purge-{}", Uuid::new_v4())))
-                .await
-                .expect("storage"),
+            LocalFsBackend::new(
+                std::env::temp_dir().join(format!("edge-purge-{}", Uuid::new_v4())),
+            )
+            .await
+            .expect("storage"),
         ),
     );
     // Purge our fixture nodes directly (job queue may contain unrelated work).
@@ -505,10 +499,7 @@ async fn trash_cleanup_enqueues_batch_of_expired_items() {
         };
         deletion.purge(&job).await.expect("purge expired fixture");
         assert!(
-            get_node_by_id(&pool, *id)
-                .await
-                .expect("query")
-                .is_none(),
+            get_node_by_id(&pool, *id).await.expect("query").is_none(),
             "expired trash node {id} should be purged"
         );
     }
@@ -532,12 +523,9 @@ async fn exiftool_timeout_is_enforced() {
         return;
     }
     let started = Instant::now();
-    let result = strife_media::extract_exif_with_limits(
-        &path,
-        Duration::from_millis(1),
-        16 * 1024 * 1024,
-    )
-    .await;
+    let result =
+        strife_media::extract_exif_with_limits(&path, Duration::from_millis(1), 16 * 1024 * 1024)
+            .await;
     let elapsed = started.elapsed();
     assert!(result.is_err(), "expected timeout or process failure");
     assert!(

@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
-use strife_db::{
-    JobRecord, list_storage_keys_for_deletion, purge_trashed_node_records,
-};
+use strife_db::{JobRecord, list_storage_keys_for_deletion, purge_trashed_node_records};
 use strife_storage::{StorageBackend, StorageKey};
 use tracing::info;
 use uuid::Uuid;

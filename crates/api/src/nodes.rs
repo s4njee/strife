@@ -213,9 +213,7 @@ async fn restore_node(
     Ok(Json(node.into()))
 }
 
-async fn list_trash(
-    State(state): State<NodesState>,
-) -> Result<Json<TrashListResponse>, ApiError> {
+async fn list_trash(State(state): State<NodesState>) -> Result<Json<TrashListResponse>, ApiError> {
     let items = strife_db::list_trash(&state.pool)
         .await
         .map_err(|_| ApiError::Internal)?;
@@ -332,4 +330,3 @@ impl From<FavoriteRecord> for FavoriteItemResponse {
         }
     }
 }
-

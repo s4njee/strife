@@ -171,7 +171,11 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
             Request::patch(format!("/api/uploads/{session_id}"))
                 .header(
                     "content-range",
-                    format!("bytes {mid}-{}/{len}", content.len() - 1, len = content.len()),
+                    format!(
+                        "bytes {mid}-{}/{len}",
+                        content.len() - 1,
+                        len = content.len()
+                    ),
                 )
                 .body(Body::from(content[mid..].to_vec()))
                 .expect("chunk2"),
@@ -226,7 +230,10 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
             .fetch_one(&pool)
             .await
             .expect("node metadata");
-    assert!(mime.starts_with("image/"), "expected image mime, got {mime}");
+    assert!(
+        mime.starts_with("image/"),
+        "expected image mime, got {mime}"
+    );
 
     // 4. Preview generation
     let (status, body) = request(
@@ -317,10 +324,7 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
         .await
         .expect("get")
         .expect("node");
-    assert_eq!(
-        restored.lifecycle_state,
-        strife_db::LifecycleState::Active
-    );
+    assert_eq!(restored.lifecycle_state, strife_db::LifecycleState::Active);
 
     // Trash again then permanent delete
     let (status, _) = request(
@@ -404,4 +408,3 @@ async fn full_lifecycle_folder_upload_metadata_preview_trash_restore_delete() {
     let _ = tokio::fs::remove_file(&jpeg_path).await;
     let _ = tokio::fs::remove_dir_all(&storage_root).await;
 }
-

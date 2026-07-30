@@ -89,8 +89,15 @@ async fn expired_trash_is_enqueued_for_permanent_deletion() {
     .fetch_all(&pool)
     .await
     .expect("list jobs");
-    assert_eq!(jobs.len(), 1, "our expired node must receive a deletion job");
-    let job = get_job(&pool, jobs[0]).await.expect("get job").expect("exists");
+    assert_eq!(
+        jobs.len(),
+        1,
+        "our expired node must receive a deletion job"
+    );
+    let job = get_job(&pool, jobs[0])
+        .await
+        .expect("get job")
+        .expect("exists");
     assert_eq!(job.job_type, JobType::PermanentDeletion);
 
     let second = enqueue_expired_trash_deletions(&pool, 50)
@@ -108,7 +115,10 @@ async fn expired_trash_is_enqueued_for_permanent_deletion() {
     .fetch_one(&pool)
     .await
     .expect("count jobs");
-    assert_eq!(jobs_again, 1, "cleanup must not duplicate jobs for the same node");
+    assert_eq!(
+        jobs_again, 1,
+        "cleanup must not duplicate jobs for the same node"
+    );
     let _ = second;
 
     // Clean up job and tree.
@@ -180,7 +190,11 @@ async fn cleanup_batch_respects_limit() {
 
     let limited = list_expired_trash(&pool, 10).await.expect("list limited");
     assert_eq!(limited.len(), 3);
-    assert!(limited.iter().all(|entry| node_ids.contains(&entry.node_id)));
+    assert!(
+        limited
+            .iter()
+            .all(|entry| node_ids.contains(&entry.node_id))
+    );
 
     let enqueued = enqueue_expired_trash_deletions(&pool, 2)
         .await

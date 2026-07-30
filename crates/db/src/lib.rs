@@ -1972,18 +1972,12 @@ pub async fn list_children_page_sorted(
     for kind in kinds {
         kind_clauses.push(match kind {
             ChildrenKindFilter::Folder => "n.kind = 'folder'".to_owned(),
-            ChildrenKindFilter::Image => {
-                "n.kind = 'file' AND nm.media_kind = 'image'".to_owned()
-            }
+            ChildrenKindFilter::Image => "n.kind = 'file' AND nm.media_kind = 'image'".to_owned(),
             ChildrenKindFilter::Document => {
                 "n.kind = 'file' AND nm.media_kind = 'document'".to_owned()
             }
-            ChildrenKindFilter::Video => {
-                "n.kind = 'file' AND nm.media_kind = 'video'".to_owned()
-            }
-            ChildrenKindFilter::Audio => {
-                "n.kind = 'file' AND nm.media_kind = 'audio'".to_owned()
-            }
+            ChildrenKindFilter::Video => "n.kind = 'file' AND nm.media_kind = 'video'".to_owned(),
+            ChildrenKindFilter::Audio => "n.kind = 'file' AND nm.media_kind = 'audio'".to_owned(),
         });
     }
     let kind_filter = if kind_clauses.is_empty() {
@@ -2435,7 +2429,11 @@ fn is_unique_violation(error: &sqlx::Error) -> bool {
 /// Returns `CannotTrashRoot` for the stable root, `NotFound` for missing or
 /// already-trashed nodes, or a database error.
 pub async fn trash_node(pool: &PgPool, node_id: Uuid) -> Result<NodeRecord, TrashMutationError> {
-    trash_nodes(pool, &[node_id]).await?.into_iter().next().ok_or(FolderError::NotFound.into())
+    trash_nodes(pool, &[node_id])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(FolderError::NotFound.into())
 }
 
 /// Moves one or more active nodes (and their active descendants) into trash.
@@ -2722,10 +2720,12 @@ pub async fn purge_trashed_node_records(
         .await?;
 
     // Upload sessions keep a restrict FK on the completed node.
-    sqlx::query("UPDATE upload_sessions SET completed_node_id = NULL WHERE completed_node_id = ANY($1)")
-        .bind(&node_ids)
-        .execute(&mut *transaction)
-        .await?;
+    sqlx::query(
+        "UPDATE upload_sessions SET completed_node_id = NULL WHERE completed_node_id = ANY($1)",
+    )
+    .bind(&node_ids)
+    .execute(&mut *transaction)
+    .await?;
 
     // Break parent links among the purge set so deletes are not ordered by depth.
     sqlx::query(
@@ -3174,5 +3174,3 @@ async fn ancestor_map_for_nodes(
     }
     Ok(map)
 }
-
-

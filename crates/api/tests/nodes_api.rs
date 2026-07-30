@@ -94,7 +94,9 @@ async fn trash_restore_and_list_flow() {
     let trashed: NodeResponse = response_json(trashed).await;
     assert_eq!(trashed.id, folder.id);
 
-    let listed = list_children(&pool, parent.id).await.expect("list children");
+    let listed = list_children(&pool, parent.id)
+        .await
+        .expect("list children");
     assert!(listed.is_empty());
 
     let trash = json_request(app.clone(), "GET", "/api/trash", None).await;

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use chrono::Duration;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_db::{
-    ArtifactState, ArtifactType, JobType, MIGRATOR, ROOT_NODE_ID, UpsertArtifact,
-    claim_job, create_folder, create_or_update_artifact, create_file_object, finalize_file_object,
+    ArtifactState, ArtifactType, JobType, MIGRATOR, ROOT_NODE_ID, UpsertArtifact, claim_job,
+    create_file_object, create_folder, create_or_update_artifact, finalize_file_object,
     get_node_by_id, request_permanent_deletion, trash_node,
 };
 use strife_storage::{LocalFsBackend, StorageBackend, StorageKey};
@@ -187,8 +187,7 @@ async fn worker_handler_routes_permanent_deletion() {
         eprintln!("DATABASE_URL is unset; skipping PostgreSQL integration test");
         return;
     };
-    let storage_root =
-        std::env::temp_dir().join(format!("strife-deletion-wh-{}", Uuid::new_v4()));
+    let storage_root = std::env::temp_dir().join(format!("strife-deletion-wh-{}", Uuid::new_v4()));
     let storage = Arc::new(
         LocalFsBackend::new(&storage_root)
             .await

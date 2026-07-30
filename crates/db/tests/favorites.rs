@@ -23,13 +23,9 @@ async fn favorites_are_idempotent_and_removed_on_trash() {
         return;
     };
 
-    let folder = create_folder(
-        &pool,
-        ROOT_NODE_ID,
-        &format!("fav-{}", Uuid::new_v4()),
-    )
-    .await
-    .expect("create");
+    let folder = create_folder(&pool, ROOT_NODE_ID, &format!("fav-{}", Uuid::new_v4()))
+        .await
+        .expect("create");
 
     add_favorite(&pool, folder.id).await.expect("favorite");
     add_favorite(&pool, folder.id)
@@ -38,7 +34,10 @@ async fn favorites_are_idempotent_and_removed_on_trash() {
 
     let listed = list_favorites(&pool).await.expect("list");
     assert_eq!(
-        listed.iter().filter(|item| item.node_id == folder.id).count(),
+        listed
+            .iter()
+            .filter(|item| item.node_id == folder.id)
+            .count(),
         1
     );
 

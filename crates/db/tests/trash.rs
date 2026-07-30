@@ -42,9 +42,13 @@ async fn trash_excludes_from_listing_and_restore_reincludes() {
         return;
     };
 
-    let parent = create_folder(&pool, ROOT_NODE_ID, &format!("trash-parent-{}", Uuid::new_v4()))
-        .await
-        .expect("create parent");
+    let parent = create_folder(
+        &pool,
+        ROOT_NODE_ID,
+        &format!("trash-parent-{}", Uuid::new_v4()),
+    )
+    .await
+    .expect("create parent");
     let folder = create_folder(&pool, parent.id, "Projects")
         .await
         .expect("create folder");
@@ -59,8 +63,13 @@ async fn trash_excludes_from_listing_and_restore_reincludes() {
     let trashed = trash_node(&pool, folder.id).await.expect("trash folder");
     assert_eq!(trashed.lifecycle_state, LifecycleState::Trashed);
 
-    let children_after = list_children(&pool, parent.id).await.expect("list after trash");
-    assert!(children_after.is_empty(), "trashed folder must leave active listing");
+    let children_after = list_children(&pool, parent.id)
+        .await
+        .expect("list after trash");
+    assert!(
+        children_after.is_empty(),
+        "trashed folder must leave active listing"
+    );
 
     let nested = get_node_by_id(&pool, child.id)
         .await
@@ -78,11 +87,15 @@ async fn trash_excludes_from_listing_and_restore_reincludes() {
         "nested descendants without their own trash entry are not listed"
     );
 
-    let restored = restore_node(&pool, folder.id).await.expect("restore folder");
+    let restored = restore_node(&pool, folder.id)
+        .await
+        .expect("restore folder");
     assert_eq!(restored.lifecycle_state, LifecycleState::Active);
     assert_eq!(restored.parent_id, Some(parent.id));
 
-    let children_restored = list_children(&pool, parent.id).await.expect("list after restore");
+    let children_restored = list_children(&pool, parent.id)
+        .await
+        .expect("list after restore");
     assert_eq!(children_restored.len(), 1);
     assert_eq!(children_restored[0].id, folder.id);
 

@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use chrono::Duration as ChronoDuration;
 use sqlx::PgPool;
 use strife_db::{
-    JobRecord, JobType, claim_job, complete_job, enqueue_expired_trash_deletions, fail_job, get_job,
-    release_expired_leases,
+    JobRecord, JobType, claim_job, complete_job, enqueue_expired_trash_deletions, fail_job,
+    get_job, release_expired_leases,
 };
 use strife_storage::StorageBackend;
 use tokio::{sync::watch, task::JoinSet, time::MissedTickBehavior};

@@ -43,9 +43,7 @@ async fn import_scan_recovery_and_name_conflict() {
         .await
         .expect("write source");
 
-    let storage = LocalFsBackend::new(&storage_root)
-        .await
-        .expect("storage");
+    let storage = LocalFsBackend::new(&storage_root).await.expect("storage");
     let sink = PostgresDiscoverySink::new(&pool);
     let guard = DiskGuard::new(100).expect("guard");
 
@@ -64,19 +62,15 @@ async fn import_scan_recovery_and_name_conflict() {
         .into_iter()
         .find(|entry| entry.source_path == file_name)
         .expect("discovered entry");
-    let node = import_entry(
-        &pool,
-        &storage,
-        &watch_root,
-        ROOT_NODE_ID,
-        &entry,
-        guard,
-    )
-    .await
-    .expect("import")
-    .expect("finalized node");
+    let node = import_entry(&pool, &storage, &watch_root, ROOT_NODE_ID, &entry, guard)
+        .await
+        .expect("import")
+        .expect("finalized node");
     assert_eq!(node.name, file_name);
-    assert!(!watch_root.join(&file_name).exists(), "source removed after import");
+    assert!(
+        !watch_root.join(&file_name).exists(),
+        "source removed after import"
+    );
 
     let count_nodes = |pool: &PgPool, name: String| {
         let pool = pool.clone();
