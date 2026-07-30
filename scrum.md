@@ -1356,13 +1356,23 @@ As a developer, I want a `jobs` table and a `FOR UPDATE SKIP LOCKED` job queue s
 
 **Acceptance Criteria:**
 
-- [ ] Migration creates `jobs` with: `id` (UUID), `job_type` (enum: `metadata_extraction` | `preview_generation` | `trash_cleanup` | `permanent_deletion`), `target_node_id` (FK), `state` (enum: `pending` | `leased` | `completed` | `failed` | `cancelled`), `priority` (int, default 0), `attempts` (int, default 0), `max_attempts` (int, default 3), `lease_owner` (text, nullable), `lease_expires_at` (timestamptz, nullable), `last_error` (text, nullable), `created_at`, `updated_at`, `completed_at`.
-- [ ] `claim_job(job_type, owner)` uses `SELECT ... FOR UPDATE SKIP LOCKED` to lease the highest-priority pending job, setting `lease_owner`, `lease_expires_at` (now + configurable TTL), and incrementing `attempts`.
-- [ ] `complete_job(id)` marks it `completed`.
-- [ ] `fail_job(id, error)` marks it `failed` if `attempts >= max_attempts`, otherwise resets to `pending` with the error recorded.
-- [ ] `release_expired_leases()` finds jobs where `lease_expires_at < now()` and resets them to `pending`.
-- [ ] Enqueueing the same `(job_type, target_node_id)` when one is already `pending` is a no-op (idempotent).
-- [ ] Tests: enqueue, claim, complete, fail with retry, expire lease.
+- [x] Migration creates `jobs` with: `id` (UUID), `job_type` (enum: `metadata_extraction` | `preview_generation` | `trash_cleanup` | `permanent_deletion`), `target_node_id` (FK), `state` (enum: `pending` | `leased` | `completed` | `failed` | `cancelled`), `priority` (int, default 0), `attempts` (int, default 0), `max_attempts` (int, default 3), `lease_owner` (text, nullable), `lease_expires_at` (timestamptz, nullable), `last_error` (text, nullable), `created_at`, `updated_at`, `completed_at`.
+- [x] `claim_job(job_type, owner)` uses `SELECT ... FOR UPDATE SKIP LOCKED` to lease the highest-priority pending job, setting `lease_owner`, `lease_expires_at` (now + configurable TTL), and incrementing `attempts`.
+- [x] `complete_job(id)` marks it `completed`.
+- [x] `fail_job(id, error)` marks it `failed` if `attempts >= max_attempts`, otherwise resets to `pending` with the error recorded.
+- [x] `release_expired_leases()` finds jobs where `lease_expires_at < now()` and resets them to `pending`.
+- [x] Enqueueing the same `(job_type, target_node_id)` when one is already `pending` is a no-op (idempotent).
+- [x] Tests: enqueue, claim, complete, fail with retry, expire lease.
+
+**Implementation report:** Reused the Epic 2 jobs migration and added a typed PostgreSQL queue API with atomic priority leasing, configurable lease TTLs, idempotent enqueueing, retry exhaustion, completion, and expired-lease recovery. Integration coverage exercises the complete queue lifecycle against PostgreSQL.
+
+**New files:**
+
+- `crates/db/tests/jobs.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
 
 ---
 

@@ -61,6 +61,174 @@ pub enum ImportEntryState {
     Failed,
 }
 
+/// Kind of durable background work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "job_type", rename_all = "snake_case")]
+pub enum JobType {
+    MetadataExtraction,
+    PreviewGeneration,
+    TrashCleanup,
+    PermanentDeletion,
+}
+
+/// Lifecycle state of a durable background job.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "job_state", rename_all = "lowercase")]
+pub enum JobState {
+    Pending,
+    Leased,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// One durable background job.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct JobRecord {
+    pub id: Uuid,
+    pub job_type: JobType,
+    pub target_node_id: Uuid,
+    pub state: JobState,
+    pub priority: i32,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Enqueues work unless the target already has a pending or leased job of this type.
+///
+/// # Errors
+///
+/// Returns a database error when the job cannot be inserted.
+pub async fn enqueue_job(
+    pool: &PgPool,
+    job_type: JobType,
+    target_node_id: Uuid,
+    priority: i32,
+) -> Result<Option<JobRecord>, sqlx::Error> {
+    sqlx::query_as::<_, JobRecord>(
+        r"
+        INSERT INTO jobs (id, job_type, target_node_id, priority)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(job_type)
+    .bind(target_node_id)
+    .bind(priority)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Atomically leases the highest-priority pending job of the requested type.
+///
+/// # Errors
+///
+/// Returns a database error when the queue cannot be queried or updated.
+pub async fn claim_job(
+    pool: &PgPool,
+    job_type: JobType,
+    owner: &str,
+    lease_ttl: chrono::Duration,
+) -> Result<Option<JobRecord>, sqlx::Error> {
+    let lease_expires_at = Utc::now() + lease_ttl;
+    sqlx::query_as::<_, JobRecord>(
+        r"
+        WITH candidate AS (
+            SELECT id
+            FROM jobs
+            WHERE job_type = $1 AND state = 'pending'
+            ORDER BY priority DESC, created_at, id
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE jobs
+        SET state = 'leased', lease_owner = $2, lease_expires_at = $3,
+            attempts = attempts + 1, updated_at = now()
+        FROM candidate
+        WHERE jobs.id = candidate.id
+        RETURNING jobs.*
+        ",
+    )
+    .bind(job_type)
+    .bind(owner)
+    .bind(lease_expires_at)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Marks a leased job completed and clears its lease.
+///
+/// # Errors
+///
+/// Returns a database error when the job cannot be updated.
+pub async fn complete_job(pool: &PgPool, job_id: Uuid) -> Result<Option<JobRecord>, sqlx::Error> {
+    sqlx::query_as::<_, JobRecord>(
+        r"
+        UPDATE jobs
+        SET state = 'completed', lease_owner = NULL, lease_expires_at = NULL,
+            completed_at = now(), updated_at = now()
+        WHERE id = $1 AND state = 'leased'
+        RETURNING *
+        ",
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Records a failed attempt, retrying until the job reaches `max_attempts`.
+///
+/// # Errors
+///
+/// Returns a database error when the job cannot be updated.
+pub async fn fail_job(
+    pool: &PgPool,
+    job_id: Uuid,
+    error: &str,
+) -> Result<Option<JobRecord>, sqlx::Error> {
+    sqlx::query_as::<_, JobRecord>(
+        r"
+        UPDATE jobs
+        SET state = CASE WHEN attempts >= max_attempts THEN 'failed'::job_state
+                         ELSE 'pending'::job_state END,
+            lease_owner = NULL, lease_expires_at = NULL, last_error = $2,
+            updated_at = now()
+        WHERE id = $1 AND state = 'leased'
+        RETURNING *
+        ",
+    )
+    .bind(job_id)
+    .bind(error)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Returns expired leases to the pending queue.
+///
+/// # Errors
+///
+/// Returns a database error when expired leases cannot be updated.
+pub async fn release_expired_leases(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r"
+        UPDATE jobs
+        SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE state = 'leased' AND lease_expires_at < now()
+        ",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// The fixed watched-folder source persisted by the v1 schema.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct ImportSourceRecord {
@@ -1347,6 +1515,7 @@ async fn enqueue_metadata_job(
         r"
         INSERT INTO jobs (id, job_type, target_node_id)
         VALUES ($1, 'metadata_extraction', $2)
+        ON CONFLICT DO NOTHING
         ",
     )
     .bind(Uuid::new_v4())
