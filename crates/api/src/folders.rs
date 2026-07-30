@@ -71,6 +71,8 @@ pub struct FolderResponse {
     pub kind: NodeKindResponse,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub is_favorite: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -223,9 +225,21 @@ async fn list_children(
         nodes.pop();
     }
     let next_cursor = has_more.then(|| nodes.last().map(|node| node.id)).flatten();
+    let node_ids: Vec<Uuid> = nodes.iter().map(|node| node.id).collect();
+    let favorite_ids = strife_db::favorite_ids_among(&state.pool, &node_ids)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    let favorite_set: std::collections::HashSet<Uuid> = favorite_ids.into_iter().collect();
 
     Ok(Json(ChildrenResponse {
-        items: nodes.into_iter().map(FolderResponse::from).collect(),
+        items: nodes
+            .into_iter()
+            .map(|node| {
+                let mut response = FolderResponse::from(node);
+                response.is_favorite = favorite_set.contains(&response.id);
+                response
+            })
+            .collect(),
         next_cursor,
     }))
 }
@@ -305,6 +319,7 @@ impl From<NodeRecord> for FolderResponse {
             },
             created_at: node.created_at,
             updated_at: node.updated_at,
+            is_favorite: false,
         }
     }
 }

@@ -2,6 +2,8 @@ import type {
   ApiReadiness,
   CreatedUploadSession,
   DependencyStatus,
+  FavoriteItem,
+  FavoritesListResponse,
   FolderAncestor,
   FolderChildrenResponse,
   FileDetails,
@@ -259,6 +261,72 @@ export async function getFolderChildren(
       size_bytes: item.size_bytes ?? null,
     })),
     next_cursor: body.next_cursor,
+  }
+}
+
+export async function getFavorites(
+  signal?: AbortSignal,
+): Promise<FavoritesListResponse> {
+  let response: Response
+  try {
+    response = await fetch('/api/favorites', {
+      headers: { Accept: 'application/json' },
+      signal,
+    })
+  } catch (error) {
+    throw new ApiClientError('Favorites could not be loaded.', { cause: error })
+  }
+  if (!response.ok) {
+    throw new ApiClientError(
+      `The favorites request failed (${response.status}).`,
+    )
+  }
+  const body: unknown = await response.json()
+  if (!isFavoritesListResponse(body)) {
+    throw new ApiClientError('The favorites response was invalid.')
+  }
+  return body
+}
+
+export async function addFavorite(nodeId: string): Promise<void> {
+  const response = await fetch(`/api/nodes/${nodeId}/favorite`, {
+    method: 'PUT',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) {
+    throw new ApiClientError(
+      `Could not favorite item (${response.status}).`,
+      { status: response.status },
+    )
+  }
+}
+
+export async function removeFavorite(nodeId: string): Promise<void> {
+  const response = await fetch(`/api/nodes/${nodeId}/favorite`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) {
+    throw new ApiClientError(
+      `Could not unfavorite item (${response.status}).`,
+      { status: response.status },
+    )
+  }
+}
+
+export async function trashNodes(nodeIds: string[]): Promise<void> {
+  const response = await fetch('/api/nodes/trash', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ node_ids: nodeIds }),
+  })
+  if (!response.ok) {
+    throw new ApiClientError(`Could not move items to trash (${response.status}).`, {
+      status: response.status,
+    })
   }
 }
 
@@ -677,6 +745,30 @@ function isFolderItem(value: unknown): value is FolderItem {
     (value.size_bytes === undefined ||
       value.size_bytes === null ||
       typeof value.size_bytes === 'number') &&
+    typeof value.created_at === 'string' &&
+    typeof value.updated_at === 'string' &&
+    (value.is_favorite === undefined || typeof value.is_favorite === 'boolean')
+  )
+}
+
+function isFavoritesListResponse(
+  value: unknown,
+): value is FavoritesListResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.every(isFavoriteItem)
+  )
+}
+
+function isFavoriteItem(value: unknown): value is FavoriteItem {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    (value.kind === 'folder' || value.kind === 'file') &&
+    (value.parent_id === null || typeof value.parent_id === 'string') &&
+    typeof value.favorited_at === 'string' &&
     typeof value.created_at === 'string' &&
     typeof value.updated_at === 'string'
   )

@@ -148,7 +148,7 @@ async fn cleanup_batch_respects_limit() {
             "UPDATE trash_entries SET scheduled_purge_at = $2, trashed_at = $2 WHERE node_id = $1",
         )
         .bind(folder.id)
-        .bind(Utc::now() - Duration::days(40 + i as i64))
+        .bind(Utc::now() - Duration::days(40 + i64::from(i)))
         .execute(&pool)
         .await
         .expect("backdate");

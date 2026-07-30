@@ -8,11 +8,15 @@ import {
   type JSX,
 } from 'solid-js'
 import {
+  addFavorite,
   createFolder,
+  getFavorites,
   getFolderAncestors,
   getFolderChildren,
   moveFolders,
+  removeFavorite,
   renameFolder,
+  trashNodes,
 } from '../api/client'
 import type { FolderAncestor, FolderItem } from '../api/types'
 import type { FileDetails, MediaStream } from '../api/types'
@@ -188,6 +192,53 @@ function FolderContents(props: { folderId: string }) {
     )
   }
 
+  const handleToggleFavorite = async (item: FolderItem) => {
+    const next = !item.is_favorite
+    if (staticPreview) {
+      setStaticItems((current) =>
+        current.map((candidate) =>
+          candidate.id === item.id
+            ? { ...candidate, is_favorite: next }
+            : candidate,
+        ),
+      )
+      return
+    }
+    if (next) await addFavorite(item.id)
+    else await removeFavorite(item.id)
+    mutate((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((candidate) =>
+              candidate.id === item.id
+                ? { ...candidate, is_favorite: next }
+                : candidate,
+            ),
+          }
+        : current,
+    )
+  }
+
+  const handleTrash = async (items: FolderItem[]) => {
+    const ids = items.map((item) => item.id)
+    if (staticPreview) {
+      setStaticItems((current) =>
+        current.filter((item) => !ids.includes(item.id)),
+      )
+      return
+    }
+    await trashNodes(ids)
+    mutate((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.filter((item) => !ids.includes(item.id)),
+          }
+        : current,
+    )
+  }
+
   const loadPreviewFolders = async (folderId: string) => ({
     items:
       folderId === ROOT_FOLDER_ID
@@ -264,6 +315,8 @@ function FolderContents(props: { folderId: string }) {
         onRetry={() => void refetch()}
         onRename={setRenameItem}
         onMove={setMoveItems}
+        onTrash={(selected) => void handleTrash(selected)}
+        onToggleFavorite={(item) => void handleToggleFavorite(item)}
         onDetails={setDetailsItem}
         onPreview={setPreviewItem}
         onSelectionChange={(selected) => {
@@ -344,6 +397,7 @@ const previewItems: FolderItem[] = [
     size_bytes: null,
     created_at: '2026-07-01T14:30:00Z',
     updated_at: '2026-07-27T18:42:00Z',
+    is_favorite: true,
   },
   {
     id: '20000000-0000-0000-0000-000000000002',
@@ -360,6 +414,7 @@ const previewItems: FolderItem[] = [
     size_bytes: 2_480_000,
     created_at: '2026-07-18T20:05:00Z',
     updated_at: '2026-07-18T20:05:00Z',
+    is_favorite: true,
   },
   {
     id: '20000000-0000-0000-0000-000000000004',
@@ -653,12 +708,54 @@ const previewSources = new Map<string, string>([
 ])
 
 export function FavoritesView() {
+  const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
+  const [favorites, { refetch }] = createResource(
+    () => (staticPreview ? false : 'favorites'),
+    () => getFavorites(),
+  )
+  const items = (): FolderItem[] => {
+    if (staticPreview) {
+      return previewItems
+        .filter((item) => item.is_favorite)
+        .map((item) => ({ ...item, is_favorite: true }))
+    }
+    return (
+      favorites()?.items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        kind: item.kind,
+        size_bytes: null,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+        is_favorite: true,
+      })) ?? []
+    )
+  }
+
+  const handleToggleFavorite = async (item: FolderItem) => {
+    if (staticPreview) return
+    await removeFavorite(item.id)
+    await refetch()
+  }
+
   return (
     <WorkspaceView
       eyebrow="Library"
       title="Favorites"
-      description="Frequently used files and folders will appear here."
-    />
+      description="Frequently used files and folders."
+    >
+      <FileTable
+        items={items()}
+        loading={favorites.loading}
+        error={
+          favorites.error instanceof Error
+            ? favorites.error.message
+            : undefined
+        }
+        onRetry={() => void refetch()}
+        onToggleFavorite={(item) => void handleToggleFavorite(item)}
+      />
+    </WorkspaceView>
   )
 }
 

@@ -14,6 +14,7 @@ interface FileTableProps {
   onTrash?: (items: FolderItem[]) => void
   onDetails?: (item: FolderItem) => void
   onPreview?: (item: FolderItem) => void
+  onToggleFavorite?: (item: FolderItem) => void
   onSelectionChange?: (items: FolderItem[]) => void
 }
 
@@ -222,6 +223,9 @@ export function FileTable(props: FileTableProps) {
                   <th class="file-table__icon">
                     <span class="sr-only">Type</span>
                   </th>
+                  <th class="file-table__favorite">
+                    <span class="sr-only">Favorite</span>
+                  </th>
                   <th>Name</th>
                   <th>Kind</th>
                   <th>Size</th>
@@ -260,6 +264,27 @@ export function FileTable(props: FileTableProps) {
                       </td>
                       <td class="file-table__icon">
                         <NodeIcon kind={item.kind} />
+                      </td>
+                      <td class="file-table__favorite">
+                        <button
+                          type="button"
+                          classList={{
+                            'file-table__star': true,
+                            'is-active': Boolean(item.is_favorite),
+                          }}
+                          aria-label={
+                            item.is_favorite
+                              ? `Remove ${item.name} from favorites`
+                              : `Add ${item.name} to favorites`
+                          }
+                          aria-pressed={Boolean(item.is_favorite)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            props.onToggleFavorite?.(item)
+                          }}
+                        >
+                          {item.is_favorite ? '★' : '☆'}
+                        </button>
                       </td>
                       <td class="file-table__name">{item.name}</td>
                       <td class="file-table__kind">{capitalize(item.kind)}</td>

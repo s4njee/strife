@@ -27,6 +27,21 @@ export interface FolderItem {
   size_bytes: number | null
   created_at: string
   updated_at: string
+  is_favorite?: boolean
+}
+
+export interface FavoriteItem {
+  id: string
+  name: string
+  kind: FolderItemKind
+  parent_id: string | null
+  favorited_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface FavoritesListResponse {
+  items: FavoriteItem[]
 }
 
 export interface FolderChildrenResponse {

@@ -968,6 +968,19 @@ pub struct NodeRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A favorited node with its details, sorted by favorited time.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct FavoriteRecord {
+    pub node_id: Uuid,
+    pub favorited_at: DateTime<Utc>,
+    pub name: String,
+    pub kind: NodeKind,
+    pub parent_id: Option<Uuid>,
+    pub lifecycle_state: LifecycleState,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Typed representation of a row in `trash_entries` joined with node details.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct TrashEntryRecord {
@@ -2407,6 +2420,12 @@ pub async fn trash_nodes(
         .await?;
     }
 
+    // Favorites do not survive trash (Story 6.5).
+    sqlx::query("DELETE FROM favorites WHERE node_id = ANY($1)")
+        .bind(&all_ids)
+        .execute(&mut *transaction)
+        .await?;
+
     let trashed = sqlx::query_as::<_, NodeRecord>(
         r"
         SELECT
@@ -2725,6 +2744,98 @@ pub async fn enqueue_expired_trash_deletions(
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
+}
+
+/// Adds a favorite for an active node. Idempotent when already favorited.
+///
+/// # Errors
+///
+/// Returns `NotFound` when the node is missing or not active, or a database error.
+pub async fn add_favorite(pool: &PgPool, node_id: Uuid) -> Result<(), FolderMutationError> {
+    if node_id == ROOT_NODE_ID {
+        return Err(FolderError::NotFound.into());
+    }
+    let result = sqlx::query(
+        r"
+        INSERT INTO favorites (node_id)
+        SELECT id FROM nodes
+        WHERE id = $1 AND lifecycle_state = 'active'
+        ON CONFLICT (node_id) DO NOTHING
+        ",
+    )
+    .bind(node_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        let exists = get_node_by_id(pool, node_id)
+            .await?
+            .is_some_and(|node| node.lifecycle_state == LifecycleState::Active);
+        if exists {
+            // Already favorited.
+            return Ok(());
+        }
+        return Err(FolderError::NotFound.into());
+    }
+    Ok(())
+}
+
+/// Removes a favorite. Idempotent when the favorite is already absent.
+///
+/// # Errors
+///
+/// Returns a database error when the delete cannot be completed.
+pub async fn remove_favorite(pool: &PgPool, node_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM favorites WHERE node_id = $1")
+        .bind(node_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Lists active favorited nodes ordered by most recently favorited first.
+///
+/// # Errors
+///
+/// Returns a database error when the query cannot be completed.
+pub async fn list_favorites(pool: &PgPool) -> Result<Vec<FavoriteRecord>, sqlx::Error> {
+    sqlx::query_as::<_, FavoriteRecord>(
+        r"
+        SELECT
+            f.node_id,
+            f.created_at AS favorited_at,
+            n.name,
+            n.kind,
+            n.parent_id,
+            n.lifecycle_state,
+            n.created_at,
+            n.updated_at
+        FROM favorites AS f
+        JOIN nodes AS n ON n.id = f.node_id
+        WHERE n.lifecycle_state = 'active'
+        ORDER BY f.created_at DESC, n.name, n.id
+        ",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Returns whether each of the given node ids is favorited.
+///
+/// # Errors
+///
+/// Returns a database error when the query cannot be completed.
+pub async fn favorite_ids_among(
+    pool: &PgPool,
+    node_ids: &[Uuid],
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar::<_, Uuid>(
+        r"
+        SELECT node_id FROM favorites WHERE node_id = ANY($1)
+        ",
+    )
+    .bind(node_ids)
+    .fetch_all(pool)
+    .await
 }
 
 async fn lock_trash_entry(

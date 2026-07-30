@@ -5,12 +5,14 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use strife_db::{NodeKind, NodeRecord, TrashEntryRecord, TrashMutationError};
+use strife_db::{
+    FavoriteRecord, FolderMutationError, NodeKind, NodeRecord, TrashEntryRecord, TrashMutationError,
+};
 use strife_domain::FolderError;
 use uuid::Uuid;
 
@@ -23,10 +25,15 @@ struct NodesState {
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/api/trash", get(list_trash))
+        .route("/api/favorites", get(list_favorites))
         .route("/api/nodes/{id}/trash", post(trash_node))
         .route("/api/nodes/trash", post(trash_nodes_batch))
         .route("/api/nodes/{id}/restore", post(restore_node))
         .route("/api/nodes/{id}/permanent", delete(permanent_delete))
+        .route(
+            "/api/nodes/{id}/favorite",
+            put(add_favorite).delete(remove_favorite),
+        )
         .with_state(NodesState { pool })
 }
 
@@ -80,6 +87,22 @@ pub struct PermanentDeleteResponse {
     pub node_id: Uuid,
     pub job_id: Option<Uuid>,
     pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FavoriteItemResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: NodeKindResponse,
+    pub parent_id: Option<Uuid>,
+    pub favorited_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FavoritesListResponse {
+    pub items: Vec<FavoriteItemResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -149,6 +172,18 @@ impl From<TrashMutationError> for ApiError {
     }
 }
 
+impl From<FolderMutationError> for ApiError {
+    fn from(error: FolderMutationError) -> Self {
+        match error {
+            FolderMutationError::Rule(FolderError::NotFound) => Self::NotFound,
+            FolderMutationError::Rule(FolderError::NameConflict) => Self::NameConflict,
+            FolderMutationError::Rule(FolderError::InvalidName | FolderError::CycleDetected)
+            | FolderMutationError::MoveConflict(_)
+            | FolderMutationError::Database(_) => Self::Internal,
+        }
+    }
+}
+
 async fn trash_node(
     State(state): State<NodesState>,
     Path(node_id): Path<Uuid>,
@@ -187,6 +222,35 @@ async fn list_trash(
     Ok(Json(TrashListResponse {
         items: items.into_iter().map(TrashItemResponse::from).collect(),
     }))
+}
+
+async fn list_favorites(
+    State(state): State<NodesState>,
+) -> Result<Json<FavoritesListResponse>, ApiError> {
+    let items = strife_db::list_favorites(&state.pool)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    Ok(Json(FavoritesListResponse {
+        items: items.into_iter().map(FavoriteItemResponse::from).collect(),
+    }))
+}
+
+async fn add_favorite(
+    State(state): State<NodesState>,
+    Path(node_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    strife_db::add_favorite(&state.pool, node_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_favorite(
+    State(state): State<NodesState>,
+    Path(node_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    strife_db::remove_favorite(&state.pool, node_id)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn permanent_delete(
@@ -246,6 +310,23 @@ impl From<TrashEntryRecord> for TrashItemResponse {
             original_parent_id: entry.original_parent_id,
             trashed_at: entry.trashed_at,
             scheduled_purge_at: entry.scheduled_purge_at,
+            created_at: entry.created_at,
+            updated_at: entry.updated_at,
+        }
+    }
+}
+
+impl From<FavoriteRecord> for FavoriteItemResponse {
+    fn from(entry: FavoriteRecord) -> Self {
+        Self {
+            id: entry.node_id,
+            name: entry.name,
+            kind: match entry.kind {
+                NodeKind::Folder => NodeKindResponse::Folder,
+                NodeKind::File => NodeKindResponse::File,
+            },
+            parent_id: entry.parent_id,
+            favorited_at: entry.favorited_at,
             created_at: entry.created_at,
             updated_at: entry.updated_at,
         }

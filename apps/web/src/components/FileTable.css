@@ -76,6 +76,33 @@
   cursor: default;
 }
 
+.file-table__favorite {
+  width: 2.25rem;
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
+  text-align: center;
+}
+
+.file-table__star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.file-table__star:hover,
+.file-table__star.is-active {
+  color: var(--color-accent);
+}
+
 .file-table__check,
 .file-table__icon {
   width: 2.5rem;

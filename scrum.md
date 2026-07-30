@@ -2042,14 +2042,33 @@ As a user, I want to favorite files and folders and see them in a favorites view
 
 **Acceptance Criteria:**
 
-- [ ] Migration creates `favorites`: `node_id` (FK, PK), `created_at`.
-- [ ] `POST /api/nodes/:id/favorite` adds a favorite (idempotent).
-- [ ] `DELETE /api/nodes/:id/favorite` removes a favorite.
-- [ ] `GET /api/favorites` lists all favorited nodes with their details (sorted by favorited time).
-- [ ] The file table shows a star icon on favorited items.
-- [ ] Clicking the star toggles the favorite status.
-- [ ] The "Favorites" sidebar link navigates to the favorites listing.
-- [ ] Trashing a favorited item removes the favorite.
+- [x] Migration creates `favorites`: `node_id` (FK, PK), `created_at`.
+- [x] `POST /api/nodes/:id/favorite` adds a favorite (idempotent).
+- [x] `DELETE /api/nodes/:id/favorite` removes a favorite.
+- [x] `GET /api/favorites` lists all favorited nodes with their details (sorted by favorited time).
+- [x] The file table shows a star icon on favorited items.
+- [x] Clicking the star toggles the favorite status.
+- [x] The "Favorites" sidebar link navigates to the favorites listing.
+- [x] Trashing a favorited item removes the favorite.
+
+**Implementation report:** Added the `favorites` table, idempotent put/delete endpoints, favorites listing, and `is_favorite` on folder children. The file table star toggles favorites, the Favorites view loads the listing, and trash clears favorite rows.
+
+**New files:**
+
+- `crates/db/migrations/0010_favorites.down.sql`
+- `crates/db/migrations/0010_favorites.up.sql`
+- `crates/db/tests/favorites.rs`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/components/FileTable.css`
+- `apps/web/src/components/FileTable.tsx`
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/folders.rs`
+- `crates/api/src/nodes.rs`
+- `crates/db/src/lib.rs`
 
 ---
 
