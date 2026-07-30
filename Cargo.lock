@@ -1962,6 +1962,17 @@ dependencies = [
 [[package]]
 name = "strife-worker"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "sqlx",
+ "strife-db",
+ "strife-storage",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "stringprep"

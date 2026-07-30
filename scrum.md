@@ -1382,13 +1382,26 @@ As a developer, I want `crates/worker` to run a loop claiming and executing jobs
 
 **Acceptance Criteria:**
 
-- [ ] `crates/worker` is a binary that connects to PostgreSQL and the storage backend.
-- [ ] It runs a configurable number of concurrent job processors (default: 2, tunable for 4 GB RAM via `WORKER_CONCURRENCY`).
-- [ ] Each processor loops: claim a job → execute the handler → complete/fail the job.
-- [ ] If no job is available, the processor sleeps for a configurable interval (default: 5s) before polling again.
-- [ ] A periodic task (every 60s) calls `release_expired_leases()`.
-- [ ] Structured JSON logging with a `job_id` correlation ID on every log line during processing.
-- [ ] Graceful shutdown on SIGTERM: finish current jobs, then exit.
+- [x] `crates/worker` is a binary that connects to PostgreSQL and the storage backend.
+- [x] It runs a configurable number of concurrent job processors (default: 2, tunable for 4 GB RAM via `WORKER_CONCURRENCY`).
+- [x] Each processor loops: claim a job → execute the handler → complete/fail the job.
+- [x] If no job is available, the processor sleeps for a configurable interval (default: 5s) before polling again.
+- [x] A periodic task (every 60s) calls `release_expired_leases()`.
+- [x] Structured JSON logging with a `job_id` correlation ID on every log line during processing.
+- [x] Graceful shutdown on SIGTERM: finish current jobs, then exit.
+
+**Implementation report:** Added the production worker runtime with environment-based PostgreSQL and storage configuration, bounded concurrent processors, durable complete/fail transitions, periodic lease recovery, and correlated JSON logs. SIGTERM and Ctrl-C stop new claims while allowing in-flight handlers to finish; the concrete metadata handler remains deliberately unavailable until Story 4.9 so queued work is never falsely completed.
+
+**New files:**
+
+- `crates/worker/src/lib.rs`
+
+**Modified files:**
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/worker/Cargo.toml`
+- `crates/worker/src/main.rs`
 
 ---
 
