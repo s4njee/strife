@@ -270,7 +270,7 @@ Metadata processing is asynchronous and must never prevent an otherwise valid or
 
 GPS metadata is displayed. Metadata is read-only in v1. Do not extract cover art, waveforms, embedded attachments, or archive listings.
 
-Record extractor versions and warnings. Preserve useful raw structured results in versioned `jsonb`, subject to the unresolved size/retention policy. Normalize common UI fields into typed columns. When an extractor or schema changes, enqueue gradual low-priority reprocessing rather than blocking startup.
+Record extractor versions and warnings. Preserve every successful raw metadata JSON result in full, targeting 10–15 GB per million files, and normalize common UI fields into a one-to-one typed metadata record. Tika document text and OCR text are stored separately from metadata JSON. The v1 acceptance matrix is DOC, DOCX, PDF, JPEG, GIF, PNG, NEF, DNG, MP4, MKV, MOV, MP3, and M4A; see [ADR 0005](docs/decisions/0005-metadata-storage-and-format-matrix.md). When an extractor or schema changes, enqueue gradual low-priority reprocessing rather than blocking startup.
 
 ## 11. Preview Pipeline
 

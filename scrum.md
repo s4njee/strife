@@ -1334,8 +1334,19 @@ As a developer, I want M4 questions decided (raw retention, typed columns, forma
 
 **Acceptance Criteria:**
 
-- [ ] Decisions recorded in `docs/decisions/` for: raw metadata size/retention policy, first-class typed columns, and the explicit format test matrix.
-- [ ] `questions.md` M4 section is cleared.
+- [x] Decisions recorded in `docs/decisions/` for: raw metadata size/retention policy, first-class typed columns, and the explicit format test matrix.
+- [x] `questions.md` M4 section is cleared.
+
+**Implementation report:** Recorded full raw-JSON retention with a 10–15 GB-per-million-file planning target, separated document/OCR text from metadata payloads, selected a one-to-one normalized metadata model plus per-stream fields, and established the explicit DOC/DOCX/PDF/JPEG/GIF/PNG/NEF/DNG/MP4/MKV/MOV/MP3/M4A acceptance matrix.
+
+**New files:**
+
+- `docs/decisions/0005-metadata-storage-and-format-matrix.md`
+
+**Modified files:**
+
+- `README.md`
+- `questions.md`
 
 ---
 
