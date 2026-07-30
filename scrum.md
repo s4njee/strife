@@ -1624,14 +1624,29 @@ As a user, I want a details side panel showing file metadata so that I can inspe
 
 **Acceptance Criteria:**
 
-- [ ] Selecting a single file and clicking "Details" (or pressing a shortcut) opens a right-side panel.
-- [ ] The panel displays: file name, type icon, size, MIME type, created/modified dates, checksum (truncated with copy button).
-- [ ] For images: dimensions, orientation, camera make/model, capture time, GPS coordinates (if present).
-- [ ] For video/audio: duration, codec(s), resolution, bitrate, stream list.
-- [ ] For documents: title, author, page count, creation/modification dates.
-- [ ] Processing status is shown with an appropriate indicator (spinner for `processing`, checkmark for `ready`, warning for `failed`).
-- [ ] The panel works in both themes.
-- [ ] Closing the panel or selecting a different file updates the content.
+- [x] Selecting a single file and clicking "Details" (or pressing a shortcut) opens a right-side panel.
+- [x] The panel displays: file name, type icon, size, MIME type, created/modified dates, checksum (truncated with copy button).
+- [x] For images: dimensions, orientation, camera make/model, capture time, GPS coordinates (if present).
+- [x] For video/audio: duration, codec(s), resolution, bitrate, stream list.
+- [x] For documents: title, author, page count, creation/modification dates.
+- [x] Processing status is shown with an appropriate indicator (spinner for `processing`, checkmark for `ready`, warning for `failed`).
+- [x] The panel works in both themes.
+- [x] Closing the panel or selecting a different file updates the content.
+
+**Implementation report:** Added a responsive, theme-token-driven file details drawer connected to single-row selection and the metadata/stream APIs, with type-specific image, media, and document sections, processing indicators, and checksum copying. Static preview fixtures now include document, camera/GPS image, and multi-stream video examples so the full Epic 4 UI can be reviewed on GitHub Pages.
+
+**New files:**
+
+- `apps/web/src/components/FileDetailsPanel.tsx`
+- `apps/web/src/components/FileDetailsPanel.css`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/components/FileTable.tsx`
+- `apps/web/src/components/FileTable.css`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 

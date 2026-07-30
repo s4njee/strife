@@ -34,6 +34,51 @@ export interface FolderChildrenResponse {
   next_cursor: string | null
 }
 
+export type ProcessingStatus =
+  'processing' | 'ready' | 'partially_processed' | 'failed'
+
+export interface FileDetails {
+  id: string
+  parent_id: string | null
+  name: string
+  byte_size: number
+  checksum_sha256: string | null
+  created_at: string
+  updated_at: string
+  detected_mime: string | null
+  media_kind: 'document' | 'image' | 'video' | 'audio' | 'other' | null
+  duration_ms: number | null
+  width: number | null
+  height: number | null
+  capture_time: string | null
+  page_count: number | null
+  orientation: number | null
+  has_gps: boolean | null
+  gps_latitude: number | null
+  gps_longitude: number | null
+  camera_make: string | null
+  camera_model: string | null
+  document_title: string | null
+  document_author: string | null
+  document_created_at: string | null
+  document_modified_at: string | null
+  processing_status: ProcessingStatus
+}
+
+export interface MediaStream {
+  id: string
+  stream_index: number
+  stream_type: 'video' | 'audio' | 'subtitle'
+  codec: string
+  width: number | null
+  height: number | null
+  duration_ms: number | null
+  bitrate_bps: number | null
+  frame_rate: string | null
+  language: string | null
+  created_at: string
+}
+
 export interface MoveFolderConflict {
   id: string
   name: string

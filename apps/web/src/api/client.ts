@@ -4,15 +4,56 @@ import type {
   DependencyStatus,
   FolderAncestor,
   FolderChildrenResponse,
+  FileDetails,
   FolderItem,
   ImportEntry,
   ImportScanResult,
   ImportSource,
+  MediaStream,
   MoveFolderConflict,
   MoveFoldersResponse,
   ReadinessResponse,
   UploadSession,
 } from './types'
+
+export async function getFileDetails(
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<FileDetails> {
+  const response = await fetch(`/api/files/${fileId}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok) {
+    throw new ApiClientError(
+      `File details could not be loaded (${response.status}).`,
+    )
+  }
+  const body: unknown = await response.json()
+  if (!isFileDetails(body))
+    throw new ApiClientError('The file details response was invalid.')
+  return body
+}
+
+export async function getFileStreams(
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<MediaStream[]> {
+  const response = await fetch(`/api/files/${fileId}/streams`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok) {
+    throw new ApiClientError(
+      `Media streams could not be loaded (${response.status}).`,
+    )
+  }
+  const body: unknown = await response.json()
+  if (!Array.isArray(body) || !body.every(isMediaStream)) {
+    throw new ApiClientError('The media streams response was invalid.')
+  }
+  return body
+}
 
 export class ApiClientError extends Error {
   readonly status?: number
@@ -506,6 +547,28 @@ function isReadinessResponse(value: unknown): value is ReadinessResponse {
     isDependencyStatus(value.tika) &&
     typeof value.disk_usage_percent === 'number' &&
     Number.isFinite(value.disk_usage_percent)
+  )
+}
+
+function isFileDetails(value: unknown): value is FileDetails {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.byte_size === 'number' &&
+    ['processing', 'ready', 'partially_processed', 'failed'].includes(
+      String(value.processing_status),
+    )
+  )
+}
+
+function isMediaStream(value: unknown): value is MediaStream {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.stream_index === 'number' &&
+    ['video', 'audio', 'subtitle'].includes(String(value.stream_type)) &&
+    typeof value.codec === 'string'
   )
 }
 

@@ -12,6 +12,8 @@ interface FileTableProps {
   onRename?: (item: FolderItem) => void
   onMove?: (items: FolderItem[]) => void
   onTrash?: (items: FolderItem[]) => void
+  onDetails?: (item: FolderItem) => void
+  onSelectionChange?: (items: FolderItem[]) => void
 }
 
 interface ContextMenuState {
@@ -41,6 +43,8 @@ export function FileTable(props: FileTableProps) {
     }),
   )
   const selectedCount = () => selectedIds().size
+  const selectedItems = () =>
+    sortedItems().filter((item) => selectedIds().has(item.id))
   const allSelected = () =>
     sortedItems().length > 0 && selectedCount() === sortedItems().length
 
@@ -50,6 +54,8 @@ export function FileTable(props: FileTableProps) {
       (current) => new Set([...current].filter((id) => visibleIds.has(id))),
     )
   })
+
+  createEffect(() => props.onSelectionChange?.(selectedItems()))
 
   createEffect(() => {
     if (selectAllCheckbox) {
@@ -148,7 +154,23 @@ export function FileTable(props: FileTableProps) {
     <div class="file-table-wrap">
       <Show when={selectedCount() > 0}>
         <div class="file-table-selection" role="status">
-          {selectedCount()} {selectedCount() === 1 ? 'item' : 'items'} selected
+          <span>
+            {selectedCount()} {selectedCount() === 1 ? 'item' : 'items'}{' '}
+            selected
+          </span>
+          <Show
+            when={
+              selectedItems().length === 1 &&
+              selectedItems()[0]?.kind === 'file'
+            }
+          >
+            <button
+              type="button"
+              onClick={() => props.onDetails?.(selectedItems()[0])}
+            >
+              Details
+            </button>
+          </Show>
         </div>
       </Show>
       <Show when={!props.loading} fallback={<FileTableSkeleton />}>

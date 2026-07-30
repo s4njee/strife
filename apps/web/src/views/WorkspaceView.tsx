@@ -15,9 +15,11 @@ import {
   renameFolder,
 } from '../api/client'
 import type { FolderAncestor, FolderItem } from '../api/types'
+import type { FileDetails, MediaStream } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
 import { CreateFolderDialog } from '../components/CreateFolderDialog'
 import { FileTable } from '../components/FileTable'
+import { FileDetailsPanel } from '../components/FileDetailsPanel'
 import { FileUploadControl } from '../components/FileUploadControl'
 import { FolderUploadControl } from '../components/FolderUploadControl'
 import { MoveFolderDialog } from '../components/MoveFolderDialog'
@@ -106,6 +108,7 @@ function FolderContents(props: { folderId: string }) {
   const [staticItems, setStaticItems] = createSignal(previewItems)
   const [dragDepth, setDragDepth] = createSignal(0)
   const [dropResults, setDropResults] = createSignal<FolderUploadResult[]>([])
+  const [detailsItem, setDetailsItem] = createSignal<FolderItem>()
   const uploads = useUploads()
   const [children, { mutate, refetch }] = createResource(
     () => (staticPreview ? false : props.folderId),
@@ -259,7 +262,31 @@ function FolderContents(props: { folderId: string }) {
         onRetry={() => void refetch()}
         onRename={setRenameItem}
         onMove={setMoveItems}
+        onDetails={setDetailsItem}
+        onSelectionChange={(selected) => {
+          if (
+            detailsItem() &&
+            selected.length === 1 &&
+            selected[0].kind === 'file'
+          ) {
+            setDetailsItem(selected[0])
+          }
+        }}
       />
+      <Show when={detailsItem()}>
+        {(item) => (
+          <FileDetailsPanel
+            item={item()}
+            staticDetails={
+              staticPreview ? previewFileDetails.get(item().id) : undefined
+            }
+            staticStreams={
+              staticPreview ? previewStreams.get(item().id) : undefined
+            }
+            onClose={() => setDetailsItem(undefined)}
+          />
+        )}
+      </Show>
       <Show when={showCreateDialog()}>
         <CreateFolderDialog
           onCreate={handleCreate}
@@ -315,7 +342,134 @@ const previewItems: FolderItem[] = [
     created_at: '2026-07-18T20:05:00Z',
     updated_at: '2026-07-18T20:05:00Z',
   },
+  {
+    id: '20000000-0000-0000-0000-000000000004',
+    name: 'Lake sunrise.jpg',
+    kind: 'file',
+    size_bytes: 18_740_000,
+    created_at: '2026-07-20T10:14:00Z',
+    updated_at: '2026-07-20T10:14:00Z',
+  },
+  {
+    id: '20000000-0000-0000-0000-000000000005',
+    name: 'Backyard concert.mp4',
+    kind: 'file',
+    size_bytes: 384_200_000,
+    created_at: '2026-07-22T02:11:00Z',
+    updated_at: '2026-07-22T02:11:00Z',
+  },
 ]
+
+function makePreviewDetails(
+  item: FolderItem,
+  metadata: Partial<FileDetails>,
+): FileDetails {
+  return {
+    id: item.id,
+    parent_id: ROOT_FOLDER_ID,
+    name: item.name,
+    byte_size: item.size_bytes ?? 0,
+    checksum_sha256:
+      '8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8',
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+    detected_mime: 'application/octet-stream',
+    media_kind: 'other',
+    duration_ms: null,
+    width: null,
+    height: null,
+    capture_time: null,
+    page_count: null,
+    orientation: null,
+    has_gps: false,
+    gps_latitude: null,
+    gps_longitude: null,
+    camera_make: null,
+    camera_model: null,
+    document_title: null,
+    document_author: null,
+    document_created_at: null,
+    document_modified_at: null,
+    processing_status: 'ready',
+    ...metadata,
+  }
+}
+
+const previewFileDetails = new Map<string, FileDetails>([
+  [
+    previewItems[2].id,
+    makePreviewDetails(previewItems[2], {
+      detected_mime: 'application/pdf',
+      media_kind: 'document',
+      page_count: 24,
+      document_title: 'Home Inventory 2026',
+      document_author: 'Sanjee',
+      document_created_at: '2026-07-18T20:01:00Z',
+      document_modified_at: '2026-07-18T20:05:00Z',
+    }),
+  ],
+  [
+    previewItems[3].id,
+    makePreviewDetails(previewItems[3], {
+      detected_mime: 'image/jpeg',
+      media_kind: 'image',
+      width: 8256,
+      height: 5504,
+      orientation: 1,
+      camera_make: 'Nikon',
+      camera_model: 'Z 8',
+      capture_time: '2026-07-20T05:14:00Z',
+      has_gps: true,
+      gps_latitude: 41.8819,
+      gps_longitude: -87.6278,
+    }),
+  ],
+  [
+    previewItems[4].id,
+    makePreviewDetails(previewItems[4], {
+      detected_mime: 'video/mp4',
+      media_kind: 'video',
+      duration_ms: 212_000,
+      width: 3840,
+      height: 2160,
+      processing_status: 'partially_processed',
+    }),
+  ],
+])
+
+const previewStreams = new Map<string, MediaStream[]>([
+  [
+    previewItems[4].id,
+    [
+      {
+        id: 'stream-video',
+        stream_index: 0,
+        stream_type: 'video',
+        codec: 'h264',
+        width: 3840,
+        height: 2160,
+        duration_ms: 212_000,
+        bitrate_bps: 12_400_000,
+        frame_rate: '30/1',
+        language: null,
+        created_at: previewItems[4].created_at,
+      },
+      {
+        id: 'stream-audio',
+        stream_index: 1,
+        stream_type: 'audio',
+        codec: 'aac',
+        width: null,
+        height: null,
+        duration_ms: 212_000,
+        bitrate_bps: 192_000,
+        frame_rate: null,
+        language: 'eng',
+        created_at: previewItems[4].created_at,
+      },
+    ],
+  ],
+])
 
 export function FavoritesView() {
   return (
