@@ -411,6 +411,51 @@ export function downloadFileUrl(nodeId: string): string {
   return `/api/files/${nodeId}/download`
 }
 
+export interface StorageUsage {
+  total_bytes: number
+  used_bytes: number
+  available_bytes: number
+  originals_bytes: number
+  artifacts_bytes: number
+  trash_bytes: number
+  usage_percent: number
+}
+
+export async function getStorageUsage(
+  signal?: AbortSignal,
+): Promise<StorageUsage> {
+  const response = await fetch('/api/storage/usage', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok) {
+    throw new ApiClientError(`Storage usage failed (${response.status}).`)
+  }
+  const body: unknown = await response.json()
+  if (
+    !isRecord(body) ||
+    typeof body.total_bytes !== 'number' ||
+    typeof body.used_bytes !== 'number' ||
+    typeof body.usage_percent !== 'number'
+  ) {
+    throw new ApiClientError('The storage usage response was invalid.')
+  }
+  return body as unknown as StorageUsage
+}
+
+export async function getActiveJobCount(
+  signal?: AbortSignal,
+): Promise<number> {
+  const response = await fetch('/api/jobs?state=pending,leased&count=true', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok) return 0
+  const body: unknown = await response.json()
+  if (!isRecord(body) || typeof body.count !== 'number') return 0
+  return body.count
+}
+
 export async function createFolder(
   parentId: string,
   name: string,

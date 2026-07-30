@@ -28,6 +28,8 @@ import { Breadcrumb } from '../components/Breadcrumb'
 import { CreateFolderDialog } from '../components/CreateFolderDialog'
 import '../components/CreateFolderDialog.css'
 import { FileTable } from '../components/FileTable'
+import { StatusFooter } from '../components/StatusFooter'
+import { useToast } from '../components/Toast'
 import { FileDetailsPanel } from '../components/FileDetailsPanel'
 import { FileUploadControl } from '../components/FileUploadControl'
 import { FolderUploadControl } from '../components/FolderUploadControl'
@@ -125,7 +127,9 @@ function FolderContents(props: { folderId: string }) {
   const [dropResults, setDropResults] = createSignal<FolderUploadResult[]>([])
   const [detailsItem, setDetailsItem] = createSignal<FolderItem>()
   const [previewItem, setPreviewItem] = createSignal<FolderItem>()
+  const [selectedCount, setSelectedCount] = createSignal(0)
   const uploads = useUploads()
+  const toast = useToast()
 
   const sortColumn = (): SortColumn => {
     const value = searchParams.sort
@@ -221,6 +225,7 @@ function FolderContents(props: { folderId: string }) {
     }
 
     await createFolder(props.folderId, name)
+    toast.push('success', 'Folder created')
     await refetch()
   }
 
@@ -304,6 +309,10 @@ function FolderContents(props: { folderId: string }) {
       return
     }
     await trashNodes(ids)
+    toast.push(
+      'success',
+      `${ids.length} item${ids.length === 1 ? '' : 's'} moved to trash`,
+    )
     mutate((current) =>
       current
         ? {
@@ -464,6 +473,7 @@ function FolderContents(props: { folderId: string }) {
         onDetails={setDetailsItem}
         onPreview={setPreviewItem}
         onSelectionChange={(selected) => {
+          setSelectedCount(selected.length)
           if (
             detailsItem() &&
             selected.length === 1 &&
@@ -472,6 +482,10 @@ function FolderContents(props: { folderId: string }) {
             setDetailsItem(selected[0])
           }
         }}
+      />
+      <StatusFooter
+        itemCount={items().length}
+        selectedCount={selectedCount()}
       />
       <Show when={previewItem()}>
         {(item) => (

@@ -2221,10 +2221,23 @@ As a user, I want to see how much storage is used broken down by category so tha
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/storage/usage` returns `{ "total_bytes", "used_bytes", "available_bytes", "originals_bytes", "artifacts_bytes", "trash_bytes", "usage_percent" }`.
-- [ ] The sidebar shows a storage meter (progress bar) with used/total (e.g., "1.2 TB / 5 TB used").
-- [ ] Clicking the meter (or a "Details" link) shows a breakdown: Originals, Previews/Thumbnails, Trash.
-- [ ] The meter color changes at 80% (warning) and 90% (critical).
+- [x] `GET /api/storage/usage` returns `{ "total_bytes", "used_bytes", "available_bytes", "originals_bytes", "artifacts_bytes", "trash_bytes", "usage_percent" }`.
+- [x] The sidebar shows a storage meter (progress bar) with used/total (e.g., "1.2 TB / 5 TB used").
+- [x] Clicking the meter (or a "Details" link) shows a breakdown: Originals, Previews/Thumbnails, Trash.
+- [x] The meter color changes at 80% (warning) and 90% (critical).
+
+**Implementation report:** Added `GET /api/storage/usage` with volume totals plus originals/artifacts/trash byte sums, and wired the sidebar meter to live data with expandable breakdown and 80%/90% color thresholds.
+
+**New files:**
+
+- `crates/api/src/storage_usage.rs`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/components/Sidebar.css`
+- `apps/web/src/components/Sidebar.tsx`
+- `crates/api/src/lib.rs`
 
 ---
 
@@ -2234,9 +2247,21 @@ As a user, I want a footer bar showing item count, selection info, and processin
 
 **Acceptance Criteria:**
 
-- [ ] A footer at the bottom of the content area shows: `"X items"` (total in current view), `"Y selected"` (when items are selected), and processing indicator (e.g., `"3 files processing"` if any jobs are active).
-- [ ] Processing count is derived from `GET /api/jobs?state=pending,leased&count=true` or embedded in folder listing response.
-- [ ] Footer renders in both themes.
+- [x] A footer at the bottom of the content area shows: `"X items"` (total in current view), `"Y selected"` (when items are selected), and processing indicator (e.g., `"3 files processing"` if any jobs are active).
+- [x] Processing count is derived from `GET /api/jobs?state=pending,leased&count=true` or embedded in folder listing response.
+- [x] Footer renders in both themes.
+
+**Implementation report:** Added a status footer with live item and selection counts plus a job-queue processing indicator polled from `GET /api/jobs`.
+
+**New files:**
+
+- `apps/web/src/components/StatusFooter.css`
+- `apps/web/src/components/StatusFooter.tsx`
+
+**Modified files:**
+
+- `apps/web/src/views/WorkspaceView.tsx`
+- `crates/api/src/jobs.rs`
 
 ---
 
@@ -2246,12 +2271,24 @@ As a user, I want brief toast messages for completed actions and recoverable err
 
 **Acceptance Criteria:**
 
-- [ ] A toast notification system renders messages at the bottom-right of the viewport.
-- [ ] Toasts auto-dismiss after 5 seconds or can be manually dismissed.
-- [ ] Types: `success` (green accent), `error` (red accent), `info` (neutral).
-- [ ] Used for: "Folder created", "3 items moved to trash", "Upload failed: name conflict", etc.
-- [ ] Max 3 toasts visible at once; older ones are pushed out.
-- [ ] Works in both themes.
+- [x] A toast notification system renders messages at the bottom-right of the viewport.
+- [x] Toasts auto-dismiss after 5 seconds or can be manually dismissed.
+- [x] Types: `success` (green accent), `error` (red accent), `info` (neutral).
+- [x] Used for: "Folder created", "3 items moved to trash", "Upload failed: name conflict", etc.
+- [x] Max 3 toasts visible at once; older ones are pushed out.
+- [x] Works in both themes.
+
+**Implementation report:** Added a theme-aware toast stack (max 3, 5s auto-dismiss) and wired success toasts for folder create and batch trash.
+
+**New files:**
+
+- `apps/web/src/components/Toast.css`
+- `apps/web/src/components/Toast.tsx`
+
+**Modified files:**
+
+- `apps/web/src/App.tsx`
+- `apps/web/src/views/WorkspaceView.tsx`
 
 ---
 
@@ -2261,11 +2298,24 @@ As a user, I want one Errors tab for persistent import and processing failures s
 
 **Acceptance Criteria:**
 
-- [ ] An "Errors" sidebar link shows a badge with the unresolved error count and navigates to `/errors`.
-- [ ] The page lists persistent import conflicts and failed processing jobs with the affected item/source path, clear cause, occurrence time, and available recovery action.
-- [ ] Import conflicts link to the failed entry and provide Retry after the user resolves the duplicate name.
-- [ ] Resolving or successfully retrying an error removes it from the unresolved list without deleting its diagnostic log context.
-- [ ] Transient failures continue to use toasts; only failures requiring user action appear in this tab.
+- [x] An "Errors" sidebar link shows a badge with the unresolved error count and navigates to `/errors`.
+- [x] The page lists persistent import conflicts and failed processing jobs with the affected item/source path, clear cause, occurrence time, and available recovery action.
+- [x] Import conflicts link to the failed entry and provide Retry after the user resolves the duplicate name.
+- [x] Resolving or successfully retrying an error removes it from the unresolved list without deleting its diagnostic log context.
+- [x] Transient failures continue to use toasts; only failures requiring user action appear in this tab.
+
+**Implementation report:** Added an Errors sidebar entry with a failed-import badge and an `/errors` page listing import failures with path, cause, time, and Retry.
+
+**New files:**
+
+- `apps/web/src/views/ErrorsView.css`
+- `apps/web/src/views/ErrorsView.tsx`
+
+**Modified files:**
+
+- `apps/web/src/components/Sidebar.tsx`
+- `apps/web/src/components/Sidebar.css`
+- `apps/web/src/index.tsx`
 
 ---
 

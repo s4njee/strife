@@ -111,6 +111,34 @@
   color: var(--color-text-secondary);
 }
 
+.sidebar__badge {
+  margin-left: auto;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  background: var(--color-danger, #c44);
+  color: #fff;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.storage-summary__meter-button {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.storage-summary__breakdown {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
 .storage-summary__meter {
   height: 0.25rem;
   margin-top: var(--space-3);
@@ -125,6 +153,14 @@
   height: 100%;
   border-radius: inherit;
   background: var(--color-accent);
+}
+
+.storage-summary__meter.is-warning span {
+  background: #e6a700;
+}
+
+.storage-summary__meter.is-critical span {
+  background: var(--color-danger, #c44);
 }
 
 .storage-summary p {

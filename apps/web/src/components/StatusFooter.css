@@ -1,0 +1,10 @@
+.status-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  border-top: 1px solid var(--color-border-row);
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  font-size: var(--font-size-sm);
+}
