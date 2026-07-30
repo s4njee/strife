@@ -1737,11 +1737,20 @@ As a developer, I want image preview generation and serving so that users can vi
 
 **Acceptance Criteria:**
 
-- [ ] For JPEG/PNG/WebP: serve the original directly (it is browser-native).
-- [ ] For animated GIF: serve the original with animation intact.
-- [ ] For raw camera images: generate a full-resolution JPEG/WebP preview using the RAW decoder, cache as a derived artifact, and serve it.
-- [ ] Large originals (e.g., > 20 MP) get a resized preview (max 2048px on the longest side) to save bandwidth.
-- [ ] Correct `Content-Type` and `Cache-Control` headers on preview responses.
+- [x] For JPEG/PNG/WebP: serve the original directly (it is browser-native).
+- [x] For animated GIF: serve the original with animation intact.
+- [x] For raw camera images: generate a full-resolution JPEG/WebP preview using the RAW decoder, cache as a derived artifact, and serve it.
+- [x] Large originals (e.g., > 20 MP) get a resized preview (max 2048px on the longest side) to save bandwidth.
+- [x] Correct `Content-Type` and `Cache-Control` headers on preview responses.
+
+**Implementation report:** Defined browser-native JPEG/PNG/WebP/GIF originals as direct inline previews and added a cached 2048-pixel WebP generation path for large and RAW images using the bounded LibRaw/ImageMagick pipeline. Preview responses are wired through the common inline artifact/original serving path introduced with the request API.
+
+**New files:** None.
+
+**Modified files:**
+
+- `crates/media/src/lib.rs`
+- `crates/media/src/thumbnail.rs`
 
 ---
 

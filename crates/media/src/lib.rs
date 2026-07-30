@@ -14,7 +14,7 @@ pub use exif::{ExifResult, extract_exif, extract_exif_with_limits};
 pub use ffprobe::{
     FfprobeResult, StreamInfo, StreamType, extract_ffprobe, extract_ffprobe_with_limits,
 };
-pub use thumbnail::{ThumbnailResult, generate_thumbnail};
+pub use thumbnail::{ThumbnailResult, generate_image_preview, generate_thumbnail};
 pub use tika::{TikaResult, extract_tika, extract_tika_with_limits};
 
 /// Detects a file's MIME type from its bytes using the host's libmagic database.

@@ -117,6 +117,14 @@ fn is_raw(mime: &str) -> bool {
     )
 }
 
+/// Generates a bandwidth-bounded WebP image preview, including RAW embedded previews.
+///
+/// # Errors
+/// Returns an error when the source cannot be decoded or the preview cannot be written.
+pub async fn generate_image_preview(source: &Path, dest: &Path) -> Result<ThumbnailResult> {
+    generate_thumbnail(source, dest, 2048).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::generate_thumbnail;
