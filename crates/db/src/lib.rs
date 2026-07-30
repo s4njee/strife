@@ -2685,6 +2685,48 @@ pub async fn list_expired_trash(
     .await
 }
 
+/// Enqueues permanent-deletion jobs for expired trash entries (batch limited).
+///
+/// Skips nodes that already have a pending or leased permanent-deletion job so
+/// each batch fills with new work. Safe to run repeatedly.
+///
+/// # Errors
+///
+/// Returns a database error when listing or enqueueing fails.
+pub async fn enqueue_expired_trash_deletions(
+    pool: &PgPool,
+    limit: u32,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r"
+        WITH candidates AS (
+            SELECT te.node_id
+            FROM trash_entries AS te
+            JOIN nodes AS n ON n.id = te.node_id
+            WHERE n.lifecycle_state = 'trashed'
+              AND te.scheduled_purge_at <= now()
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM jobs AS j
+                  WHERE j.target_node_id = te.node_id
+                    AND j.job_type = 'permanent_deletion'
+                    AND j.state IN ('pending', 'leased')
+              )
+            ORDER BY te.scheduled_purge_at, te.id
+            LIMIT $1
+        )
+        INSERT INTO jobs (id, job_type, target_node_id, priority)
+        SELECT gen_random_uuid(), 'permanent_deletion', node_id, 5
+        FROM candidates
+        ON CONFLICT DO NOTHING
+        ",
+    )
+    .bind(i64::from(limit))
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 async fn lock_trash_entry(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     node_id: Uuid,

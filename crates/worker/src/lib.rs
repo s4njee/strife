@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use chrono::Duration as ChronoDuration;
 use sqlx::PgPool;
 use strife_db::{
-    JobRecord, JobType, claim_job, complete_job, fail_job, get_job, release_expired_leases,
+    JobRecord, JobType, claim_job, complete_job, enqueue_expired_trash_deletions, fail_job, get_job,
+    release_expired_leases,
 };
 use strife_storage::StorageBackend;
 use tokio::{sync::watch, task::JoinSet, time::MissedTickBehavior};
@@ -155,7 +156,8 @@ pub async fn run(
             shutdown_rx.clone(),
         ));
     }
-    tasks.spawn(lease_reaper(pool, shutdown_rx));
+    tasks.spawn(lease_reaper(pool.clone(), shutdown_rx.clone()));
+    tasks.spawn(trash_cleanup_loop(pool, shutdown_rx));
 
     wait_for_shutdown().await?;
     info!("shutdown requested; draining active jobs");
@@ -255,6 +257,38 @@ async fn lease_reaper(pool: PgPool, mut shutdown: watch::Receiver<bool>) -> Resu
             }
         }
     }
+}
+
+const TRASH_CLEANUP_BATCH: u32 = 50;
+
+/// Hourly sweep that queues permanent deletion for trash past its retention window.
+async fn trash_cleanup_loop(pool: PgPool, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+    let mut interval = tokio::time::interval(Duration::from_secs(3600));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // Run once shortly after startup so long-running hosts do not wait a full hour.
+    interval.tick().await;
+    loop {
+        match enqueue_expired_trash_deletions(&pool, TRASH_CLEANUP_BATCH).await {
+            Ok(count) if count > 0 => info!(count, "enqueued expired trash for permanent deletion"),
+            Ok(_) => {}
+            Err(error) => error!(%error, "failed to enqueue expired trash cleanup"),
+        }
+        tokio::select! {
+            _ = interval.tick() => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { return Ok(()); }
+            }
+        }
+    }
+}
+
+/// Exposed for integration tests: run one trash-cleanup batch immediately.
+///
+/// # Errors
+///
+/// Returns a database error when enqueueing fails.
+pub async fn run_trash_cleanup_once(pool: &PgPool) -> Result<u64> {
+    Ok(enqueue_expired_trash_deletions(pool, TRASH_CLEANUP_BATCH).await?)
 }
 
 #[cfg(unix)]

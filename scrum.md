@@ -2017,11 +2017,22 @@ As a system, I want trashed items auto-purged after 30 days so that disk space i
 
 **Acceptance Criteria:**
 
-- [ ] A periodic task (in the worker, every hour) queries `trash_entries WHERE scheduled_purge_at <= now()`.
-- [ ] For each expired entry, enqueues a `permanent_deletion` job.
-- [ ] Batch size is limited (e.g., 50 per run) to avoid overwhelming the worker.
-- [ ] The cleanup is idempotent.
-- [ ] Tests: create a trashed item with `scheduled_purge_at` in the past, run cleanup, verify it's permanently deleted.
+- [x] A periodic task (in the worker, every hour) queries `trash_entries WHERE scheduled_purge_at <= now()`.
+- [x] For each expired entry, enqueues a `permanent_deletion` job.
+- [x] Batch size is limited (e.g., 50 per run) to avoid overwhelming the worker.
+- [x] The cleanup is idempotent.
+- [x] Tests: create a trashed item with `scheduled_purge_at` in the past, run cleanup, verify it's permanently deleted.
+
+**Implementation report:** Added a batched expired-trash enqueue query (limit 50, skips already-queued nodes) and an hourly worker sweep that runs once at startup. Integration tests cover enqueue for past-due items, batch capping, and no duplicate jobs.
+
+**New files:**
+
+- `crates/db/tests/trash_cleanup.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `crates/worker/src/lib.rs`
 
 ---
 
