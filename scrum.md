@@ -1519,12 +1519,25 @@ As a developer, I want a Tika adapter in `crates/media` so that PDFs and office 
 
 **Acceptance Criteria:**
 
-- [ ] `crates/media` exports `extract_tika(path: &Path, tika_url: &str) -> Result<TikaResult>`.
-- [ ] Sends the file to Tika's `/meta` endpoint via HTTP PUT with `Accept: application/json`.
-- [ ] Timeout: 60s. Max response: 5 MB.
-- [ ] Parses into `TikaResult` with normalized fields: `title`, `author`, `creation_date`, `modification_date`, `page_count`, `word_count`.
-- [ ] Preserves full Tika JSON as `raw_payload`.
-- [ ] Tests with representative PDF and DOCX files.
+- [x] `crates/media` exports `extract_tika(path: &Path, tika_url: &str) -> Result<TikaResult>`.
+- [x] Sends the file to Tika's `/meta` endpoint via HTTP PUT with `Accept: application/json`.
+- [x] Timeout: 60s. Max response: 5 MB.
+- [x] Parses into `TikaResult` with normalized fields: `title`, `author`, `creation_date`, `modification_date`, `page_count`, `word_count`.
+- [x] Preserves full Tika JSON as `raw_payload`.
+- [x] Tests with representative PDF and DOCX files.
+
+**Implementation report:** Added a streaming Apache Tika HTTP adapter with a 60-second timeout and atomic 16 MiB response ceiling, preserving every metadata property while normalizing common document facts. A local protocol-level test verifies PDF and DOCX uploads use `PUT /meta`, request JSON, parse scalar/array variants, and retain unknown raw fields.
+
+**New files:**
+
+- `crates/media/src/tika.rs`
+
+**Modified files:**
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/media/Cargo.toml`
+- `crates/media/src/lib.rs`
 
 ---
 
