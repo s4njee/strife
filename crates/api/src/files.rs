@@ -5,13 +5,14 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
+use strife_db::{ArtifactState, ArtifactType, JobType, UpsertArtifact};
 use strife_storage::{StorageBackend, StorageKey};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -29,8 +30,104 @@ pub fn router(pool: PgPool, storage: Arc<dyn StorageBackend>) -> Router {
         .route("/api/files/{id}/metadata", get(file_metadata))
         .route("/api/files/{id}/streams", get(file_streams))
         .route("/api/files/{id}/preview-native", get(preview_native))
+        .route("/api/files/{id}/preview", get(preview_request))
+        .route("/api/files/{id}/thumbnail", get(thumbnail_request))
         .route("/api/files/{id}/download", get(download_file))
         .with_state(FileState { pool, storage })
+}
+
+async fn preview_request(
+    State(state): State<FileState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Response {
+    let Ok(Some(file)) = strife_db::get_file_object_by_node_id(&state.pool, id).await else {
+        return status_response(StatusCode::NOT_FOUND);
+    };
+    let mime = file
+        .mime_type
+        .as_deref()
+        .unwrap_or("application/octet-stream");
+    if is_native_preview_mime(mime) {
+        return try_serve_original(&state, id, &headers, true)
+            .await
+            .unwrap_or_else(DownloadError::into_response);
+    }
+    artifact_request(&state, id, ArtifactType::Preview, mime).await
+}
+
+async fn thumbnail_request(State(state): State<FileState>, Path(id): Path<Uuid>) -> Response {
+    let Ok(Some(file)) = strife_db::get_file_object_by_node_id(&state.pool, id).await else {
+        return status_response(StatusCode::NOT_FOUND);
+    };
+    artifact_request(
+        &state,
+        id,
+        ArtifactType::Thumbnail,
+        file.mime_type
+            .as_deref()
+            .unwrap_or("application/octet-stream"),
+    )
+    .await
+}
+
+async fn artifact_request(state: &FileState, id: Uuid, kind: ArtifactType, mime: &str) -> Response {
+    let supported = mime.starts_with("image/")
+        || mime.starts_with("video/")
+        || mime == "application/pdf"
+        || mime == "application/msword"
+        || mime.contains("wordprocessingml");
+    if !supported {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"preview_not_supported"})),
+        )
+            .into_response();
+    }
+    if let Ok(Some(artifact)) = strife_db::get_artifact(&state.pool, id, kind).await {
+        if artifact.state == ArtifactState::Ready {
+            if let Ok(key) = Uuid::parse_str(&artifact.storage_key) {
+                if let Ok(reader) = state.storage.get_stream(StorageKey::artifact(key)).await {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, artifact.format)
+                        .header(
+                            header::CACHE_CONTROL,
+                            "private, max-age=31536000, immutable",
+                        )
+                        .header("x-content-type-options", "nosniff")
+                        .body(Body::from_stream(ReaderStream::new(reader)))
+                        .unwrap();
+                }
+            }
+        }
+    }
+    let key = Uuid::new_v4();
+    let key_string = key.simple().to_string();
+    let artifact = strife_db::create_or_update_artifact(
+        &state.pool,
+        &UpsertArtifact {
+            node_id: id,
+            artifact_type: kind,
+            format: "application/octet-stream",
+            width: None,
+            height: None,
+            storage_key: &key_string,
+            byte_size: 0,
+            generator_version: "preview-v1",
+            state: ArtifactState::Generating,
+        },
+    )
+    .await;
+    if artifact.is_err() {
+        return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let job=match strife_db::enqueue_job(&state.pool,JobType::PreviewGeneration,id,0).await { Ok(Some(job))=>job, Ok(None)=>match sqlx::query_as::<_,strife_db::JobRecord>("SELECT * FROM jobs WHERE target_node_id=$1 AND job_type='preview_generation' AND state IN ('pending','leased')").bind(id).fetch_one(&state.pool).await {Ok(job)=>job,Err(_)=>return status_response(StatusCode::INTERNAL_SERVER_ERROR)},Err(_)=>return status_response(StatusCode::INTERNAL_SERVER_ERROR)};
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({"status":"generating","job_id":job.id})),
+    )
+        .into_response()
 }
 
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]

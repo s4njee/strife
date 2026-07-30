@@ -405,6 +405,17 @@ pub async fn enqueue_reprocessing(
     Ok(enqueued)
 }
 
+/// Fetches a job for status polling.
+///
+/// # Errors
+/// Returns a database error when the job cannot be queried.
+pub async fn get_job(pool: &PgPool, id: Uuid) -> Result<Option<JobRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM jobs WHERE id=$1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
 /// The fixed watched-folder source persisted by the v1 schema.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct ImportSourceRecord {

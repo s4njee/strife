@@ -1828,11 +1828,23 @@ As an API client, I want endpoints to request, check, and retrieve previews so t
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/files/:node_id/preview` — if a cached preview exists, return it (with caching headers). If not, return `202 Accepted` with `{ "status": "generating", "job_id": UUID }` and enqueue a `preview_generation` job.
-- [ ] `GET /api/files/:node_id/thumbnail` — same pattern for thumbnails.
-- [ ] `GET /api/jobs/:job_id` — returns job status (for polling).
-- [ ] When the preview is ready, subsequent requests to `/preview` return the cached artifact directly.
-- [ ] If the file type is unsupported for preview, return `404` with `{ "error": "preview_not_supported" }`.
+- [x] `GET /api/files/:node_id/preview` — if a cached preview exists, return it (with caching headers). If not, return `202 Accepted` with `{ "status": "generating", "job_id": UUID }` and enqueue a `preview_generation` job.
+- [x] `GET /api/files/:node_id/thumbnail` — same pattern for thumbnails.
+- [x] `GET /api/jobs/:job_id` — returns job status (for polling).
+- [x] When the preview is ready, subsequent requests to `/preview` return the cached artifact directly.
+- [x] If the file type is unsupported for preview, return `404` with `{ "error": "preview_not_supported" }`.
+
+**Implementation report:** Added on-demand preview and thumbnail endpoints that directly stream browser-native originals, return immutable cached artifacts, or idempotently create generating records and durable jobs with `202` polling identifiers. Job status and explicit unsupported-type responses complete the reload-safe request protocol.
+
+**New files:**
+
+- `crates/api/src/jobs.rs`
+
+**Modified files:**
+
+- `crates/api/src/files.rs`
+- `crates/api/src/lib.rs`
+- `crates/db/src/lib.rs`
 
 ---
 

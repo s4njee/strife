@@ -4,6 +4,7 @@ pub mod files;
 pub mod folders;
 pub mod health;
 pub mod imports;
+pub mod jobs;
 pub mod uploads;
 
 use std::{
@@ -81,6 +82,7 @@ pub async fn run(config: Config) -> Result<()> {
     spawn_upload_cleanup(pool.clone(), storage.clone());
     let app = health::router(dependencies)
         .merge(admin::router(pool.clone()))
+        .merge(jobs::router(pool.clone()))
         .merge(folders::router(pool.clone()))
         .merge(files::router(pool.clone(), storage.clone()))
         .merge(imports::router(
