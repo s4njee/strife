@@ -4,6 +4,25 @@
 
 [Open the hosted SolidJS frontend preview](https://s4njee.github.io/strife/).
 
+## Quick start (development)
+
+Prerequisites: Rust 1.85+, Node 22+, Docker, and host tools listed in [docs/setup.md](docs/setup.md).
+
+```sh
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up -d --wait
+export DATABASE_URL=postgresql://strife:strife-dev@127.0.0.1:5432/strife
+export STORAGE_ROOT=./.data/storage LISTEN_ADDR=127.0.0.1:3000 TIKA_URL=http://127.0.0.1:9998
+mkdir -p "$STORAGE_ROOT"
+cargo run -p strife-api          # terminal 1
+cargo run -p strife-worker       # terminal 2
+npm --prefix apps/web ci && npm --prefix apps/web run dev
+```
+
+Tests: `make check` (or `cargo test --workspace` with `DATABASE_URL` set). Environment variables are documented in `.env.example`.
+
+Further reading: [setup](docs/setup.md) · [architecture](docs/architecture.md) · [supported formats](docs/supported-formats.md) · [limitations](docs/known-limitations.md) · [performance](docs/performance.md) · [ARM64 validation](docs/validation/arm64.md) · [x86-64 validation](docs/validation/x86-64.md)
+
 ## 1. Product Definition
 
 Strife v1 is a single-user, self-hosted cloud drive for a private home LAN. It provides durable file and folder management, resumable browser uploads, watched-folder imports, rich metadata extraction, and on-demand previews through a SolidJS interface backed by Axum and PostgreSQL.
@@ -359,80 +378,39 @@ Exact CI, performance targets, accessibility level, and release-platform matrix 
 
 ## 16. Incremental Milestones
 
-### Milestone 0 — Resolve foundations and scaffold
+Status: **M0–M7 implemented** for the v1 development configuration. Story-level reports live in [`scrum.md`](scrum.md). ADRs under [`docs/decisions/`](docs/decisions/).
 
-- Apply the accepted host and storage decisions in ADRs 0001–0003; watched-folder behavior is resolved before Milestone 3.
-- Create the Rust workspace and SolidJS app.
-- Add formatting, linting, migrations, and basic tests.
-- Add development Compose services for PostgreSQL and Apache Tika.
-- Add API/worker configuration for `/mnt/ext` without hard-coding deployment-specific subpaths.
-- Add health/readiness and frontend-to-API connectivity.
-- Establish local fonts and dark/light semantic design tokens.
+### Milestone 0 — Resolve foundations and scaffold ✅
 
-**Done when:** the frontend, API, worker, PostgreSQL, and Tika can run in development on the ARM64 target without internet access, and the Rust project builds for x86-64.
+Scaffold, Compose, migrations, health, themes, CI. ADRs 0001–0003.
 
-### Milestone 1 — Persist and browse folders
+### Milestone 1 — Persist and browse folders ✅
 
-- Create the hierarchy schema and implicit single-user root.
-- Implement folder list/create/rename/move with strict conflict behavior.
-- Build the application shell, folder navigation, file table, selection model, and context menu.
-- Add both themes and loading/empty/error states.
+Hierarchy schema, folder CRUD API, shell, table, selection, dialogs.
 
-**Done when:** folders persist across restarts and all hierarchy invariants are enforced through both API and UI.
+### Milestone 2 — Resumable upload and download ✅
 
-### Milestone 2 — Resumable upload and download
+Storage backend, sessions/chunks, finalize, downloads/ranges, upload UI, disk guard.
 
-- Implement the chosen storage backend and opaque keys.
-- Implement upload sessions, durable chunk/range tracking, checksum, atomic finalization, and stale-staging cleanup.
-- Preserve source timestamps, support folder uploads, and reject duplicate names.
-- Add original downloads and HTTP range requests.
-- Build upload picker, drag/drop, progress restoration, cancellation, and low-disk behavior.
+### Milestone 3 — Watched-folder import ✅
 
-**Done when:** a file larger than available RAM can be interrupted, resumed after reload/restart, finalized exactly once, and downloaded byte-for-byte identically.
+Fixed inbox, manual scan, stability, import pipeline, recovery, import UI. ADR 0004.
 
-### Milestone 3 — Watched-folder import
+### Milestone 4 — Metadata extraction ✅
 
-- Implement the decided watch and destination rules.
-- On manual request, discover regular files and directories; ignore hidden and special files, and reject files that change during staging.
-- Stream through the same checksum/finalization path as uploads.
-- Preserve hierarchy and timestamps, enforce conflict and disk rules, and record actionable errors.
+Jobs queue, worker, ExifTool/ffprobe/Tika/libmagic, normalized + raw metadata. ADR 0005.
 
-**Done when:** adding a tree to the watch source imports it once, survives restarts, and never duplicates or partially publishes a file.
+### Milestone 5 — On-demand previews ✅
 
-### Milestone 4 — Metadata extraction
+Thumbnails/previews, LibreOffice/LibRaw adapters, preview UI. ADR 0006.
 
-- Add libmagic, ExifTool, ffprobe, Apache Tika, and raw-image adapters.
-- Add durable job leases, bounded concurrency, retries, timeouts, versioned results, and gradual reprocessing.
-- Populate normalized details plus raw metadata under the selected retention policy.
-- Build processing state and metadata/details UI.
+### Milestone 6 — Complete v1 file management and UI ✅
 
-**Done when:** representative documents, images, raw files, audio, and video gain useful metadata without delaying ingestion, and unsupported files remain usable with generic metadata.
+Trash/restore/purge, favorites, sort/filter, command bar, storage meter, toasts, errors. ADR 0007.
 
-### Milestone 5 — On-demand previews
+### Milestone 7 — v1 stabilization ✅
 
-- Add approximately 256×256 thumbnails and preview artifact caching.
-- Add image/animated GIF/RAW, native audio/video, PDF, and DOCX previews.
-- Add durable request/status/retry behavior and download fallback.
-- Verify that no video transcoding, waveform, cover-art, or attachment extraction slips into v1.
-
-**Done when:** supported files preview on request, cached artifacts are reusable and accounted for, and unsupported codecs/formats download cleanly.
-
-### Milestone 6 — Complete v1 file management and UI
-
-- Add trash/restore/permanent deletion and automatic 30-day cleanup.
-- Add favorites, filters, sorting, complete multi-selection actions, and filesystem command-bar actions.
-- Finish dark/light visual states, persistent low-disk notification, storage meter, and status footer.
-- Verify progress restoration and failures across reloads.
-
-**Done when:** the agreed desktop workflows operate on real persisted data and all v1 decisions are represented in behavior.
-
-### Milestone 7 — v1 stabilization
-
-- Run the v1 test matrix on ARM64 and build/verify x86-64 compatibility.
-- Test low disk, missing storage at startup, interrupted uploads, worker crashes, malformed files, and deletion retries.
-- Tune worker concurrency for the 4 GB Raspberry Pi.
-- Document development startup, configuration, supported formats, known limitations, and data layout.
-- Reconcile `README.md`, `questions.md`, and `deferred.md` with the shipped behavior.
+E2E and edge-case tests (`crates/api/tests/e2e_lifecycle.rs`, `edge_cases.rs`, import E2E), ARM64/x86-64 validation docs, performance and developer documentation, plan reconciliation.
 
 **Done when:** v1 can be used reliably on the target private LAN in its documented development configuration, with no unresolved v1-blocking questions.
 
