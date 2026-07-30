@@ -28,6 +28,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+strife-worker = { path = "../worker" }
 tower.workspace = true
 
 [lints]
