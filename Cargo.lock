@@ -1980,12 +1980,15 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "serde_json",
  "sqlx",
  "strife-db",
+ "strife-media",
  "strife-storage",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

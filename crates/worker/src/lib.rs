@@ -12,12 +12,18 @@ use tokio::{sync::watch, task::JoinSet, time::MissedTickBehavior};
 use tracing::{Instrument, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
+mod metadata;
+
+pub use metadata::MetadataHandler;
+
 /// Runtime settings loaded from environment variables.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerConfig {
     pub database_url: String,
     pub storage_root: PathBuf,
+    pub tika_url: String,
     pub concurrency: usize,
+    pub extractor_concurrency: usize,
     pub poll_interval: Duration,
     pub lease_ttl: ChronoDuration,
 }
@@ -32,7 +38,9 @@ impl WorkerConfig {
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             storage_root: PathBuf::from(required("STORAGE_ROOT")?),
+            tika_url: required("TIKA_URL")?,
             concurrency: positive_usize("WORKER_CONCURRENCY", 2)?,
+            extractor_concurrency: positive_usize("EXTRACTOR_CONCURRENCY", 1)?,
             poll_interval: Duration::from_secs(positive_u64("WORKER_POLL_INTERVAL_SECONDS", 5)?),
             lease_ttl: ChronoDuration::seconds(i64::try_from(positive_u64(
                 "WORKER_LEASE_TTL_SECONDS",
@@ -68,16 +76,6 @@ fn positive_usize(name: &str, default: usize) -> Result<usize> {
 #[async_trait]
 pub trait JobHandler: Send + Sync {
     async fn handle(&self, job: &JobRecord) -> Result<()>;
-}
-
-/// Safe placeholder used until the metadata handler is introduced in Story 4.9.
-pub struct UnavailableMetadataHandler;
-
-#[async_trait]
-impl JobHandler for UnavailableMetadataHandler {
-    async fn handle(&self, _job: &JobRecord) -> Result<()> {
-        bail!("metadata extraction handler is not installed")
-    }
 }
 
 /// Initializes newline-delimited JSON logs using `RUST_LOG` when present.

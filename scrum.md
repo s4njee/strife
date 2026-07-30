@@ -1547,11 +1547,26 @@ As a developer, I want the worker to handle `metadata_extraction` jobs so that m
 
 **Acceptance Criteria:**
 
-- [ ] When a `metadata_extraction` job is claimed, the handler: retrieves the file from storage to a temp path, runs MIME detection, selects the appropriate extractor(s) based on MIME (exiftool for images, ffprobe for video/audio, tika for documents), runs the extractor(s), inserts `metadata_records` and `media_streams` rows, updates normalized columns on the node, and marks the job completed.
-- [ ] If the MIME type doesn't match any specialized extractor, a generic `metadata_records` row is created with `status = unsupported` containing only MIME, size, and checksum.
-- [ ] If an extractor fails, the job is marked failed with the error; the file remains accessible with whatever metadata was extracted.
-- [ ] Extractor concurrency is bounded (max 1 ExifTool + 1 ffprobe + 1 Tika at a time, configurable) to respect 4 GB RAM.
-- [ ] Tests: enqueue a job for a JPEG, process it, verify `metadata_records` and normalized fields.
+- [x] When a `metadata_extraction` job is claimed, the handler: retrieves the file from storage to a temp path, runs MIME detection, selects the appropriate extractor(s) based on MIME (exiftool for images, ffprobe for video/audio, tika for documents), runs the extractor(s), inserts `metadata_records` and `media_streams` rows, updates normalized columns on the node, and marks the job completed.
+- [x] If the MIME type doesn't match any specialized extractor, a generic `metadata_records` row is created with `status = unsupported` containing only MIME, size, and checksum.
+- [x] If an extractor fails, the job is marked failed with the error; the file remains accessible with whatever metadata was extracted.
+- [x] Extractor concurrency is bounded (max 1 ExifTool + 1 ffprobe + 1 Tika at a time, configurable) to respect 4 GB RAM.
+- [x] Tests: enqueue a job for a JPEG, process it, verify `metadata_records` and normalized fields.
+
+**Implementation report:** Wired MIME, ExifTool, ffprobe, and Tika into the durable worker with streamed temporary retrieval, independent extractor semaphores, full raw-record upserts, normalized facts, media stream replacement, and failure records that drive queue retry without affecting file access. A PostgreSQL/storage integration test processes a real generated JPEG through a leased job and verifies completion, full Exif JSON, MIME, width, and height.
+
+**New files:**
+
+- `crates/worker/src/metadata.rs`
+- `crates/worker/tests/metadata_job.rs`
+
+**Modified files:**
+
+- `.env.example`
+- `Cargo.lock`
+- `crates/worker/Cargo.toml`
+- `crates/worker/src/lib.rs`
+- `crates/worker/src/main.rs`
 
 ---
 

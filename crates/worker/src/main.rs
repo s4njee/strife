@@ -4,7 +4,7 @@ use anyhow::Result;
 use sqlx::postgres::PgPoolOptions;
 use strife_db::MIGRATOR;
 use strife_storage::LocalFsBackend;
-use strife_worker::{UnavailableMetadataHandler, WorkerConfig, init_tracing, run};
+use strife_worker::{MetadataHandler, WorkerConfig, init_tracing, run};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,6 +17,12 @@ async fn main() -> Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
     let storage = Arc::new(LocalFsBackend::new(&config.storage_root).await?);
+    let handler = Arc::new(MetadataHandler::new(
+        pool.clone(),
+        storage.clone(),
+        config.tika_url.clone(),
+        config.extractor_concurrency,
+    ));
 
-    run(config, pool, storage, Arc::new(UnavailableMetadataHandler)).await
+    run(config, pool, storage, handler).await
 }
