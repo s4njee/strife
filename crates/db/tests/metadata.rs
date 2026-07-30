@@ -1,5 +1,5 @@
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use strife_db::{MIGRATOR, ROOT_NODE_ID};
+use strife_db::{MIGRATOR, MediaStreamInput, MediaStreamType, ROOT_NODE_ID, replace_media_streams};
 use uuid::Uuid;
 
 async fn test_pool() -> Option<PgPool> {
@@ -62,16 +62,23 @@ async fn metadata_schema_persists_raw_typed_and_stream_data() {
     .execute(&pool)
     .await
     .expect("insert normalized metadata");
-    sqlx::query(
-        "INSERT INTO media_streams \
-         (id, node_id, stream_index, stream_type, codec, width, height, duration_ms) \
-         VALUES ($1, $2, 0, 'video', 'h264', 1920, 1080, 1250)",
+    replace_media_streams(
+        &pool,
+        node_id,
+        &[MediaStreamInput {
+            stream_index: 0,
+            stream_type: MediaStreamType::Video,
+            codec: "h264",
+            width: Some(1920),
+            height: Some(1080),
+            duration_ms: Some(1250),
+            bitrate_bps: Some(2_000_000),
+            frame_rate: Some("30/1"),
+            language: None,
+        }],
     )
-    .bind(Uuid::new_v4())
-    .bind(node_id)
-    .execute(&pool)
     .await
-    .expect("insert media stream");
+    .expect("replace media streams");
 
     let raw: serde_json::Value = sqlx::query_scalar(
         "SELECT raw_payload FROM metadata_records WHERE node_id = $1 AND extractor_name = 'ffprobe'",

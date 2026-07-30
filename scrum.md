@@ -1490,12 +1490,26 @@ As a developer, I want an ffprobe adapter in `crates/media` so that video and au
 
 **Acceptance Criteria:**
 
-- [ ] `crates/media` exports `extract_ffprobe(path: &Path) -> Result<FfprobeResult>`.
-- [ ] Invokes `ffprobe -v quiet -print_format json -show_format -show_streams <path>`.
-- [ ] Timeout: 60s (configurable). Max output: 5 MB.
-- [ ] Parses into `FfprobeResult` with: `container_format`, `duration_ms`, `total_bitrate`, and a `Vec<StreamInfo>` with per-stream `codec`, `type`, `width`, `height`, `frame_rate`, `bitrate`, `language`.
-- [ ] Populates `media_streams` table rows.
-- [ ] Tests with representative MP4 (H.264 + AAC), MKV, MP3, and M4A files.
+- [x] `crates/media` exports `extract_ffprobe(path: &Path) -> Result<FfprobeResult>`.
+- [x] Invokes `ffprobe -v quiet -print_format json -show_format -show_streams <path>`.
+- [x] Timeout: 60s (configurable). Max output: 5 MB.
+- [x] Parses into `FfprobeResult` with: `container_format`, `duration_ms`, `total_bitrate`, and a `Vec<StreamInfo>` with per-stream `codec`, `type`, `width`, `height`, `frame_rate`, `bitrate`, `language`.
+- [x] Populates `media_streams` table rows.
+- [x] Tests with representative MP4 (H.264 + AAC), MKV, MP3, and M4A files.
+
+**Implementation report:** Added a bounded `ffprobe` adapter that retains the complete JSON document and normalizes container, duration, bitrate, language, and per-stream fields into records shaped for `media_streams` persistence. Shared process controls enforce atomic 16 MiB/60-second extraction, and generated H.264/AAC MP4, MKV, MP3, and M4A fixtures validate real probes.
+
+**New files:**
+
+- `crates/media/src/ffprobe.rs`
+- `crates/media/src/process.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `crates/db/tests/metadata.rs`
+- `crates/media/src/exif.rs`
+- `crates/media/src/lib.rs`
 
 ---
 

@@ -82,6 +82,69 @@ pub enum JobState {
     Cancelled,
 }
 
+/// Persisted kind of an audio-visual stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "media_stream_type", rename_all = "lowercase")]
+pub enum MediaStreamType {
+    Video,
+    Audio,
+    Subtitle,
+}
+
+/// Normalized media stream values written after a successful probe.
+pub struct MediaStreamInput<'a> {
+    pub stream_index: i32,
+    pub stream_type: MediaStreamType,
+    pub codec: &'a str,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_ms: Option<i64>,
+    pub bitrate_bps: Option<i64>,
+    pub frame_rate: Option<&'a str>,
+    pub language: Option<&'a str>,
+}
+
+/// Atomically replaces the normalized streams for a node after a successful probe.
+///
+/// # Errors
+///
+/// Returns a database error and rolls back when existing rows cannot be replaced completely.
+pub async fn replace_media_streams(
+    pool: &PgPool,
+    node_id: Uuid,
+    streams: &[MediaStreamInput<'_>],
+) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("DELETE FROM media_streams WHERE node_id = $1")
+        .bind(node_id)
+        .execute(&mut *transaction)
+        .await?;
+    for stream in streams {
+        sqlx::query(
+            r"
+            INSERT INTO media_streams (
+                id, node_id, stream_index, stream_type, codec, width, height,
+                duration_ms, bitrate_bps, frame_rate, language
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ",
+        )
+        .bind(Uuid::new_v4())
+        .bind(node_id)
+        .bind(stream.stream_index)
+        .bind(stream.stream_type)
+        .bind(stream.codec)
+        .bind(stream.width)
+        .bind(stream.height)
+        .bind(stream.duration_ms)
+        .bind(stream.bitrate_bps)
+        .bind(stream.frame_rate)
+        .bind(stream.language)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await
+}
+
 /// One durable background job.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct JobRecord {

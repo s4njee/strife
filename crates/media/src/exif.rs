@@ -1,13 +1,14 @@
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{path::Path, time::Duration};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::Value;
-use tokio::{io::AsyncReadExt, process::Command, time::timeout};
+use tokio::process::Command;
+
+use crate::process::run_bounded;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 // This is a fail-fast process safety boundary, not a storage truncation limit.
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 /// Complete `ExifTool` output plus fields normalized for common queries.
 #[derive(Clone, Debug, PartialEq)]
@@ -45,51 +46,10 @@ pub async fn extract_exif_with_limits(
     process_timeout: Duration,
     max_output_bytes: usize,
 ) -> Result<ExifResult> {
-    let mut child = Command::new("exiftool")
-        .args(["-json", "-n", "--"])
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .context("start ExifTool")?;
-    let stdout = child.stdout.take().context("capture ExifTool stdout")?;
-    let stderr = child.stderr.take().context("capture ExifTool stderr")?;
-    let stdout_task = tokio::spawn(read_bounded(stdout, max_output_bytes));
-    let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
-
-    let Ok(status) = timeout(process_timeout, child.wait()).await else {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        bail!(
-            "ExifTool timed out after {} seconds",
-            process_timeout.as_secs()
-        );
-    };
-    let status = status.context("wait for ExifTool")?;
-    let stdout = stdout_task.await.context("join ExifTool stdout reader")??;
-    let stderr = stderr_task.await.context("join ExifTool stderr reader")??;
-    if stdout.len() > max_output_bytes {
-        bail!("ExifTool output exceeded {max_output_bytes} bytes");
-    }
-    if !status.success() {
-        bail!(
-            "ExifTool exited unsuccessfully: {}",
-            String::from_utf8_lossy(&stderr).trim()
-        );
-    }
+    let mut command = Command::new("exiftool");
+    command.args(["-json", "-n", "--"]).arg(path);
+    let stdout = run_bounded(command, "ExifTool", process_timeout, max_output_bytes).await?;
     parse_exif_payload(serde_json::from_slice(&stdout).context("parse ExifTool JSON")?)
-}
-
-async fn read_bounded(reader: impl tokio::io::AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>> {
-    let capacity = limit.saturating_add(1);
-    let mut bytes = Vec::with_capacity(capacity.min(64 * 1024));
-    reader
-        .take(u64::try_from(capacity)?)
-        .read_to_end(&mut bytes)
-        .await?;
-    Ok(bytes)
 }
 
 fn parse_exif_payload(raw_payload: Value) -> Result<ExifResult> {
