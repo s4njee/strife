@@ -1,4 +1,5 @@
 import type { RouteSectionProps } from '@solidjs/router'
+import { CommandBar } from './components/CommandBar'
 import { Sidebar } from './components/Sidebar'
 import { StorageWarning } from './components/StorageWarning'
 import { UploadProgressPanel } from './components/UploadProgressPanel'
@@ -12,6 +13,7 @@ function App(props: RouteSectionProps) {
         <Sidebar />
         <main class="workspace">
           <StorageWarning />
+          <CommandBar />
           {props.children}
         </main>
         <UploadProgressPanel />

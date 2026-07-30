@@ -2190,15 +2190,28 @@ As a user, I want a command bar where I can type filesystem-like commands so tha
 
 **Acceptance Criteria:**
 
-- [ ] A command bar input is visible at the top or bottom of the content area (per design).
-- [ ] Typing a command and pressing Enter executes it.
-- [ ] Supported commands (as decided in Story 6.1, e.g.): `pwd` (print current path), `ls [path]` (list contents), `cd <path>` (navigate), `mkdir <name>` (create folder), `mv <source> <dest>` (move/rename), `rm <target>` (trash), `restore <target>` (restore from trash), `open <target>` (preview/open).
-- [ ] Paths support relative (`..`, `./`) and absolute (`/`) notation within the virtual hierarchy.
-- [ ] Basic autocomplete for paths: pressing Tab completes the current path segment by querying `GET /api/folders/:id/children`.
-- [ ] Command history: Up/Down arrows cycle through recent commands (stored in `localStorage`, last 50).
-- [ ] Destructive commands (`rm`) require confirmation or an `--force` flag.
-- [ ] Errors are displayed inline below the command bar (e.g., "No such folder: /photos/2025").
-- [ ] Quoting supports spaces in names: `mkdir "My Photos"` or `mkdir My\ Photos`.
+- [x] A command bar input is visible at the top or bottom of the content area (per design).
+- [x] Typing a command and pressing Enter executes it.
+- [x] Supported commands (as decided in Story 6.1, e.g.): `pwd` (print current path), `ls [path]` (list contents), `cd <path>` (navigate), `mkdir <name>` (create folder), `mv <source> <dest>` (move/rename), `rm <target>` (trash), `restore <target>` (restore from trash), `open <target>` (preview/open).
+- [x] Paths support relative (`..`, `./`) and absolute (`/`) notation within the virtual hierarchy.
+- [x] Basic autocomplete for paths: pressing Tab completes the current path segment by querying `GET /api/folders/:id/children`.
+- [x] Command history: Up/Down arrows cycle through recent commands (stored in `localStorage`, last 50).
+- [x] Destructive commands (`rm`) require confirmation or an `--force` flag.
+- [x] Errors are displayed inline below the command bar (e.g., "No such folder: /photos/2025").
+- [x] Quoting supports spaces in names: `mkdir "My Photos"` or `mkdir My\ Photos`.
+
+**Implementation report:** Added a shell-like command bar with quoted/escaped tokenization, the eight ADR 0007 commands, Tab path autocomplete, local history, and confirmed `rm` unless `--force`. Commands resolve virtual absolute/relative paths against the current folder route.
+
+**New files:**
+
+- `apps/web/src/commands/history.ts`
+- `apps/web/src/commands/parse.ts`
+- `apps/web/src/components/CommandBar.css`
+- `apps/web/src/components/CommandBar.tsx`
+
+**Modified files:**
+
+- `apps/web/src/App.tsx`
 
 ---
 

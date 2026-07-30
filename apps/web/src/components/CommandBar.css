@@ -1,0 +1,65 @@
+.command-bar {
+  border-bottom: 1px solid var(--color-border-row);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  background: var(--color-surface);
+}
+
+.command-bar__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.command-bar__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3);
+  background: var(--color-surface-input);
+}
+
+.command-bar__prompt {
+  color: var(--color-accent);
+  font-family: var(--font-mono, monospace);
+  font-weight: var(--font-weight-medium);
+}
+
+.command-bar__input {
+  flex: 1;
+  border: 0;
+  padding: var(--space-2) 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-md);
+}
+
+.command-bar__input:focus {
+  outline: none;
+}
+
+.command-bar__row:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.command-bar__error {
+  margin: var(--space-2) 0 0;
+  color: var(--color-danger, #c44);
+  font-size: var(--font-size-sm);
+}
+
+.command-bar__output {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+}
