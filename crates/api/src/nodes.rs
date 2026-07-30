@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -19,13 +19,14 @@ struct NodesState {
     pool: PgPool,
 }
 
-/// Builds node lifecycle routes (trash, restore, and later favorites).
+/// Builds node lifecycle routes (trash, restore, permanent deletion, favorites).
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/api/trash", get(list_trash))
         .route("/api/nodes/{id}/trash", post(trash_node))
         .route("/api/nodes/trash", post(trash_nodes_batch))
         .route("/api/nodes/{id}/restore", post(restore_node))
+        .route("/api/nodes/{id}/permanent", delete(permanent_delete))
         .with_state(NodesState { pool })
 }
 
@@ -72,6 +73,13 @@ pub struct TrashListResponse {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TrashBatchResponse {
     pub items: Vec<NodeResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PermanentDeleteResponse {
+    pub node_id: Uuid,
+    pub job_id: Option<Uuid>,
+    pub status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -179,6 +187,34 @@ async fn list_trash(
     Ok(Json(TrashListResponse {
         items: items.into_iter().map(TrashItemResponse::from).collect(),
     }))
+}
+
+async fn permanent_delete(
+    State(state): State<NodesState>,
+    Path(node_id): Path<Uuid>,
+) -> Result<(StatusCode, Json<PermanentDeleteResponse>), ApiError> {
+    let job = strife_db::request_permanent_deletion(&state.pool, node_id).await?;
+    let (status, body_status, job_id) = if let Some(job) = job {
+        (StatusCode::ACCEPTED, "queued", Some(job.id))
+    } else {
+        // Already deleted, or an identical job is already pending/leased.
+        let existing = strife_db::get_node_by_id(&state.pool, node_id)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+        if existing.is_none() {
+            (StatusCode::OK, "already_deleted", None)
+        } else {
+            (StatusCode::ACCEPTED, "already_queued", None)
+        }
+    };
+    Ok((
+        status,
+        Json(PermanentDeleteResponse {
+            node_id,
+            job_id,
+            status: body_status.to_owned(),
+        }),
+    ))
 }
 
 impl From<NodeRecord> for NodeResponse {

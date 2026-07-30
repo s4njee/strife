@@ -6,14 +6,18 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use chrono::Duration as ChronoDuration;
 use sqlx::PgPool;
-use strife_db::{JobRecord, JobType, claim_job, complete_job, fail_job, release_expired_leases};
+use strife_db::{
+    JobRecord, JobType, claim_job, complete_job, fail_job, get_job, release_expired_leases,
+};
 use strife_storage::StorageBackend;
 use tokio::{sync::watch, task::JoinSet, time::MissedTickBehavior};
 use tracing::{Instrument, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
+mod deletion;
 mod metadata;
 
+pub use deletion::DeletionService;
 pub use metadata::MetadataHandler;
 
 /// Runtime settings loaded from environment variables.
@@ -80,6 +84,46 @@ pub trait JobHandler: Send + Sync {
     async fn handle(&self, job: &JobRecord) -> Result<()>;
 }
 
+/// Composite handler that routes metadata, preview, and permanent-deletion work.
+pub struct WorkerHandler {
+    metadata: MetadataHandler,
+    deletion: DeletionService,
+}
+
+impl WorkerHandler {
+    #[must_use]
+    pub fn new(
+        pool: PgPool,
+        storage: Arc<dyn StorageBackend>,
+        tika_url: String,
+        extractor_concurrency: usize,
+        preview_concurrency: usize,
+    ) -> Self {
+        Self {
+            metadata: MetadataHandler::new(
+                pool.clone(),
+                storage.clone(),
+                tika_url,
+                extractor_concurrency,
+                preview_concurrency,
+            ),
+            deletion: DeletionService::new(pool, storage),
+        }
+    }
+}
+
+#[async_trait]
+impl JobHandler for WorkerHandler {
+    async fn handle(&self, job: &JobRecord) -> Result<()> {
+        match job.job_type {
+            JobType::MetadataExtraction | JobType::PreviewGeneration => {
+                self.metadata.handle(job).await
+            }
+            JobType::PermanentDeletion | JobType::TrashCleanup => self.deletion.purge(job).await,
+        }
+    }
+}
+
 /// Initializes newline-delimited JSON logs using `RUST_LOG` when present.
 pub fn init_tracing() {
     tracing_subscriber::fmt()
@@ -134,11 +178,7 @@ async fn processor_loop(
         if *shutdown.borrow() {
             return Ok(());
         }
-        let job = claim_job(&pool, JobType::MetadataExtraction, &owner, config.lease_ttl).await?;
-        let job = match job {
-            Some(job) => Some(job),
-            None => claim_job(&pool, JobType::PreviewGeneration, &owner, config.lease_ttl).await?,
-        };
+        let job = claim_next_job(&pool, &owner, config.lease_ttl).await?;
         match job {
             Some(job) => process_job(&pool, handler.as_ref(), job).await?,
             None => {
@@ -153,19 +193,44 @@ async fn processor_loop(
     }
 }
 
+async fn claim_next_job(
+    pool: &PgPool,
+    owner: &str,
+    lease_ttl: ChronoDuration,
+) -> Result<Option<JobRecord>> {
+    for job_type in [
+        JobType::PermanentDeletion,
+        JobType::TrashCleanup,
+        JobType::MetadataExtraction,
+        JobType::PreviewGeneration,
+    ] {
+        if let Some(job) = claim_job(pool, job_type, owner, lease_ttl).await? {
+            return Ok(Some(job));
+        }
+    }
+    Ok(None)
+}
+
 async fn process_job(pool: &PgPool, handler: &dyn JobHandler, job: JobRecord) -> Result<()> {
     let span = info_span!("job", job_id = %job.id, job_type = ?job.job_type);
     async move {
         info!(attempt = job.attempts, "processing job");
         match handler.handle(&job).await {
             Ok(()) => {
-                complete_job(pool, job.id).await?;
+                // Permanent deletion cascades jobs when the target node is removed.
+                if get_job(pool, job.id).await?.is_some() {
+                    complete_job(pool, job.id).await?;
+                }
                 info!("job completed");
             }
             Err(error) => {
                 let message = format!("{error:#}");
-                let updated = fail_job(pool, job.id, &message).await?;
-                warn!(error = %message, state = ?updated.map(|record| record.state), "job failed");
+                if get_job(pool, job.id).await?.is_some() {
+                    let updated = fail_job(pool, job.id, &message).await?;
+                    warn!(error = %message, state = ?updated.map(|record| record.state), "job failed");
+                } else {
+                    warn!(error = %message, "job failed after target was removed");
+                }
             }
         }
         Ok(())

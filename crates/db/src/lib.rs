@@ -2464,6 +2464,163 @@ pub async fn restore_node(pool: &PgPool, node_id: Uuid) -> Result<NodeRecord, Tr
     Ok(restored)
 }
 
+/// Storage keys attached to a node that must be removed during permanent deletion.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct NodeStorageKeys {
+    pub node_id: Uuid,
+    pub original_storage_key: Option<String>,
+    pub artifact_storage_keys: Vec<String>,
+}
+
+/// Enqueues permanent deletion for a trashed node. Idempotent when the node is
+/// already gone or a pending/leased job already exists.
+///
+/// # Errors
+///
+/// Returns `NotTrashed` when the node is active, or a database error.
+pub async fn request_permanent_deletion(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Option<JobRecord>, TrashMutationError> {
+    let node = get_node_by_id(pool, node_id).await?;
+    let Some(node) = node else {
+        // Already deleted — treat as success with no new job.
+        return Ok(None);
+    };
+    if node.lifecycle_state != LifecycleState::Trashed {
+        return Err(TrashMutationError::NotTrashed);
+    }
+    if node.id == ROOT_NODE_ID {
+        return Err(TrashMutationError::CannotTrashRoot);
+    }
+
+    let job = enqueue_job(pool, JobType::PermanentDeletion, node_id, 10).await?;
+    Ok(job)
+}
+
+/// Collects original and artifact storage keys for a trashed node and its
+/// trashed descendants.
+///
+/// # Errors
+///
+/// Returns a database error when the query cannot be completed.
+pub async fn list_storage_keys_for_deletion(
+    pool: &PgPool,
+    root_node_id: Uuid,
+) -> Result<Vec<NodeStorageKeys>, sqlx::Error> {
+    sqlx::query_as::<_, NodeStorageKeys>(
+        r"
+        WITH RECURSIVE tree AS (
+            SELECT id
+            FROM nodes
+            WHERE id = $1
+              AND lifecycle_state = 'trashed'
+
+            UNION ALL
+
+            SELECT child.id
+            FROM nodes AS child
+            JOIN tree AS parent ON child.parent_id = parent.id
+            WHERE child.lifecycle_state = 'trashed'
+        )
+        SELECT
+            t.id AS node_id,
+            (
+                SELECT fo.storage_key
+                FROM file_objects AS fo
+                WHERE fo.node_id = t.id
+                  AND fo.upload_state = 'finalized'
+                LIMIT 1
+            ) AS original_storage_key,
+            COALESCE(
+                (
+                    SELECT array_agg(da.storage_key)
+                    FROM derived_artifacts AS da
+                    WHERE da.node_id = t.id
+                ),
+                '{}'::text[]
+            ) AS artifact_storage_keys
+        FROM tree AS t
+        ",
+    )
+    .bind(root_node_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Deletes database rows for a trashed node subtree after storage objects are gone.
+///
+/// Removes `file_objects` first (restrict FK), then the `nodes` rows. Cascades
+/// clear metadata, streams, artifacts, trash entries, and jobs.
+///
+/// # Errors
+///
+/// Returns a database error when the purge cannot be completed.
+pub async fn purge_trashed_node_records(
+    pool: &PgPool,
+    root_node_id: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let node_ids = sqlx::query_scalar::<_, Uuid>(
+        r"
+        WITH RECURSIVE tree AS (
+            SELECT id
+            FROM nodes
+            WHERE id = $1
+              AND lifecycle_state = 'trashed'
+
+            UNION ALL
+
+            SELECT child.id
+            FROM nodes AS child
+            JOIN tree AS parent ON child.parent_id = parent.id
+            WHERE child.lifecycle_state = 'trashed'
+        )
+        SELECT id FROM tree
+        ",
+    )
+    .bind(root_node_id)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    if node_ids.is_empty() {
+        transaction.commit().await?;
+        return Ok(0);
+    }
+
+    sqlx::query("DELETE FROM file_objects WHERE node_id = ANY($1)")
+        .bind(&node_ids)
+        .execute(&mut *transaction)
+        .await?;
+
+    // Upload sessions keep a restrict FK on the completed node.
+    sqlx::query("UPDATE upload_sessions SET completed_node_id = NULL WHERE completed_node_id = ANY($1)")
+        .bind(&node_ids)
+        .execute(&mut *transaction)
+        .await?;
+
+    // Break parent links among the purge set so deletes are not ordered by depth.
+    sqlx::query(
+        r"
+        UPDATE nodes
+        SET parent_id = NULL
+        WHERE id = ANY($1)
+          AND parent_id = ANY($1)
+        ",
+    )
+    .bind(&node_ids)
+    .execute(&mut *transaction)
+    .await?;
+
+    let result = sqlx::query("DELETE FROM nodes WHERE id = ANY($1)")
+        .bind(&node_ids)
+        .execute(&mut *transaction)
+        .await?;
+
+    transaction.commit().await?;
+    Ok(result.rows_affected())
+}
+
 /// Lists top-level trashed items ordered by most recently trashed first.
 ///
 /// # Errors

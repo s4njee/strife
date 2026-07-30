@@ -4,8 +4,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use strife_api::nodes::{NodeResponse, TrashListResponse};
-use strife_db::{MIGRATOR, ROOT_NODE_ID, create_folder, list_children};
+use strife_api::nodes::{NodeResponse, PermanentDeleteResponse, TrashListResponse};
+use strife_db::{MIGRATOR, ROOT_NODE_ID, create_folder, get_node_by_id, list_children};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -132,6 +132,90 @@ async fn trash_restore_and_list_flow() {
     )
     .await;
     assert_eq!(batch_resp.status(), StatusCode::OK);
+
+    cleanup_tree(&pool, parent.id).await;
+}
+
+#[tokio::test]
+async fn permanent_delete_queues_job_and_is_idempotent_when_gone() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL API integration test");
+        return;
+    };
+
+    let parent = create_folder(
+        &pool,
+        ROOT_NODE_ID,
+        &format!("nodes-perm-{}", Uuid::new_v4()),
+    )
+    .await
+    .expect("create parent");
+    let folder = create_folder(&pool, parent.id, "PurgeMe")
+        .await
+        .expect("create folder");
+    let app = strife_api::nodes::router(pool.clone());
+
+    let active = json_request(
+        app.clone(),
+        "DELETE",
+        &format!("/api/nodes/{}/permanent", folder.id),
+        None,
+    )
+    .await;
+    assert_eq!(active.status(), StatusCode::CONFLICT);
+
+    let _ = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/nodes/{}/trash", folder.id),
+        None,
+    )
+    .await;
+
+    let queued = json_request(
+        app.clone(),
+        "DELETE",
+        &format!("/api/nodes/{}/permanent", folder.id),
+        None,
+    )
+    .await;
+    assert_eq!(queued.status(), StatusCode::ACCEPTED);
+    let body: PermanentDeleteResponse = response_json(queued).await;
+    assert_eq!(body.status, "queued");
+    assert!(body.job_id.is_some());
+
+    let again = json_request(
+        app.clone(),
+        "DELETE",
+        &format!("/api/nodes/{}/permanent", folder.id),
+        None,
+    )
+    .await;
+    assert_eq!(again.status(), StatusCode::ACCEPTED);
+    let again_body: PermanentDeleteResponse = response_json(again).await;
+    assert_eq!(again_body.status, "already_queued");
+
+    // Simulate worker purge.
+    strife_db::purge_trashed_node_records(&pool, folder.id)
+        .await
+        .expect("purge records");
+    assert!(
+        get_node_by_id(&pool, folder.id)
+            .await
+            .expect("query")
+            .is_none()
+    );
+
+    let gone = json_request(
+        app,
+        "DELETE",
+        &format!("/api/nodes/{}/permanent", folder.id),
+        None,
+    )
+    .await;
+    assert_eq!(gone.status(), StatusCode::OK);
+    let gone_body: PermanentDeleteResponse = response_json(gone).await;
+    assert_eq!(gone_body.status, "already_deleted");
 
     cleanup_tree(&pool, parent.id).await;
 }

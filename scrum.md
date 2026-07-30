@@ -1987,12 +1987,27 @@ As a user, I want to permanently delete trashed items and have their bytes freed
 
 **Acceptance Criteria:**
 
-- [ ] `DELETE /api/nodes/:id/permanent` (or `POST /api/nodes/:id/purge`) — only valid for trashed items.
-- [ ] Enqueues a `permanent_deletion` job (handled by the worker).
-- [ ] The deletion job: deletes the original from storage, deletes all derived artifacts from storage, deletes `metadata_records`, `media_streams`, `derived_artifacts`, `file_objects`, `trash_entries`, and finally the `nodes` row. All in a transaction where possible.
-- [ ] For folders: recursively deletes all descendants.
-- [ ] The operation is idempotent: deleting an already-deleted node returns `200` or `204`.
-- [ ] Tests: permanently delete a file, verify storage files are gone, verify DB rows are gone.
+- [x] `DELETE /api/nodes/:id/permanent` (or `POST /api/nodes/:id/purge`) — only valid for trashed items.
+- [x] Enqueues a `permanent_deletion` job (handled by the worker).
+- [x] The deletion job: deletes the original from storage, deletes all derived artifacts from storage, deletes `metadata_records`, `media_streams`, `derived_artifacts`, `file_objects`, `trash_entries`, and finally the `nodes` row. All in a transaction where possible.
+- [x] For folders: recursively deletes all descendants.
+- [x] The operation is idempotent: deleting an already-deleted node returns `200` or `204`.
+- [x] Tests: permanently delete a file, verify storage files are gone, verify DB rows are gone.
+
+**Implementation report:** Added `DELETE /api/nodes/:id/permanent` to queue durable permanent-deletion jobs, and a worker handler that removes originals/artifacts from storage then purges the trashed subtree from PostgreSQL. API and worker tests cover active rejection, queue idempotency, storage cleanup, and already-deleted responses.
+
+**New files:**
+
+- `crates/worker/src/deletion.rs`
+- `crates/worker/tests/permanent_deletion.rs`
+
+**Modified files:**
+
+- `crates/api/src/nodes.rs`
+- `crates/api/tests/nodes_api.rs`
+- `crates/db/src/lib.rs`
+- `crates/worker/src/lib.rs`
+- `crates/worker/src/main.rs`
 
 ---
 
