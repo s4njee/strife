@@ -323,7 +323,7 @@ The visual source is `design_handoff_strife_files_browser/README.md`, especially
 - Low-disk state is a persistent notification; routine completed actions and recoverable errors can use transient messages
 - Command bar accepts filesystem-like commands rather than being decorative
 
-The exact v1 command grammar and command list remain open. The separate command palette is deferred to v2.
+v1 command-bar commands are `pwd`, `ls`, `cd`, `mkdir`, `mv`, `rm`, `restore`, and `open`. Parsing supports quoted and escaped names, absolute and relative virtual paths (including `.` and `..`), Tab path autocomplete, and local history; `rm` requires confirmation unless `--force` is given. Details are in [ADR 0007](docs/decisions/0007-command-bar.md). The separate command palette is deferred to v2.
 
 ## 14. v1 Safety and Operational Baseline
 
@@ -438,15 +438,7 @@ Exact CI, performance targets, accessibility level, and release-platform matrix 
 
 ## 17. Active v1 Decisions
 
-Only unresolved v1 decisions remain in [`questions.md`](questions.md):
-
-1. Watched-folder ownership and change semantics
-2. Raw metadata size/retention policy
-3. First-class normalized metadata columns
-4. DOCX/office and raw-image preview renderers
-5. Initial command-bar grammar and commands
-
-Resolve each shortly before the milestone that needs it. Material choices should become short Architecture Decision Records under `docs/decisions/`.
+No unresolved v1-blocking decisions remain in [`questions.md`](questions.md). Settled milestone decisions live under [`docs/decisions/`](docs/decisions/) and in the tables above.
 
 ## 18. Living-Plan Rules
 

@@ -1913,6 +1913,10 @@ As a user, I want to preview a file by double-clicking it or pressing a "Preview
 - `crates/worker/src/metadata.rs`
 
 ---
+# Codex Stop
+# Grok Start
+
+---
 
 ## Epic 6 — Complete v1 File Management & UI
 
@@ -1928,9 +1932,20 @@ As a developer, I want M6 questions decided (command list, parsing rules) so tha
 
 **Acceptance Criteria:**
 
-- [ ] Decision recorded for which commands are in v1 (`pwd`, `ls`, `cd`, `mkdir`, `mv`, `rm`, `restore`, `open` — or a subset).
-- [ ] Decision recorded for parsing: quoting, escaping, relative/absolute paths, autocomplete, history, confirmation for destructive commands.
-- [ ] `questions.md` M6 section cleared.
+- [x] Decision recorded for which commands are in v1 (`pwd`, `ls`, `cd`, `mkdir`, `mv`, `rm`, `restore`, `open` — or a subset).
+- [x] Decision recorded for parsing: quoting, escaping, relative/absolute paths, autocomplete, history, confirmation for destructive commands.
+- [x] `questions.md` M6 section cleared.
+
+**Implementation report:** Recorded the full candidate command set and a filesystem-like (not general-shell) parsing model—quoted/escaped names, virtual absolute and relative paths, Tab autocomplete, history, and force-flagged `rm` confirmation—in ADR 0007, then cleared the M6 questions and updated the product plan.
+
+**New files:**
+
+- `docs/decisions/0007-command-bar.md`
+
+**Modified files:**
+
+- `README.md`
+- `questions.md`
 
 ---
 

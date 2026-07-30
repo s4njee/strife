@@ -2,15 +2,7 @@
 
 Only unresolved questions that can affect v1 belong here. Settled decisions are recorded in [`README.md`](README.md); questions deliberately postponed until v2 or later are in [`deferred.md`](deferred.md).
 
-## Milestone 6 — Command Bar
-
-### Which filesystem-like commands are in v1?
-
-Candidate commands are `pwd`, `ls`, `cd`, `mkdir`, `mv`, `rm`, `restore`, and `open`. Decide which map cleanly to existing UI operations.
-
-### How shell-like should parsing be?
-
-Define quoting, escaping, relative and absolute virtual paths, autocomplete, command history, error formatting, and whether destructive commands require confirmation. It should resemble a filesystem command interface without attempting to implement a general shell.
+There are currently no open v1-blocking questions.
 
 ## Decision Recording
 
