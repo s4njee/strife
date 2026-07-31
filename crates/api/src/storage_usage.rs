@@ -42,7 +42,7 @@ async fn usage(
 
     let originals_bytes: i64 = sqlx::query_scalar(
         r"
-        SELECT COALESCE(SUM(fo.byte_size), 0)
+        SELECT COALESCE(SUM(fo.byte_size), 0)::BIGINT
         FROM file_objects AS fo
         JOIN nodes AS n ON n.id = fo.node_id
         WHERE fo.upload_state = 'finalized'
@@ -55,7 +55,7 @@ async fn usage(
 
     let trash_bytes: i64 = sqlx::query_scalar(
         r"
-        SELECT COALESCE(SUM(fo.byte_size), 0)
+        SELECT COALESCE(SUM(fo.byte_size), 0)::BIGINT
         FROM file_objects AS fo
         JOIN nodes AS n ON n.id = fo.node_id
         WHERE fo.upload_state = 'finalized'
@@ -68,7 +68,9 @@ async fn usage(
 
     let artifacts_bytes: i64 = sqlx::query_scalar(
         r"
-        SELECT COALESCE(SUM(byte_size), 0) FROM derived_artifacts WHERE state = 'ready'
+        SELECT COALESCE(SUM(byte_size), 0)::BIGINT
+        FROM derived_artifacts
+        WHERE state = 'ready'
         ",
     )
     .fetch_one(&state.pool)
