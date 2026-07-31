@@ -1,0 +1,9 @@
+.git
+.github
+.data
+.env
+target
+apps/web/dist
+apps/web/node_modules
+design_handoff_strife_files_browser
+*.log

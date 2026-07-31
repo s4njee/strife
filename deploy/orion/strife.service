@@ -1,0 +1,21 @@
+[Unit]
+Description=Strife container stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/strife
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/strife
+Environment=STRIFE_IMAGE_TAG=main
+EnvironmentFile=/etc/strife/revision.env
+ExecStart=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife/docker-compose.prod.yml up -d --wait --no-build
+ExecReload=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife/docker-compose.prod.yml up -d --wait --no-build
+ExecStop=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife/docker-compose.prod.yml down
+TimeoutStartSec=10min
+TimeoutStopSec=12min
+
+[Install]
+WantedBy=multi-user.target

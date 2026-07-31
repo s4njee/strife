@@ -1,0 +1,124 @@
+name: strife
+
+x-runtime-environment: &runtime-environment
+  DATABASE_URL: postgresql://strife:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/strife
+  STORAGE_ROOT: /srv/strife/storage
+  TIKA_URL: http://tika:9998
+  WORKER_CONCURRENCY: "1"
+  WORKER_POLL_INTERVAL_SECONDS: "5"
+  WORKER_LEASE_TTL_SECONDS: "300"
+  EXTRACTOR_CONCURRENCY: "1"
+  PREVIEW_CONCURRENCY: "1"
+  RUST_LOG: info
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  postgres:
+    image: postgres:17.10-alpine3.24@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: strife
+      POSTGRES_USER: strife
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /srv/strife/postgres:/var/lib/postgresql/data
+    shm_size: 128mb
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U strife -d strife"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  tika:
+    image: apache/tika:3.2.3.0-full@sha256:21d8052de04e491ccf66e8680ade4da6f3d453a56d59f740b4167e54167219b7
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx768m
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9998/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  api:
+    <<: *hardened
+    image: strife-api:${STRIFE_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/backend.Dockerfile
+      target: api
+      args:
+        STRIFE_REVISION: ${STRIFE_REVISION:-unknown}
+    environment:
+      <<: *runtime-environment
+      LISTEN_ADDR: 0.0.0.0:3000
+      UPLOAD_SESSION_TTL_HOURS: "24"
+      DISK_GUARD_PERCENT: "90"
+    volumes:
+      - /srv/strife/storage:/srv/strife/storage
+      - /srv/strife/import:/mnt/ext/watch
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    mem_limit: 512m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tika:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  worker:
+    <<: *hardened
+    image: strife-worker:${STRIFE_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/backend.Dockerfile
+      target: worker
+      args:
+        STRIFE_REVISION: ${STRIFE_REVISION:-unknown}
+    environment:
+      <<: *runtime-environment
+    volumes:
+      - /srv/strife/storage:/srv/strife/storage
+    tmpfs:
+      - /tmp:size=768m,mode=1777
+    mem_limit: 1536m
+    stop_grace_period: 10m
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    <<: *hardened
+    image: strife-web:${STRIFE_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/web.Dockerfile
+      args:
+        STRIFE_REVISION: ${STRIFE_REVISION:-unknown}
+        VITE_BASE_PATH: /
+    ports:
+      - "80:80"
+    tmpfs:
+      - /config:size=16m
+      - /data:size=16m
+    mem_limit: 128m
+    depends_on:
+      api:
+        condition: service_healthy
