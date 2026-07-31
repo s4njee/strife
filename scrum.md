@@ -2517,6 +2517,322 @@ As a project owner, I want `README.md`, `questions.md`, and `deferred.md` reconc
 
 ---
 
+> [!NOTE]
+> Epics 8–12 are **pre-v2 hardening**, derived from a review of the shipped v1 codebase rather than from [`README.md`](README.md). They are prerequisites for v2, not v2 features: they close gaps in observability, deployment reconciliation, queue durability, and test coverage that would make authentication, sharing, OCR, and search materially harder to build and debug. v2 feature scope still lives in [`deferred.md`](deferred.md).
+
+---
+
+## Epic 8 — Observability & API Error Contract
+
+**Goal:** Every API failure is logged with its cause and returns one consistent error shape, and SQL type errors fail the build instead of reaching production.
+
+**Sprint Capacity Estimate:** 1–2 sprints
+
+---
+
+### Story 8.1 — Unified API Error Type
+
+As a developer, I want a single shared API error type so that every endpoint returns the same error shape and new failure modes are added in one place. **Estimated: 5 points.**
+
+**Acceptance Criteria:**
+
+- [ ] A new `crates/api/src/error.rs` defines one `ApiError` enum and one `ErrorBody { code, message }` serialization used by every router.
+- [ ] The four duplicate `ErrorBody` structs in `folders.rs`, `nodes.rs`, `uploads.rs`, and `imports.rs` are deleted, along with the per-module `ApiError`, `UploadApiError`, and `ImportApiError` enums and the ad-hoc error handling in `files.rs`.
+- [ ] Endpoints that currently return a bare `StatusCode` with an empty body — `/api/storage/usage`, `/api/jobs`, `/api/jobs/:id`, `/api/admin/reprocess`, and the `files.rs` handlers — return the same JSON body as every other endpoint.
+- [ ] Existing `code` values (`bad_request`, `not_found`, `name_conflict`, `cycle_detected`, `move_conflict`, `not_trashed`, `cannot_trash_root`, `internal_error`) are preserved so the frontend contract does not change.
+- [ ] The `move_conflict` response retains its additional `conflicts` array.
+- [ ] Domain error conversions (`From<FolderMutationError>`, `From<TrashMutationError>`) are preserved against the unified type.
+- [ ] Tests: every former bare-`StatusCode` endpoint returns a parseable error body; existing API integration tests pass unchanged.
+
+---
+
+### Story 8.2 — Preserve & Log Internal Error Causes
+
+As an operator, I want internal server errors logged with their underlying cause so that production failures are diagnosable. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] All 61 `map_err(|_| ...)` sites in `crates/api/src` (uploads 22, imports 12, files 11, folders 5, nodes 4, storage_usage 4, jobs 2, admin 1) capture the underlying error instead of discarding it.
+- [ ] Every response mapped to `500 Internal Server Error` emits a `tracing::error!` carrying the source error, the route, and any relevant identifier (node, session, or job id).
+- [ ] Client-caused failures (`4xx`) log at `warn!` or `debug!`, not `error!`, so that `error!` remains a meaningful signal.
+- [ ] Error responses continue to expose only the generic message; underlying causes appear in logs only.
+- [ ] Test: a handler forced into a database failure produces a log event containing the underlying sqlx error text.
+- [ ] Regression check: the `SUM(...)::BIGINT` decode failure fixed in `crates/api/src/storage_usage.rs` would now produce a log line identifying the failing query.
+
+---
+
+### Story 8.3 — Request Tracing Middleware
+
+As an operator, I want every HTTP request logged with method, path, status, and duration so that I can see what the API is doing without per-handler logging. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `tower-http` is added to the workspace with the `trace` feature and the API app is wrapped in a `TraceLayer`.
+- [ ] Each request logs method, matched route, status code, and latency in the JSON format already configured by `init_tracing`.
+- [ ] A request id is generated per request, attached to the tracing span, and returned in a response header so a user-reported failure can be located in the logs.
+- [ ] Health and readiness probes (`/health`, `/ready`, `/api/health`, `/api/ready`) log at `debug` so container healthchecks do not dominate the log.
+- [ ] Streaming download and chunk-upload routes do not emit a line per byte range at `info` level.
+- [ ] `RUST_LOG` continues to control verbosity; the default `info` level produces one line per request.
+
+---
+
+### Story 8.4 — Compile-Time-Checked SQL Queries
+
+As a developer, I want SQL verified against the schema at build time so that type mismatches fail CI instead of production. **Estimated: 8 points.**
+
+**Acceptance Criteria:**
+
+- [ ] The 88 runtime-checked `sqlx::query`, `query_as::<_, _>`, and `query_scalar` calls in `crates/db/src` and `crates/api/src` are converted to the compile-time-checked `query!`, `query_as!`, and `query_scalar!` macros, or a decision record lists which specific queries cannot be converted (for example dynamically composed filters) and why.
+- [ ] `cargo sqlx prepare --workspace` regenerates `.sqlx/`, which contains one entry per checked query rather than the single entry present today.
+- [ ] CI's existing `SQLX_OFFLINE: "true"` build genuinely validates queries: a deliberately broken query type fails the build.
+- [ ] CI fails when `.sqlx/` is stale relative to the queries in the tree.
+- [ ] A `make sqlx-prepare` target (or equivalent documented command) exists so contributors can refresh the offline cache after adding a migration.
+- [ ] Tests: the full workspace test suite passes unchanged.
+
+---
+
+### Story 8.5 — Integration Coverage for Untested API Modules
+
+As a developer, I want an integration test for every HTTP route so that untested endpoints stop reaching production unverified. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `GET /api/storage/usage` has an integration test asserting `200` and numeric `total_bytes`, `used_bytes`, `available_bytes`, `originals_bytes`, `artifacts_bytes`, `trash_bytes`, and `usage_percent`, exercised against a database holding at least one finalized file, one trashed file, and one ready artifact.
+- [ ] `GET /api/jobs` and `GET /api/jobs/:id` have integration tests covering a pending job, a completed job, and an unknown id.
+- [ ] `POST /api/admin/reprocess` has an integration test covering a successful enqueue and an invalid request.
+- [ ] `GET /api/favorites` has an integration test; it is currently covered only at the database layer by `crates/db/tests/favorites.rs`.
+- [ ] `GET /api/health` and `GET /api/ready` have integration tests covering the healthy case and at least one degraded dependency.
+- [ ] A documented check (a script, or a test that enumerates the router) confirms every registered route has at least one integration test, so new routes cannot ship untested.
+
+---
+
+## Epic 9 — Production Deployment & Process Lifecycle
+
+**Goal:** The production deployment that already exists in the working tree is committed, documented, and survives a restart without severing in-flight work.
+
+**Sprint Capacity Estimate:** 1 sprint
+
+---
+
+### Story 9.1 — Commit Production Deployment Assets
+
+As a project owner, I want the production deployment files committed so that the deployed configuration is version-controlled and reproducible. **Estimated: 2 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `docker-compose.prod.yml`, `deploy/docker/backend.Dockerfile`, `deploy/docker/web.Dockerfile`, `deploy/docker/Caddyfile`, `deploy/orion/strife.service`, `deploy/orion/README.md`, `.dockerignore`, and `scripts/import-icloud.sh` are committed.
+- [ ] The pending `SUM(...)::BIGINT` fix in `crates/api/src/storage_usage.rs` is committed together with the regression test from Story 8.5.
+- [ ] `.env.example` documents every variable the production stack requires, including `POSTGRES_PASSWORD`, `STRIFE_IMAGE_TAG`, and `STRIFE_REVISION`.
+- [ ] Host secret files (`/etc/strife/postgres.env`, `/etc/strife/revision.env`) are documented but not committed, and `.gitignore` prevents accidental inclusion.
+- [ ] `deploy/orion/README.md` records the host layout (`/srv/strife/storage`, `/srv/strife/postgres`, `/srv/strife/import`, `/opt/strife`) and the install, upgrade, and rollback procedures.
+- [ ] A CI job builds both deployment images so a broken Dockerfile fails the build.
+
+---
+
+### Story 9.2 — API Graceful Shutdown
+
+As an operator, I want the API to drain in-flight requests on SIGTERM so that restarts do not sever active uploads and downloads. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `axum::serve(...)` in `crates/api/src/lib.rs` uses `.with_graceful_shutdown(...)` with SIGTERM and Ctrl-C handling matching the pattern already implemented in `crates/worker/src/lib.rs`.
+- [ ] The background task spawned by `spawn_upload_cleanup` observes the same shutdown signal and exits cleanly rather than being aborted mid-sweep.
+- [ ] In-flight chunk uploads and range downloads complete before the process exits, subject to a bounded drain timeout.
+- [ ] The `api` service in `docker-compose.prod.yml` sets a `stop_grace_period` consistent with that drain timeout; today only `worker` sets one (`10m`) and `api` falls back to the 10-second default.
+- [ ] A shutdown log line records how many requests were drained.
+- [ ] Test: a request in flight when SIGTERM is delivered completes with a success status.
+- [ ] Test: restarting the stack during an active multi-chunk upload leaves the session resumable rather than failed.
+
+---
+
+### Story 9.3 — ARM64 Build & Test in CI
+
+As a developer, I want CI to build and test the deployment architecture so that ARM64 regressions are caught before deployment. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] The CI matrix in `.github/workflows/ci.yml` includes `aarch64-unknown-linux-gnu` alongside `x86_64-unknown-linux-gnu`.
+- [ ] The ARM64 job runs clippy, build, and the test suite under the same `-D warnings` gate.
+- [ ] Container images are built for `linux/arm64` in CI, matching the claim already made in Story 7.4.
+- [ ] Checks in `scripts/validate-arm64.sh` that CI now covers are removed or marked CI-covered, leaving only genuinely device-specific steps (OOM sampling, tool availability on the Pi).
+- [ ] Job runtime is documented; if emulation is too slow for every push, the ARM64 job runs on merge to `main` and the split is recorded in `docs/development`.
+
+---
+
+### Story 9.4 — Documentation Reconciliation with Shipped Deployment
+
+As a project owner, I want documentation to match what is actually deployed so that the plan is trustworthy going into v2. **Estimated: 2 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `docs/known-limitations.md` no longer states "Development-oriented Docker Compose; production packaging deferred"; it describes the shipped production stack and its real remaining limits (no TLS, single host, LAN-only).
+- [ ] `README.md` is corrected where it states packaged deployment is a v2 concern (the deployment-direction row and the v1 non-goals section).
+- [ ] `deferred.md` removes or rewrites the now-answered question "What should a production-ready Docker Compose bundle include?" and retains the genuinely open ones (TLS, Kubernetes, native binaries, published images).
+- [ ] `docs/setup.md` documents production deployment alongside the existing development instructions.
+- [ ] An ADR under `docs/decisions/` records the production deployment model (Compose plus Caddy plus systemd on a single host) and why Kubernetes and published registry images remain deferred.
+- [ ] Story 7.8's reconciliation claim is amended to note this drift and its resolution rather than left as-is.
+
+---
+
+## Epic 10 — Queue Durability & Configuration Hygiene
+
+**Goal:** The job queue stays fast as the library grows, and fixed paths become configuration.
+
+**Sprint Capacity Estimate:** 1 sprint
+
+---
+
+### Story 10.1 — Job Queue Indexes
+
+As an operator, I want the job queue's hot queries indexed so that claim latency does not degrade as the jobs table grows. **Estimated: 2 points.**
+
+**Acceptance Criteria:**
+
+- [ ] A migration adds an index supporting `claim_job`'s predicate and ordering — `(job_type, state, priority DESC, created_at, id)`, or a partial index restricted to `state = 'pending'`.
+- [ ] A migration adds an index supporting the lease reaper's `WHERE state = 'leased' AND lease_expires_at < now()`.
+- [ ] `EXPLAIN ANALYZE` of `claim_job` against a table seeded with 100,000 completed jobs shows an index scan rather than a sequential scan; the before and after plans are recorded in `docs/performance.md`.
+- [ ] The existing `jobs_active_type_target_unique` partial unique index is retained.
+- [ ] Down migrations drop the new indexes.
+
+---
+
+### Story 10.2 — Job Retention & Purge
+
+As an operator, I want completed jobs purged on a retention schedule so that the jobs table does not grow without bound. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] A retention policy is decided and recorded — for example, delete `completed` jobs after 7 days and retain `failed` and `cancelled` jobs longer for the Actionable Errors tab.
+- [ ] A purge loop runs in the worker alongside the existing `trash_cleanup_loop`, batched like `TRASH_CLEANUP_BATCH` so a large backlog does not lock the table.
+- [ ] Retention windows are configurable by environment variable with documented defaults.
+- [ ] The purge never removes a job in `pending` or `leased` state, and never removes a failed job still surfaced in the Actionable Errors tab.
+- [ ] The purge logs a count when it removes rows, consistent with the existing cleanup loops.
+- [ ] Test: jobs older than the retention window are purged while recent, pending, leased, and surfaced-failed jobs are retained.
+- [ ] `docs/performance.md` documents the expected steady-state jobs table size for a library of 100,000 files.
+
+---
+
+### Story 10.3 — Configurable Import Watch Root
+
+As an operator, I want the import watch directory to come from configuration so that the import path is not compiled into the binary. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] The two hardcoded `/mnt/ext/watch` literals in `crates/api/src/lib.rs` (the `imports::router` argument and `recover_watched_imports`) are replaced by a `Config` field.
+- [ ] A new environment variable (for example `IMPORT_WATCH_ROOT`) is read by `Config::from_env`, defaults to `/mnt/ext/watch` for compatibility, and is validated the way `STORAGE_ROOT` is.
+- [ ] `docker-compose.prod.yml`, `docker-compose.dev.yml`, and `.env.example` set the variable explicitly rather than relying on the bind-mount path matching a compiled-in constant.
+- [ ] The configuration shape does not preclude multiple source-to-destination mappings later (see the import questions in `deferred.md`); a note records how it would extend.
+- [ ] A missing or unreadable watch root logs a warning and disables import rather than failing startup, preserving today's behavior.
+- [ ] Tests: config parsing covers the default, an override, and invalid values.
+
+---
+
+## Epic 11 — Frontend Test Foundation & API Contract
+
+**Goal:** The frontend has automated tests for its riskiest logic, and API types stop being maintained by hand on both sides.
+
+**Sprint Capacity Estimate:** 1–2 sprints
+
+---
+
+### Story 11.1 — Frontend Test Harness
+
+As a developer, I want a test runner in the frontend so that frontend logic can be tested at all. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] A test runner (Vitest, matching the existing Vite toolchain) is added to `apps/web` with `test` and `test:watch` scripts in `package.json`.
+- [ ] `@solidjs/testing-library` or an equivalent is configured so components can be rendered and asserted.
+- [ ] `.github/workflows/ci.yml` runs the frontend test suite alongside the existing lint, format, and build steps.
+- [ ] At least one test exists for a pure module (`apps/web/src/commands/parse.ts`) and one for a component, proving both paths work.
+- [ ] Coverage reporting is configured and a baseline is recorded; no coverage threshold is enforced yet.
+- [ ] `docs/development` documents how to run frontend tests.
+
+---
+
+### Story 11.2 — Upload Engine Unit Tests
+
+As a developer, I want the chunked upload engine covered by tests so that resume logic can be changed safely. **Estimated: 5 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `apps/web/src/uploads/folderUpload.ts` is tested for chunk boundary calculation, missing-range computation on resume, the three-way concurrency cap, and `ensureFolderPath` hierarchy creation.
+- [ ] `apps/web/src/uploads/uploadPersistence.ts` is tested for storing, rehydrating, and clearing `File` handles in IndexedDB, including a rehydration attempt for a session the server no longer knows about.
+- [ ] `apps/web/src/uploads/dropFiles.ts` is tested for recursive `FileSystemEntry` traversal, preserved relative paths, and empty directories.
+- [ ] `apps/web/src/uploads/UploadContext.tsx` is tested for `AbortController` cancellation and for server session discovery.
+- [ ] The resume path is covered end to end at unit level: a session with chunks 1–3 already received produces requests for the remaining ranges only.
+- [ ] Tests run without a live API; `fetch` is stubbed.
+
+---
+
+### Story 11.3 — Generated or Contract-Tested API Types
+
+As a developer, I want frontend types derived from the backend rather than hand-maintained so that API changes cannot silently diverge. **Estimated: 8 points.**
+
+**Acceptance Criteria:**
+
+- [ ] A decision is recorded resolving the open question in `deferred.md`: generate an OpenAPI document from the Axum handlers and generate TypeScript from it, generate TypeScript directly from the Rust types, or keep them separate behind an enforced contract test.
+- [ ] `apps/web/src/api/types.ts` is generated or contract-verified rather than maintained by hand.
+- [ ] The runtime type guards in `apps/web/src/api/client.ts` are retained — they guard against a misbehaving server — but are derived from or checked against the same source of truth.
+- [ ] CI fails when a backend response type changes without a corresponding frontend update.
+- [ ] The shared `ErrorBody` shape from Story 8.1 is part of the generated contract.
+- [ ] Error responses surface the server's `message` where it is useful, instead of `client.ts` discarding it in favour of strings such as `Could not favorite item (500).`
+
+---
+
+### Story 11.4 — Background Job Completion Refresh
+
+As a user, I want the file list to update when background processing finishes so that metadata and previews appear without a manual refresh. **Estimated: 3 points.**
+
+**Acceptance Criteria:**
+
+- [ ] A decision is recorded on the mechanism: extend the existing polling used by `StatusFooter`, `StorageWarning`, and `ImportStatusView`, or introduce server-sent events.
+- [ ] After an upload finalizes, the workspace reflects metadata and preview availability without the user navigating away and back; `WorkspaceView` currently has no polling of its own.
+- [ ] Refresh is scoped to the visible folder and stops when the view is unmounted or the tab is hidden.
+- [ ] The existing per-component intervals are reconciled so the client does not issue several uncoordinated polls per 15-second window.
+- [ ] The fixed 750 ms preview poll in `prepareFilePreview` is reconsidered against the chosen mechanism.
+- [ ] Test: a completed job causes exactly one refetch of the affected folder.
+
+---
+
+## Epic 12 — Structural Maintainability
+
+**Goal:** The files that concentrate the most change are split along the seams that v2 work will follow.
+
+**Sprint Capacity Estimate:** 1 sprint
+
+---
+
+### Story 12.1 — Decompose the Data Access Layer
+
+As a developer, I want the data access layer split by domain so that v2 features do not all edit the same file. **Estimated: 5 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `crates/db/src/lib.rs` (3,176 lines) is split into modules along existing seams: nodes and hierarchy, file objects, upload sessions, jobs, metadata, artifacts, trash, favorites, and import entries.
+- [ ] `lib.rs` retains only module declarations, shared types, and `MIGRATOR`.
+- [ ] Public paths are preserved by re-export so that no caller in `crates/api`, `crates/worker`, or `crates/importer` changes.
+- [ ] The split is a pure move: no query text or behavior changes in the same commit, so the diff stays reviewable.
+- [ ] Inline test modules move alongside the code they cover.
+- [ ] The existing `crates/db/tests` files pass unchanged.
+
+---
+
+### Story 12.2 — Decompose the Workspace View & API Client
+
+As a developer, I want the largest frontend files split into focused units so that UI changes stay local. **Estimated: 5 points.**
+
+**Acceptance Criteria:**
+
+- [ ] `apps/web/src/views/WorkspaceView.tsx` (1,005 lines) is split so that the browse, trash, and favorites views — each with its own `createResource` and `refetch` — become separate components or one shared parameterized list view.
+- [ ] Drag-and-drop handling, selection, and context-menu wiring are extracted from the view body.
+- [ ] `apps/web/src/api/client.ts` (1,023 lines) is split by resource (folders, nodes, files, uploads, imports, storage) behind the same import surface.
+- [ ] Behavior is unchanged and verified against the tests added in Epic 11.
+- [ ] `eslint --max-warnings 0` and `prettier --check` pass.
+- [ ] The upload-flow file reference in `notes.md` is updated to match the new layout.
+
+---
+
 ## Summary
 
 | Epic | Milestone | Stories | Estimated Points |
@@ -2529,7 +2845,17 @@ As a project owner, I want `README.md`, `questions.md`, and `deferred.md` reconc
 | 5 — On-Demand Previews | M5 | 10 | 35 |
 | 6 — Complete v1 File Management & UI | M6 | 13 | 42 |
 | 7 — v1 Stabilization | M7 | 8 | 24 |
-| **Total** | | **87** | **284** |
+| **v1 Total** | | **87** | **284** |
+| 8 — Observability & API Error Contract | M8 | 5 | 22 |
+| 9 — Production Deployment & Process Lifecycle | M9 | 4 | 10 |
+| 10 — Queue Durability & Configuration Hygiene | M10 | 3 | 8 |
+| 11 — Frontend Test Foundation & API Contract | M11 | 4 | 19 |
+| 12 — Structural Maintainability | M12 | 2 | 10 |
+| **Pre-v2 Hardening Total** | | **18** | **69** |
+| **Total** | | **105** | **353** |
 
 > [!TIP]
-> At a velocity of ~30 points/sprint with 2-week sprints, this is approximately **10 sprints (~20 weeks)** of work. Adjust based on measured velocity after the first 2 sprints.
+> At a velocity of ~30 points/sprint with 2-week sprints, v1 is approximately **10 sprints (~20 weeks)** of work and the pre-v2 hardening epics add roughly **2–3 sprints**. Adjust based on measured velocity after the first 2 sprints.
+
+> [!IMPORTANT]
+> Suggested order for the hardening epics: **8.2 and 8.3 first** — until internal errors are logged, every other change in this list is harder to verify in production. **9.1 next**, because the deployed configuration is currently untracked and one bug fix is uncommitted. Epic 10 should land before any v2 feature adds a third job type per file.
