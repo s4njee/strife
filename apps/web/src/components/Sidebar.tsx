@@ -1,6 +1,12 @@
 import { A, useLocation } from '@solidjs/router'
 import { createResource, createSignal, For, Show } from 'solid-js'
-import { getImportEntries, getOcrStatus, getStorageUsage } from '../api/client'
+import {
+  getEmailStatus,
+  getImportEntries,
+  getMetadataStatus,
+  getOcrStatus,
+  getStorageUsage,
+} from '../api/client'
 import type { StorageUsage } from '../api/client'
 import { useTheme } from '../theme/ThemeProvider'
 import './Sidebar.css'
@@ -9,10 +15,15 @@ const navigation = [
   { href: '/', label: 'All Files', icon: 'grid', end: true },
   { href: '/favorites', label: 'Favorites', icon: 'star', end: false },
   { href: '/imports', label: 'Imports', icon: 'inbox', end: false },
+  { href: '/console', label: 'Console', icon: 'terminal', end: false },
+  { href: '/email', label: 'Email', icon: 'mail', end: false },
   { href: '/ocr', label: 'OCR', icon: 'scan', end: false },
   { href: '/errors', label: 'Errors', icon: 'alert', end: false },
   { href: '/trash', label: 'Trash', icon: 'trash', end: false },
 ] as const
+
+/** Deterministic counts for the static preview build. */
+const previewEmailPending = { foreground: 3, backfill: 128 }
 
 const previewStorageUsage: StorageUsage = {
   total_bytes: 5_000_000_000_000,
@@ -69,6 +80,35 @@ export function Sidebar() {
       }
     },
   )
+  const [metadataPending] = createResource(
+    () => !staticPreview,
+    async () => {
+      try {
+        return (await getMetadataStatus()).counts.remaining
+      } catch {
+        return 0
+      }
+    },
+  )
+  // Only foreground work counts toward the badge. A paused ten-year backfill
+  // sitting at 600,000 queued would otherwise permanently pin a number to the
+  // navigation that no user action can clear.
+  const [emailPending] = createResource(
+    () => !staticPreview,
+    async () => {
+      try {
+        const { counts } = await getEmailStatus()
+        return {
+          foreground: counts.foreground_pending + counts.foreground_running,
+          backfill: counts.backfill_pending + counts.backfill_running,
+        }
+      } catch {
+        return { foreground: 0, backfill: 0 }
+      }
+    },
+  )
+  const emailBadge = () =>
+    staticPreview ? previewEmailPending : emailPending()
   const currentUsage = () => (staticPreview ? previewStorageUsage : usage())
 
   const percent = () => Math.round(currentUsage()?.usage_percent ?? 0)
@@ -113,6 +153,32 @@ export function Sidebar() {
               </Show>
               <Show when={item.href === '/ocr' && (ocrPending() ?? 0) > 0}>
                 <span class="sidebar__badge">{ocrPending()}</span>
+              </Show>
+              <Show
+                when={item.href === '/console' && (metadataPending() ?? 0) > 0}
+              >
+                <span class="sidebar__badge">{metadataPending()}</span>
+              </Show>
+              <Show
+                when={
+                  item.href === '/email' && (emailBadge()?.foreground ?? 0) > 0
+                }
+              >
+                <span class="sidebar__badge">{emailBadge()?.foreground}</span>
+              </Show>
+              {/* Historical work gets its own muted treatment so a paused
+                  campaign never reads as new mail stuck in the queue. */}
+              <Show
+                when={
+                  item.href === '/email' && (emailBadge()?.backfill ?? 0) > 0
+                }
+              >
+                <span
+                  class="sidebar__badge is-backfill"
+                  title={`${emailBadge()?.backfill} queued by a historical backfill`}
+                >
+                  {emailBadge()?.backfill}
+                </span>
               </Show>
             </A>
           )}
@@ -171,13 +237,24 @@ export function Sidebar() {
 }
 
 type IconName =
-  'grid' | 'star' | 'inbox' | 'scan' | 'trash' | 'sun' | 'moon' | 'alert'
+  | 'grid'
+  | 'star'
+  | 'inbox'
+  | 'terminal'
+  | 'mail'
+  | 'scan'
+  | 'trash'
+  | 'sun'
+  | 'moon'
+  | 'alert'
 
 function SidebarIcon(props: { name: IconName }) {
   const paths: Record<IconName, string> = {
     grid: 'M4 4h5v5H4zM15 4h5v5h-5zM4 15h5v5H4zM15 15h5v5h-5z',
     star: 'm12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z',
     inbox: 'M4 5h16v14H4zM4 14h4l2 2h4l2-2h4',
+    terminal: 'M4 5h16v14H4zM7 9l3 3-3 3m5 0h5',
+    mail: 'M3 6h18v12H3zM3 7l9 6 9-6',
     scan: 'M7 3H3v4m14-4h4v4M7 21H3v-4m14 4h4v-4M7 9h10v6H7z',
     trash: 'M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5',
     sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8m0-5v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4',

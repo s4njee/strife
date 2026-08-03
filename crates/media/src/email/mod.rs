@@ -6,6 +6,7 @@
 //! module only produces text and descriptors.
 
 mod html;
+mod sanitize;
 
 use std::collections::HashMap;
 
@@ -17,6 +18,7 @@ use mail_parser::{
 use sha2::{Digest, Sha256};
 
 pub use html::html_to_text;
+pub use sanitize::{InlinePart, SanitizeOptions, SanitizedHtml, sanitize_email_html};
 
 /// Parser identity persisted with every message, so a parser upgrade can be
 /// detected and scheduled for bounded reprocessing.

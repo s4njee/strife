@@ -7,6 +7,7 @@ pub mod folders;
 pub mod health;
 pub mod imports;
 pub mod jobs;
+pub mod metadata;
 pub mod nodes;
 pub mod ocr;
 pub mod search;
@@ -123,6 +124,7 @@ pub async fn run(config: Config) -> Result<()> {
         .merge(admin::router(pool.clone()))
         .merge(backfills::router(pool.clone()))
         .merge(jobs::router(pool.clone()))
+        .merge(metadata::router(pool.clone()))
         .merge(folders::router(pool.clone()))
         .merge(nodes::router(pool.clone()))
         .merge(email::router(pool.clone()))

@@ -122,6 +122,17 @@
   font-weight: var(--font-weight-medium);
 }
 
+/*
+ * Historical backfill depth, deliberately quieter than the foreground badge.
+ * Sustained work that an operator scheduled is not a problem to be alerted
+ * about, and colouring it like one would train people to ignore the real badge.
+ */
+.sidebar__badge.is-backfill {
+  margin-left: var(--space-1);
+  color: var(--color-text-muted);
+  background: var(--color-surface-chip);
+}
+
 .storage-summary {
   margin-top: 0.25rem;
   padding: 0.625rem;

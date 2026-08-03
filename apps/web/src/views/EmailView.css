@@ -1,0 +1,530 @@
+/*
+ * Email archive surface.
+ *
+ * Every colour and spacing value comes from the shared tokens, so light and dark
+ * themes follow automatically rather than needing a parallel set of rules.
+ */
+
+.email-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* --- Search and filters --- */
+
+.email-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.email-search__primary {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.email-search__primary input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+}
+
+.email-search__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: flex-end;
+}
+
+.email-filter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.email-filter label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-label);
+  text-transform: uppercase;
+}
+
+.email-filter input,
+.email-filter select {
+  height: var(--control-height);
+  padding: 0 var(--space-2);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-family: inherit;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+}
+
+.email-filter--checks {
+  flex-direction: row;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.email-filter--checks label {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  font-size: var(--font-size-md);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.email-search__facets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.email-search__facets > input {
+  align-self: flex-start;
+  width: min(20rem, 100%);
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-family: inherit;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+}
+
+.email-search__facets fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0;
+  border: 0;
+}
+
+.email-search__facets legend {
+  float: left;
+  width: 100%;
+  margin-bottom: var(--space-1);
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-label);
+  text-transform: uppercase;
+}
+
+/* --- Chips --- */
+
+.email-chip {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0.125rem var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  background: var(--color-surface-chip);
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+
+.email-chip small {
+  color: var(--color-text-faint);
+}
+
+.email-chip.is-toggle {
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.email-chip.is-toggle:hover {
+  background: var(--color-surface-raised);
+}
+
+.email-chip.is-toggle[aria-pressed='true'] {
+  color: var(--color-accent-contrast);
+  background: var(--color-accent);
+}
+
+.email-chip.is-toggle[aria-pressed='true'] small {
+  color: var(--color-accent-contrast);
+  opacity: 0.75;
+}
+
+/* --- Layout --- */
+
+.email-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+.email-layout.is-reading {
+  grid-template-columns: minmax(18rem, 22rem) 1fr;
+}
+
+.email-layout__list,
+.email-layout__reader {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* --- Results --- */
+
+.email-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.email-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-row);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.email-result:hover {
+  background: var(--color-surface-raised);
+}
+
+.email-result:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.email-result.is-selected {
+  background: var(--color-surface-selected);
+  border-color: var(--color-accent);
+}
+
+.email-result__line {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.email-result__sender {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-base);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.email-result__date {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+}
+
+.email-result__date.is-missing,
+.email-result__sender:empty::after {
+  color: var(--color-text-ghost);
+  font-style: italic;
+}
+
+.email-result__subject {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+.email-result__snippet {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-body);
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.email-result__snippet mark {
+  padding: 0 0.125rem;
+  color: inherit;
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-xs);
+}
+
+.email-result__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.email-pager {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+}
+
+.email-empty {
+  padding: var(--space-6) var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-base);
+  text-align: center;
+}
+
+.email-empty.is-error {
+  color: var(--color-error);
+}
+
+/* --- Reader --- */
+
+.email-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface-panel);
+  border: 1px solid var(--color-border-structural);
+  border-radius: var(--radius-lg);
+}
+
+.email-reader__title {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.email-reader__title h2 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  letter-spacing: var(--letter-spacing-title);
+}
+
+.email-reader__addresses {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.email-reader__addresses > div {
+  display: contents;
+}
+
+.email-reader__addresses dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-label);
+  text-transform: uppercase;
+}
+
+.email-reader__addresses dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.email-reader__addresses small {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.email-reader__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.email-reader__warnings {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-6);
+  color: var(--color-warning);
+  font-size: var(--font-size-md);
+  background: var(--color-error-soft);
+  border-radius: var(--radius-sm);
+}
+
+.email-reader__remote {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-md);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-row);
+  border-radius: var(--radius-sm);
+}
+
+.email-reader__remote p {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.email-reader__remote-on {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/*
+ * The frame is the isolation boundary for message HTML. It is deliberately not
+ * given a transparent-to-the-page treatment: it renders its own document.
+ */
+.email-reader__frame {
+  width: 100%;
+  /* Grown to fit content on load; this is only the pre-measurement floor. */
+  height: 12rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-row);
+  border-radius: var(--radius-sm);
+}
+
+.email-reader__text {
+  margin: 0;
+  padding: var(--space-3);
+  overflow-x: auto;
+  font-size: var(--font-size-base);
+  font-family: var(--font-mono);
+  line-height: var(--line-height-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-row);
+  border-radius: var(--radius-sm);
+}
+
+.email-reader__attachments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.email-reader__attachments li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-md);
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-sm);
+}
+
+.email-reader__attachment-name {
+  overflow: hidden;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+}
+
+.email-reader__attachments small {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.email-reader__note,
+.email-reader h3 {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.email-reader h3 {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-base);
+}
+
+.email-reader__download {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  text-decoration: none;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+}
+
+.email-reader__headers {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-md);
+}
+
+.email-reader__headers > div {
+  display: contents;
+}
+
+.email-reader__headers dt {
+  color: var(--color-text-muted);
+}
+
+.email-reader__headers dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Narrow widths use a single pane: the reader replaces the list rather than
+ * squeezing beside it, so the page never scrolls horizontally.
+ */
+@media (width <= 60rem) {
+  .email-layout.is-reading {
+    grid-template-columns: 1fr;
+  }
+
+  .email-layout.is-reading .email-layout__list {
+    display: none;
+  }
+
+  .email-search__filters {
+    gap: var(--space-3);
+  }
+}

@@ -198,6 +198,43 @@ export interface OcrEvent {
   created_at: string
 }
 
+export interface MetadataCounts {
+  pending: number
+  running: number
+  completed: number
+  failed: number
+  skipped: number
+  cancelled: number
+  remaining: number
+  total: number
+}
+
+export interface MetadataStatus {
+  counts: MetadataCounts
+  completed_per_hour: number
+  eta_seconds: number | null
+}
+
+export interface MetadataEvent {
+  id: number
+  job_id: string | null
+  node_id: string | null
+  name: string
+  state:
+    | 'queued'
+    | 'running'
+    | 'retrying'
+    | 'completed'
+    | 'failed'
+    | 'skipped'
+    | 'cancelled'
+  attempt: number
+  extractor_name: string | null
+  duration_ms: number | null
+  error: string | null
+  created_at: string
+}
+
 export interface OcrPreflightFamily {
   detected_mime: string
   candidates: number
@@ -295,4 +332,122 @@ export interface TextSearchResponse {
   items: TextSearchMatch[]
   next_cursor: string | null
   indexed_documents: number
+}
+
+/**
+ * Queue depth is reported per origin because a paused historical campaign and a
+ * stalled inbox look identical once summed.
+ */
+export interface EmailCounts {
+  foreground_pending: number
+  foreground_running: number
+  backfill_pending: number
+  backfill_running: number
+  completed: number
+  failed: number
+  skipped: number
+  unsupported: number
+  remaining: number
+  indexed: number
+}
+
+export interface EmailStatus {
+  counts: EmailCounts
+}
+
+export interface EmailSearchHit {
+  node_id: string
+  subject: string | null
+  sent_at: string | null
+  /** Server-marked snippet. Matches are wrapped in `[[` and `]]`. */
+  snippet: string
+  attachment_count: number
+  duplicate_count: number
+  thread_count: number
+  score: number
+  /** Primary `From` address; absent when the message declared none. */
+  from_address: string | null
+  from_display_name: string | null
+  labels: string[]
+}
+
+export interface EmailSearchResponse {
+  results: EmailSearchHit[]
+  next_cursor: string | null
+}
+
+export interface EmailFacetBucket {
+  value: string
+  count: number
+}
+
+export interface EmailFacets {
+  labels: EmailFacetBucket[]
+  correspondents: EmailFacetBucket[]
+  years: EmailFacetBucket[]
+}
+
+export type EmailAddressRole =
+  'from' | 'sender' | 'reply_to' | 'to' | 'cc' | 'bcc'
+
+export interface EmailAddress {
+  role: EmailAddressRole
+  display_name: string | null
+  address: string
+}
+
+export interface EmailHeader {
+  name: string
+  value: string
+}
+
+export interface EmailAttachment {
+  part_path: string
+  filename: string | null
+  media_type: string
+  disposition: string | null
+  content_id: string | null
+  decoded_size: number | null
+  is_inline: boolean
+  is_message: boolean
+  extraction_status: string
+}
+
+export interface EmailMessage {
+  node_id: string
+  status: string
+  parser_version: string
+  message_id: string | null
+  in_reply_to: string | null
+  references: string[]
+  subject: string | null
+  sent_at: string | null
+  received_at: string | null
+  body_text: string
+  /** Already sanitized server-side; still rendered inside a sandboxed frame. */
+  body_html: string | null
+  blocked_remote_count: number
+  blocked_hosts: string[]
+  preview_text: string
+  thread_group_id: string | null
+  duplicate_group_id: string | null
+  provider_thread_id: string | null
+  labels: string[]
+  addresses: EmailAddress[]
+  attachments: EmailAttachment[]
+  warnings: string[]
+  raw_headers: EmailHeader[] | null
+}
+
+/** Structured criteria mirrored into the URL so a search can be bookmarked. */
+export interface EmailSearchCriteria {
+  q: string
+  from: string[]
+  participant: string[]
+  label: string[]
+  after: string
+  before: string
+  hasAttachment: boolean | null
+  includeTrashed: boolean
+  includeDuplicates: boolean
 }

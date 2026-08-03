@@ -241,6 +241,7 @@ async fn claims_respect_pause_fairness_and_shared_resource_capacity() {
             .expect("new foreground job");
     }
 
+    let mut active_foreground = Vec::new();
     for sequence in 0..2 {
         let claimed = claim_job_with_resource_lease(
             &pool,
@@ -252,18 +253,21 @@ async fn claims_respect_pause_fairness_and_shared_resource_capacity() {
         .expect("claim foreground")
         .expect("foreground available");
         assert_eq!(claimed.origin, JobOrigin::Foreground);
-        assert!(
-            claim_job_with_resource_lease(
-                &pool,
-                JobType::MetadataExtraction,
-                "capacity-check",
-                Duration::minutes(1),
-            )
-            .await
-            .expect("capacity check")
-            .is_none(),
-            "the single extractor slot must be authoritative across owners"
-        );
+        active_foreground.push(claimed);
+    }
+    assert!(
+        claim_job_with_resource_lease(
+            &pool,
+            JobType::MetadataExtraction,
+            "capacity-check",
+            Duration::minutes(1),
+        )
+        .await
+        .expect("capacity check")
+        .is_none(),
+        "the two extractor slots must be authoritative across owners"
+    );
+    for claimed in active_foreground {
         complete_job(&pool, claimed.id)
             .await
             .expect("complete foreground");

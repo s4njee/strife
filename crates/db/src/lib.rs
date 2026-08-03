@@ -186,6 +186,35 @@ pub struct OcrStatusCounts {
     pub remaining: i64,
 }
 
+/// Durable metadata job activity used by the operator console event stream.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct MetadataEventRecord {
+    pub id: i64,
+    pub job_id: Option<Uuid>,
+    pub node_id: Option<Uuid>,
+    pub node_name: String,
+    pub state: String,
+    pub attempt: i32,
+    pub extractor_name: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Indexed aggregate state for metadata extraction jobs.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct MetadataStatusCounts {
+    pub pending: i64,
+    pub running: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+    pub cancelled: i64,
+    pub remaining: i64,
+    pub total: i64,
+    pub completed_per_hour: i64,
+}
+
 /// Kind of durable background work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "job_type", rename_all = "snake_case")]
@@ -702,6 +731,88 @@ pub async fn list_ocr_events_after(
     .await
 }
 
+/// Counts metadata extraction jobs and the recent completion rate.
+///
+/// # Errors
+///
+/// Returns a database error when the queue or event history cannot be queried.
+pub async fn get_metadata_status_counts(
+    pool: &PgPool,
+) -> Result<MetadataStatusCounts, sqlx::Error> {
+    sqlx::query_as::<_, MetadataStatusCounts>(
+        r"
+        SELECT
+            count(*) FILTER (WHERE state = 'pending') AS pending,
+            count(*) FILTER (WHERE state = 'leased') AS running,
+            count(*) FILTER (WHERE state = 'completed') AS completed,
+            count(*) FILTER (WHERE state = 'failed') AS failed,
+            count(*) FILTER (WHERE state = 'skipped') AS skipped,
+            count(*) FILTER (WHERE state = 'cancelled') AS cancelled,
+            count(*) FILTER (WHERE state IN ('pending', 'leased')) AS remaining,
+            count(*) AS total,
+            (
+                SELECT count(*) * 12
+                FROM metadata_events
+                WHERE state = 'completed'
+                  AND created_at >= now() - interval '5 minutes'
+            ) AS completed_per_hour
+        FROM jobs
+        WHERE job_type = 'metadata_extraction'
+        ",
+    )
+    .fetch_one(pool)
+    .await
+}
+
+/// Lists metadata console events after a monotonically increasing cursor.
+///
+/// # Errors
+///
+/// Returns a database error when event history cannot be queried.
+pub async fn list_metadata_events_after(
+    pool: &PgPool,
+    after_id: i64,
+    limit: i64,
+) -> Result<Vec<MetadataEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, MetadataEventRecord>(
+        r"
+        SELECT id, job_id, node_id, node_name, state, attempt,
+               extractor_name, duration_ms, error_message, created_at
+        FROM metadata_events
+        WHERE id > $1
+        ORDER BY id
+        LIMIT $2
+        ",
+    )
+    .bind(after_id)
+    .bind(limit.clamp(1, 200))
+    .fetch_all(pool)
+    .await
+}
+
+/// Lists the newest metadata console events in reverse chronological order.
+///
+/// # Errors
+///
+/// Returns a database error when event history cannot be queried.
+pub async fn list_recent_metadata_events(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<MetadataEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, MetadataEventRecord>(
+        r"
+        SELECT id, job_id, node_id, node_name, state, attempt,
+               extractor_name, duration_ms, error_message, created_at
+        FROM metadata_events
+        ORDER BY id DESC
+        LIMIT $1
+        ",
+    )
+    .bind(limit.clamp(1, 200))
+    .fetch_all(pool)
+    .await
+}
+
 /// Searches indexed English document text and returns stable relevance-ranked pages.
 ///
 /// The cursor is the prior page row identifier; its score is recovered inside the query so
@@ -1104,6 +1215,59 @@ async fn replace_email_dependents(
     Ok(())
 }
 
+/// Aggregate email extraction workload and durable outcome counts.
+///
+/// Queued work is split by origin because a paused historical campaign and a
+/// stalled inbox look identical in a single total: an operator seeing "12,000
+/// pending" needs to know whether new mail is moving.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct EmailStatusCounts {
+    pub foreground_pending: i64,
+    pub foreground_running: i64,
+    pub backfill_pending: i64,
+    pub backfill_running: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+    pub unsupported: i64,
+    pub remaining: i64,
+    pub indexed: i64,
+}
+
+/// Loads email status using indexed SQL aggregates without materializing rows.
+///
+/// # Errors
+///
+/// Returns a database error when the aggregate query cannot run.
+pub async fn email_status_counts(pool: &PgPool) -> Result<EmailStatusCounts, sqlx::Error> {
+    sqlx::query_as::<_, EmailStatusCounts>(
+        r"
+        SELECT
+            (SELECT count(*) FROM jobs
+              WHERE job_type = 'email_extraction' AND state = 'pending'
+                AND origin <> 'backfill') AS foreground_pending,
+            (SELECT count(*) FROM jobs
+              WHERE job_type = 'email_extraction' AND state = 'leased'
+                AND origin <> 'backfill') AS foreground_running,
+            (SELECT count(*) FROM jobs
+              WHERE job_type = 'email_extraction' AND state = 'pending'
+                AND origin = 'backfill') AS backfill_pending,
+            (SELECT count(*) FROM jobs
+              WHERE job_type = 'email_extraction' AND state = 'leased'
+                AND origin = 'backfill') AS backfill_running,
+            (SELECT count(*) FROM email_messages WHERE status = 'completed') AS completed,
+            (SELECT count(*) FROM email_messages WHERE status = 'failed') AS failed,
+            (SELECT count(*) FROM email_messages WHERE status = 'skipped') AS skipped,
+            (SELECT count(*) FROM email_messages WHERE status = 'unsupported') AS unsupported,
+            (SELECT count(*) FROM jobs
+              WHERE job_type = 'email_extraction' AND state IN ('pending', 'leased')) AS remaining,
+            (SELECT count(*) FROM email_messages WHERE search_vector IS NOT NULL) AS indexed
+        ",
+    )
+    .fetch_one(pool)
+    .await
+}
+
 /// Fetches one parsed message.
 ///
 /// # Errors
@@ -1187,6 +1351,10 @@ pub struct EmailSearchResult {
     pub duplicate_count: i64,
     pub thread_count: i64,
     pub score: f32,
+    /// Primary `From` address, absent when the message declared none.
+    pub from_address: Option<String>,
+    pub from_display_name: Option<String>,
+    pub labels: Vec<String>,
 }
 
 /// Structured narrowing applied alongside (or instead of) a text query.
@@ -1353,20 +1521,42 @@ pub async fn search_email(
                        ORDER BY m.score DESC, m.sent_at DESC NULLS LAST, m.node_id
                    ) AS duplicate_rank
             FROM matched m
+        ),
+        page AS (
+            SELECT node_id, subject, sent_at, snippet, attachment_count,
+                   duplicate_count, thread_count, score
+            FROM counted
+            WHERE ($12::boolean OR duplicate_rank = 1)
+              -- Every ordering term is descending so one row-wise comparison can
+              -- express the whole cursor. Mixing a descending score with an
+              -- ascending id would make this test the wrong side of the tie and
+              -- return rows the previous page already delivered.
+              AND ($13::real IS NULL
+                   OR (score, coalesce(sent_at, '-infinity'::timestamptz), node_id)
+                       < ($13, coalesce($14::timestamptz, '-infinity'::timestamptz), $15::uuid))
+            ORDER BY score DESC, sent_at DESC NULLS LAST, node_id DESC
+            LIMIT $16
         )
-        SELECT node_id, subject, sent_at, snippet, attachment_count,
-               duplicate_count, thread_count, score
-        FROM counted
-        WHERE ($12::boolean OR duplicate_rank = 1)
-          -- Every ordering term is descending so one row-wise comparison can
-          -- express the whole cursor. Mixing a descending score with an
-          -- ascending id would make this test the wrong side of the tie and
-          -- return rows the previous page already delivered.
-          AND ($13::real IS NULL
-               OR (score, coalesce(sent_at, '-infinity'::timestamptz), node_id)
-                   < ($13, coalesce($14::timestamptz, '-infinity'::timestamptz), $15::uuid))
-        ORDER BY score DESC, sent_at DESC NULLS LAST, node_id DESC
-        LIMIT $16
+        -- Sender and labels are joined after the page is cut, so these lookups
+        -- run once per returned row rather than once per match.
+        SELECT p.*,
+               sender.address AS from_address,
+               sender.display_name AS from_display_name,
+               coalesce(labels.values, ARRAY[]::text[]) AS labels
+        FROM page p
+        LEFT JOIN LATERAL (
+            SELECT a.address, a.display_name
+            FROM email_addresses a
+            WHERE a.node_id = p.node_id AND a.role = 'from'
+            ORDER BY a.position
+            LIMIT 1
+        ) sender ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT array_agg(l.label ORDER BY l.label) AS values
+            FROM email_labels l
+            WHERE l.node_id = p.node_id
+        ) labels ON TRUE
+        ORDER BY p.score DESC, p.sent_at DESC NULLS LAST, p.node_id DESC
         ",
     )
     .bind(query)
@@ -2678,34 +2868,22 @@ pub async fn claim_job_with_resource_lease(
     .bind(job_type)
     .fetch_one(&mut *transaction)
     .await?;
-    let candidate = sqlx::query_as::<_, JobRecord>(
+    // Keep each lookup aligned with jobs_claim_origin_idx. The previous
+    // all-in-one CASE expression forced PostgreSQL to sort every pending job,
+    // which made claiming increasingly expensive as the queue grew.
+    let preferred_backfill = sqlx::query_as::<_, JobRecord>(
         r"
         SELECT jobs.*
         FROM jobs
-        WHERE job_type = $1 AND state = 'pending'
-          AND (
-            origin <> 'backfill'
-            OR EXISTS (
-                SELECT 1 FROM backfill_campaigns c
-                WHERE c.id = jobs.campaign_id AND c.state = 'running'
-                  AND (SELECT count(*) FROM jobs active
-                       WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running
-            )
-          )
-        ORDER BY CASE
-                     WHEN origin = 'backfill' AND $2 >= (
-                         SELECT c.foreground_fairness
-                         FROM backfill_campaigns c
-                         WHERE c.id = jobs.campaign_id
-                     ) THEN -1
-                     ELSE CASE origin
-                     WHEN 'foreground' THEN 0
-                     WHEN 'repair' THEN 1
-                     WHEN 'backfill' THEN 2
-                     END
-                 END,
-                 priority DESC, created_at, id
-        FOR UPDATE SKIP LOCKED
+        JOIN backfill_campaigns c ON c.id = jobs.campaign_id
+        WHERE jobs.job_type = $1 AND jobs.state = 'pending'
+          AND jobs.origin = 'backfill'
+          AND c.state = 'running'
+          AND $2 >= c.foreground_fairness
+          AND (SELECT count(*) FROM jobs active
+               WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running
+        ORDER BY jobs.priority DESC, jobs.created_at, jobs.id
+        FOR UPDATE OF jobs SKIP LOCKED
         LIMIT 1
         ",
     )
@@ -2713,6 +2891,45 @@ pub async fn claim_job_with_resource_lease(
     .bind(foreground_claims)
     .fetch_optional(&mut *transaction)
     .await?;
+    let foreground = if preferred_backfill.is_none() {
+        sqlx::query_as::<_, JobRecord>(
+            r"
+            SELECT jobs.*
+            FROM jobs
+            WHERE job_type = $1 AND state = 'pending' AND origin <> 'backfill'
+            ORDER BY origin, priority DESC, created_at, id
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+            ",
+        )
+        .bind(job_type)
+        .fetch_optional(&mut *transaction)
+        .await?
+    } else {
+        None
+    };
+    let fallback_backfill = if preferred_backfill.is_none() && foreground.is_none() {
+        sqlx::query_as::<_, JobRecord>(
+            r"
+            SELECT jobs.*
+            FROM jobs
+            JOIN backfill_campaigns c ON c.id = jobs.campaign_id
+            WHERE jobs.job_type = $1 AND jobs.state = 'pending'
+              AND jobs.origin = 'backfill' AND c.state = 'running'
+              AND (SELECT count(*) FROM jobs active
+                   WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running
+            ORDER BY jobs.priority DESC, jobs.created_at, jobs.id
+            FOR UPDATE OF jobs SKIP LOCKED
+            LIMIT 1
+            ",
+        )
+        .bind(job_type)
+        .fetch_optional(&mut *transaction)
+        .await?
+    } else {
+        None
+    };
+    let candidate = preferred_backfill.or(foreground).or(fallback_backfill);
     let Some(candidate) = candidate else {
         transaction.commit().await?;
         return Ok(None);
@@ -4470,8 +4687,8 @@ async fn enqueue_metadata_job(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r"
-        INSERT INTO jobs (id, job_type, target_node_id)
-        VALUES ($1, 'metadata_extraction', $2)
+        INSERT INTO jobs (id, job_type, target_node_id, resource_class)
+        VALUES ($1, 'metadata_extraction', $2, 'extractor')
         ON CONFLICT DO NOTHING
         ",
     )
@@ -4503,8 +4720,10 @@ async fn enqueue_email_job_best_effort(
     }
     let inserted = sqlx::query(
         r"
-        INSERT INTO jobs (id, job_type, target_node_id, priority, max_attempts)
-        VALUES ($1, 'email_extraction', $2, -5, 3)
+        INSERT INTO jobs (
+            id, job_type, target_node_id, priority, max_attempts, resource_class
+        )
+        VALUES ($1, 'email_extraction', $2, -5, 3, 'heavy_cpu')
         ON CONFLICT DO NOTHING
         ",
     )
@@ -4535,8 +4754,10 @@ async fn enqueue_ocr_job_best_effort(
     }
     let inserted = sqlx::query(
         r"
-        INSERT INTO jobs (id, job_type, target_node_id, priority, max_attempts)
-        VALUES ($1, 'ocr', $2, -10, 5)
+        INSERT INTO jobs (
+            id, job_type, target_node_id, priority, max_attempts, resource_class
+        )
+        VALUES ($1, 'ocr', $2, -10, 5, 'heavy_cpu')
         ON CONFLICT DO NOTHING
         ",
     )

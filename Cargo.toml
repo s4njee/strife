@@ -18,6 +18,11 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
+# HTML sanitizer for the archived-email reader, built on html5ever so hostile
+# markup is parsed the way a browser parses it rather than by regex. Pinned
+# exactly: a silent relaxation of its allowlist is a rendering-security change,
+# so upgrades go through the hostile fixtures in crates/media/tests.
+ammonia = "=4.1.4"
 anyhow = "1.0.104"
 async-trait = "0.1.89"
 axum = "0.8.9"

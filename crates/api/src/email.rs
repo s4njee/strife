@@ -143,6 +143,9 @@ struct SearchHit {
     duplicate_count: i64,
     thread_count: i64,
     score: f32,
+    from_address: Option<String>,
+    from_display_name: Option<String>,
+    labels: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -168,6 +171,10 @@ struct FacetsResponse {
 struct MessageQuery {
     #[serde(default)]
     include_raw_headers: bool,
+    /// Opt-in per request. Remote image URLs are withheld by default so a
+    /// tracking pixel cannot fire merely because a message was opened.
+    #[serde(default)]
+    allow_remote_images: bool,
 }
 
 #[derive(Serialize)]
@@ -208,7 +215,12 @@ struct MessageResponse {
     sent_at: Option<DateTime<Utc>>,
     received_at: Option<DateTime<Utc>>,
     body_text: String,
+    /// Sanitized server-side. The reader never receives the original markup.
     body_html: Option<String>,
+    /// How many remote subresources were stripped from `body_html`.
+    blocked_remote_count: usize,
+    /// Distinct hosts the message tried to contact, for the reveal warning.
+    blocked_hosts: Vec<String>,
     preview_text: String,
     thread_group_id: Option<Uuid>,
     duplicate_group_id: Option<Uuid>,
@@ -222,12 +234,56 @@ struct MessageResponse {
     raw_headers: Option<Vec<HeaderResponse>>,
 }
 
+/// Aggregate counts backing the sidebar badge and the Email page header.
+///
+/// Story 22.1 extends this with per-campaign state, throughput, and estimated
+/// completion; the counts below are the subset the navigation surface needs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EmailCountsResponse {
+    pub foreground_pending: i64,
+    pub foreground_running: i64,
+    pub backfill_pending: i64,
+    pub backfill_running: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+    pub unsupported: i64,
+    pub remaining: i64,
+    pub indexed: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EmailStatusResponse {
+    pub counts: EmailCountsResponse,
+}
+
 pub fn router(pool: PgPool) -> Router {
     Router::new()
+        .route("/api/email/status", get(status))
         .route("/api/email/search", get(search))
         .route("/api/email/facets", get(facets))
         .route("/api/email/messages/{node_id}", get(message))
         .with_state(pool)
+}
+
+async fn status(State(pool): State<PgPool>) -> Result<Json<EmailStatusResponse>, StatusCode> {
+    let counts = strife_db::email_status_counts(&pool)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(EmailStatusResponse {
+        counts: EmailCountsResponse {
+            foreground_pending: counts.foreground_pending,
+            foreground_running: counts.foreground_running,
+            backfill_pending: counts.backfill_pending,
+            backfill_running: counts.backfill_running,
+            completed: counts.completed,
+            failed: counts.failed,
+            skipped: counts.skipped,
+            unsupported: counts.unsupported,
+            remaining: counts.remaining,
+            indexed: counts.indexed,
+        },
+    }))
 }
 
 /// Encodes a stable page position as `score:sent_at_millis:node_id`.
@@ -336,6 +392,9 @@ async fn search(
             duplicate_count: hit.duplicate_count,
             thread_count: hit.thread_count,
             score: hit.score,
+            from_address: hit.from_address,
+            from_display_name: hit.from_display_name,
+            labels: hit.labels,
         })
         .collect();
     let next_cursor = (u32::try_from(results.len()).unwrap_or(u32::MAX) == limit)
@@ -386,6 +445,18 @@ async fn message(
     let attachments = strife_db::list_email_attachments(&pool, node_id)
         .await
         .map_err(internal_error)?;
+    let sanitized = sanitize_body(
+        record.body_html.as_deref(),
+        node_id,
+        &attachments,
+        query.allow_remote_images,
+    );
+
+    let mut warnings = record.warnings;
+    if let Some(sanitized) = sanitized.as_ref() {
+        warnings.extend(sanitized.warnings.iter().cloned());
+    }
+
     let raw_headers = if query.include_raw_headers {
         Some(
             strife_db::list_email_headers(&pool, node_id)
@@ -413,7 +484,13 @@ async fn message(
         sent_at: record.sent_at,
         received_at: record.received_at,
         body_text: record.body_text,
-        body_html: record.body_html,
+        body_html: sanitized.as_ref().map(|value| value.html.clone()),
+        blocked_remote_count: sanitized
+            .as_ref()
+            .map_or(0, |value| value.blocked_remote_count),
+        blocked_hosts: sanitized
+            .as_ref()
+            .map_or_else(Vec::new, |value| value.blocked_hosts.clone()),
         preview_text: record.preview_text,
         thread_group_id: record.thread_group_id,
         duplicate_group_id: record.duplicate_group_id,
@@ -441,9 +518,41 @@ async fn message(
                 extraction_status: status_name(attachment.extraction_status).to_owned(),
             })
             .collect(),
-        warnings: record.warnings,
+        warnings,
         raw_headers,
     }))
+}
+
+/// Sanitizes a message body for display.
+///
+/// Done here rather than in the browser so the original markup never crosses the
+/// network at all. Inline `cid:` references are resolved only against the parts
+/// this message actually declares, so one message can never reference another's.
+fn sanitize_body(
+    body_html: Option<&str>,
+    node_id: Uuid,
+    attachments: &[strife_db::EmailAttachmentRecord],
+    allow_remote_images: bool,
+) -> Option<strife_media::SanitizedHtml> {
+    let inline: Vec<strife_media::InlinePart<'_>> = attachments
+        .iter()
+        .filter(|attachment| attachment.is_inline)
+        .filter_map(|attachment| {
+            attachment
+                .content_id
+                .as_deref()
+                .map(|content_id| strife_media::InlinePart {
+                    content_id,
+                    part_path: attachment.part_path.as_str(),
+                })
+        })
+        .collect();
+    let options = strife_media::SanitizeOptions {
+        node_id,
+        inline: &inline,
+        allow_remote_images,
+    };
+    body_html.map(|html| strife_media::sanitize_email_html(html, &options))
 }
 
 const fn role_name(role: strife_db::EmailAddressRole) -> &'static str {
@@ -475,6 +584,9 @@ mod tests {
                 duplicate_count: 1,
                 thread_count: 1,
                 score: 0.25,
+                from_address: None,
+                from_display_name: None,
+                labels: Vec::new(),
             };
             let decoded = decode_cursor(&encode_cursor(&hit)).expect("round trip");
             assert_eq!(decoded.node_id, node_id);

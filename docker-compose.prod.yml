@@ -4,7 +4,7 @@ x-runtime-environment: &runtime-environment
   DATABASE_URL: postgresql://strife:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/strife
   STORAGE_ROOT: /srv/strife/storage
   TIKA_URL: http://tika:9998
-  WORKER_CONCURRENCY: "1"
+  WORKER_CONCURRENCY: "2"
   WORKER_POLL_INTERVAL_SECONDS: "5"
   WORKER_LEASE_TTL_SECONDS: "300"
   OCR_EMBEDDED_TEXT_MIN_CHARS: "20"
@@ -16,7 +16,7 @@ x-runtime-environment: &runtime-environment
   OCR_FILE_TIMEOUT_SECONDS: "600"
   OCR_MEMORY_LIMIT_BYTES: "536870912"
   OCR_MAX_TEXT_BYTES: "16777216"
-  EXTRACTOR_CONCURRENCY: "1"
+  EXTRACTOR_CONCURRENCY: "2"
   PREVIEW_CONCURRENCY: "1"
   RUST_LOG: info
   RUN_MIGRATIONS: "false"

@@ -3,6 +3,11 @@ import type {
   BackfillCampaign,
   CreatedUploadSession,
   DependencyStatus,
+  EmailFacets,
+  EmailMessage,
+  EmailSearchCriteria,
+  EmailSearchResponse,
+  EmailStatus,
   FavoriteItem,
   FavoritesListResponse,
   FolderAncestor,
@@ -13,6 +18,8 @@ import type {
   ImportScanResult,
   ImportSource,
   MediaStream,
+  MetadataEvent,
+  MetadataStatus,
   MoveFolderConflict,
   MoveFoldersResponse,
   PreviewJobStatus,
@@ -23,6 +30,127 @@ import type {
   OcrStatus,
   TextSearchResponse,
 } from './types'
+
+export async function getMetadataStatus(
+  signal?: AbortSignal,
+): Promise<MetadataStatus> {
+  const response = await fetch('/api/metadata/status', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Metadata status failed (${response.status}).`)
+  return (await response.json()) as MetadataStatus
+}
+
+export async function getRecentMetadataEvents(
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<MetadataEvent[]> {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const response = await fetch(`/api/metadata/recent?${query}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Metadata activity failed (${response.status}).`)
+  return (await response.json()) as MetadataEvent[]
+}
+
+export async function getEmailStatus(
+  signal?: AbortSignal,
+): Promise<EmailStatus> {
+  const response = await fetch('/api/email/status', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Email status failed (${response.status}).`)
+  return (await response.json()) as EmailStatus
+}
+
+/**
+ * Builds the search query string.
+ *
+ * Repeatable criteria are appended as repeated keys rather than joined, because
+ * the API parses the raw query string specifically to preserve them.
+ */
+export function emailSearchParams(
+  criteria: EmailSearchCriteria,
+  cursor?: string | null,
+): URLSearchParams {
+  const params = new URLSearchParams()
+  if (criteria.q.trim()) params.set('q', criteria.q.trim())
+  for (const value of criteria.from) params.append('from', value)
+  for (const value of criteria.participant) params.append('participant', value)
+  for (const value of criteria.label) params.append('label', value)
+  if (criteria.after)
+    params.set('after', new Date(criteria.after).toISOString())
+  if (criteria.before)
+    params.set('before', new Date(criteria.before).toISOString())
+  if (criteria.hasAttachment !== null)
+    params.set('has_attachment', String(criteria.hasAttachment))
+  if (criteria.includeTrashed) params.set('include_trashed', 'true')
+  if (criteria.includeDuplicates) params.set('include_duplicates', 'true')
+  if (cursor) params.set('cursor', cursor)
+  return params
+}
+
+export async function searchEmail(
+  criteria: EmailSearchCriteria,
+  cursor?: string | null,
+  signal?: AbortSignal,
+): Promise<EmailSearchResponse> {
+  const params = emailSearchParams(criteria, cursor)
+  const response = await fetch(`/api/email/search?${params}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Email search failed (${response.status}).`)
+  return (await response.json()) as EmailSearchResponse
+}
+
+export async function getEmailFacets(
+  signal?: AbortSignal,
+): Promise<EmailFacets> {
+  const response = await fetch('/api/email/facets', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Email facets failed (${response.status}).`)
+  return (await response.json()) as EmailFacets
+}
+
+/**
+ * Loads one message.
+ *
+ * `allowRemoteImages` is a request parameter rather than a client-side toggle:
+ * remote URLs are stripped server-side, so revealing them means asking for a
+ * different response, and a message that is merely opened never causes a
+ * tracking pixel to fire.
+ */
+export async function getEmailMessage(
+  nodeId: string,
+  includeRawHeaders = false,
+  signal?: AbortSignal,
+  allowRemoteImages = false,
+): Promise<EmailMessage> {
+  const params = new URLSearchParams()
+  if (includeRawHeaders) params.set('include_raw_headers', 'true')
+  if (allowRemoteImages) params.set('allow_remote_images', 'true')
+  const query = params.toString() ? `?${params}` : ''
+  const response = await fetch(`/api/email/messages/${nodeId}${query}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (response.status === 404)
+    throw new ApiClientError('That message is no longer in the archive.')
+  if (!response.ok)
+    throw new ApiClientError(`Message failed to load (${response.status}).`)
+  return (await response.json()) as EmailMessage
+}
 
 export async function getOcrStatus(signal?: AbortSignal): Promise<OcrStatus> {
   const response = await fetch('/api/ocr/status', {

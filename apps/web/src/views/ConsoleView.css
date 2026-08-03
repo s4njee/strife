@@ -1,0 +1,76 @@
+.console-view__counts {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.console-summary__percent {
+  color: var(--color-text-primary);
+  font: var(--font-weight-semibold) 1.75rem / 1 var(--font-mono);
+}
+
+.console-progress {
+  height: 0.55rem;
+  margin-top: var(--space-5);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-raised);
+}
+
+.console-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width 300ms ease;
+}
+
+.console-output .import-console__output {
+  height: 24rem;
+}
+
+.console-entry {
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.console-entry > p {
+  grid-template-columns: 6.5rem 5.5rem minmax(12rem, 1fr) auto;
+}
+
+.console-entry small {
+  color: #8d9aa8;
+}
+
+.console-entry.is-completed span {
+  color: #58c987;
+}
+
+.console-entry.is-failed span,
+.console-entry.is-retrying span {
+  color: #f08a87;
+}
+
+.console-entry.is-running span {
+  color: #70a5d8;
+}
+
+.console-entry__error {
+  display: block !important;
+  padding: 0 0 var(--space-2) 12rem;
+  color: #f08a87;
+  white-space: normal !important;
+}
+
+@media (max-width: 72rem) {
+  .console-view__counts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 52rem) {
+  .console-entry > p {
+    grid-template-columns: 4.5rem 5rem minmax(12rem, 1fr) auto;
+  }
+
+  .console-entry__error {
+    padding-left: 0;
+  }
+}
