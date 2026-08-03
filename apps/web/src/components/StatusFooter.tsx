@@ -8,10 +8,16 @@ interface StatusFooterProps {
 }
 
 export function StatusFooter(props: StatusFooterProps) {
-  const [processing, { refetch }] = createResource(() => getActiveJobCount())
+  const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
+  const [processing, { refetch }] = createResource(
+    () => !staticPreview,
+    () => getActiveJobCount(),
+  )
 
-  const interval = window.setInterval(() => void refetch(), 15_000)
-  onCleanup(() => window.clearInterval(interval))
+  if (!staticPreview) {
+    const interval = window.setInterval(() => void refetch(), 15_000)
+    onCleanup(() => window.clearInterval(interval))
+  }
 
   return (
     <footer class="status-footer">

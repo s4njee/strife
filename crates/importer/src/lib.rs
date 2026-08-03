@@ -1,13 +1,18 @@
 //! Watched-folder ingestion support for Strife.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use strife_db::{FinalizeImport, ImportEntryRecord, NodeRecord, UpsertImportEntry};
+use strife_db::{
+    FinalizeImport, ImportEntryRecord, ImportSourceRecord, NodeRecord, UpsertImportEntry,
+};
 use strife_storage::{DiskGuard, StorageBackend, StorageKey};
 use tracing::debug;
 use uuid::Uuid;
@@ -33,6 +38,14 @@ pub struct RecoveryReport {
     pub attempted: usize,
     pub completed: usize,
     pub failures: Vec<(Uuid, String)>,
+}
+
+/// Summary persisted indirectly by entry/source state after one durable scan.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ImportRunReport {
+    pub scan: ScanReport,
+    pub imported: usize,
+    pub failed: usize,
 }
 
 /// One regular-file observation made by the scanner.
@@ -65,21 +78,72 @@ impl<'a> PostgresDiscoverySink<'a> {
 #[async_trait]
 impl DiscoverySink for PostgresDiscoverySink<'_> {
     async fn upsert(&self, file: &DiscoveredFile) -> Result<()> {
-        let source_path = file
-            .relative_path
-            .to_str()
-            .context("import path is not valid UTF-8")?;
-        let source_size = i64::try_from(file.byte_size).context("import file is too large")?;
-        let _: ImportEntryRecord = strife_db::upsert_import_entry(
+        persist_discovered_file(self.pool, file).await?;
+        Ok(())
+    }
+}
+
+async fn persist_discovered_file(
+    pool: &PgPool,
+    file: &DiscoveredFile,
+) -> Result<ImportEntryRecord> {
+    let source_path = file
+        .relative_path
+        .to_str()
+        .context("import path is not valid UTF-8")?;
+    let source_size = i64::try_from(file.byte_size).context("import file is too large")?;
+    Ok(strife_db::upsert_import_entry(
+        pool,
+        UpsertImportEntry {
+            source_id: file.source_id,
+            source_path,
+            source_size,
+            source_modified_at: file.modified_at,
+        },
+    )
+    .await?)
+}
+
+struct ImportingDiscoverySink<'a> {
+    pool: &'a PgPool,
+    storage: &'a dyn StorageBackend,
+    watch_root: &'a Path,
+    destination_folder_id: Uuid,
+    guard: DiskGuard,
+    imported: AtomicUsize,
+    failed: AtomicUsize,
+}
+
+#[async_trait]
+impl DiscoverySink for ImportingDiscoverySink<'_> {
+    async fn upsert(&self, file: &DiscoveredFile) -> Result<()> {
+        let entry = persist_discovered_file(self.pool, file).await?;
+        if !matches!(
+            entry.state,
+            strife_db::ImportEntryState::Discovered
+                | strife_db::ImportEntryState::Stable
+                | strife_db::ImportEntryState::Importing
+        ) {
+            return Ok(());
+        }
+        match import_entry(
             self.pool,
-            UpsertImportEntry {
-                source_id: file.source_id,
-                source_path,
-                source_size,
-                source_modified_at: file.modified_at,
-            },
+            self.storage,
+            self.watch_root,
+            self.destination_folder_id,
+            &entry,
+            self.guard,
         )
-        .await?;
+        .await
+        {
+            Ok(Some(_)) => {
+                self.imported.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(None) => {}
+            Err(_) => {
+                self.failed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         Ok(())
     }
 }
@@ -157,6 +221,61 @@ pub async fn scan_directory(
         }
     }
     report.directories.sort();
+    Ok(report)
+}
+
+/// Validates that the watched inbox exists and cannot recursively overlap the
+/// managed object store.
+///
+/// # Errors
+///
+/// Returns an error when either root cannot be resolved or when they overlap.
+pub async fn validate_import_roots(watch_root: &Path, storage_root: &Path) -> Result<()> {
+    let watch = tokio::fs::canonicalize(watch_root)
+        .await
+        .with_context(|| format!("resolve import watch root {}", watch_root.display()))?;
+    let storage = tokio::fs::canonicalize(storage_root)
+        .await
+        .with_context(|| format!("resolve managed storage root {}", storage_root.display()))?;
+    if watch.starts_with(&storage) || storage.starts_with(&watch) {
+        anyhow::bail!("import watch root cannot overlap managed storage");
+    }
+    Ok(())
+}
+
+/// Runs one complete watched-folder pass. All discovery and per-file lifecycle
+/// transitions are persisted, so repeating this operation after interruption is
+/// idempotent and resumes the remaining work.
+///
+/// # Errors
+///
+/// Returns an error when discovery or source-status persistence fails.
+/// Individual file failures are recorded and do not abort later files.
+pub async fn run_import_scan(
+    pool: &PgPool,
+    storage: &dyn StorageBackend,
+    storage_root: &Path,
+    watch_root: &Path,
+    source: &ImportSourceRecord,
+    guard: DiskGuard,
+) -> Result<ImportRunReport> {
+    validate_import_roots(watch_root, storage_root).await?;
+    let sink = ImportingDiscoverySink {
+        pool,
+        storage,
+        watch_root,
+        destination_folder_id: source.destination_folder_id,
+        guard,
+        imported: AtomicUsize::new(0),
+        failed: AtomicUsize::new(0),
+    };
+    let scan = scan_directory(watch_root, source.id, ScanOptions::default(), &sink).await?;
+    let report = ImportRunReport {
+        scan,
+        imported: sink.imported.load(Ordering::Relaxed),
+        failed: sink.failed.load(Ordering::Relaxed),
+    };
+    strife_db::mark_import_source_scanned(pool, source.id).await?;
     Ok(report)
 }
 

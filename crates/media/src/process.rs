@@ -5,12 +5,30 @@ use tokio::{io::AsyncReadExt, process::Command, time::timeout};
 
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 
+pub(crate) struct BoundedProcessOutput {
+    pub stdout: Vec<u8>,
+    pub peak_memory_bytes: Option<u64>,
+}
+
 pub(crate) async fn run_bounded(
-    mut command: Command,
+    command: Command,
     name: &str,
     process_timeout: Duration,
     max_output_bytes: usize,
 ) -> Result<Vec<u8>> {
+    Ok(
+        run_bounded_with_stats(command, name, process_timeout, max_output_bytes)
+            .await?
+            .stdout,
+    )
+}
+
+pub(crate) async fn run_bounded_with_stats(
+    mut command: Command,
+    name: &str,
+    process_timeout: Duration,
+    max_output_bytes: usize,
+) -> Result<BoundedProcessOutput> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -29,7 +47,22 @@ pub(crate) async fn run_bounded(
     let stdout_task = tokio::spawn(read_bounded(stdout, max_output_bytes));
     let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
 
-    let Ok(status) = timeout(process_timeout, child.wait()).await else {
+    let pid = child.id();
+    let mut peak_memory_bytes: Option<u64> = None;
+    let wait = async {
+        let mut interval = tokio::time::interval(Duration::from_millis(25));
+        loop {
+            tokio::select! {
+                status = child.wait() => break status,
+                _ = interval.tick() => {
+                    if let Some(bytes) = process_memory_bytes(pid) {
+                        peak_memory_bytes = Some(peak_memory_bytes.unwrap_or_default().max(bytes));
+                    }
+                }
+            }
+        }
+    };
+    let Ok(status) = timeout(process_timeout, wait).await else {
         let _ = child.kill().await;
         let _ = child.wait().await;
         bail!(
@@ -53,7 +86,28 @@ pub(crate) async fn run_bounded(
             String::from_utf8_lossy(&stderr).trim()
         );
     }
-    Ok(stdout)
+    Ok(BoundedProcessOutput {
+        stdout,
+        peak_memory_bytes,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn process_memory_bytes(pid: Option<u32>) -> Option<u64> {
+    let status = std::fs::read_to_string(format!("/proc/{}/status", pid?)).ok()?;
+    let kilobytes = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))?
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    kilobytes.checked_mul(1024)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_memory_bytes(_pid: Option<u32>) -> Option<u64> {
+    None
 }
 
 async fn read_bounded(reader: impl tokio::io::AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>> {

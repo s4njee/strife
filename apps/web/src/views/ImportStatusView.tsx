@@ -1,16 +1,14 @@
 import {
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   For,
   onCleanup,
-  onMount,
   Show,
 } from 'solid-js'
 import {
-  getImportEntries,
   getImportSources,
-  retryImportEntry,
   scanImportSource,
   setImportSourceEnabled,
 } from '../api/client'
@@ -20,37 +18,48 @@ import './ImportStatusView.css'
 const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
 
 export function ImportStatusView() {
-  const [refreshVersion, setRefreshVersion] = createSignal(0)
   const [previewSources, setPreviewSources] = createSignal(sampleSources)
-  const [previewFailures, setPreviewFailures] = createSignal(sampleFailures)
   const [busyId, setBusyId] = createSignal<string>()
   const [notice, setNotice] = createSignal<string>()
-  const [sources] = createResource(
-    () => (staticPreview ? false : refreshVersion()),
+  const [consoleEntries, setConsoleEntries] = createSignal<ImportEntry[]>(
+    staticPreview ? sampleConsoleEntries : [],
+  )
+  const [streamStatus, setStreamStatus] = createSignal<
+    'connecting' | 'live' | 'reconnecting'
+  >(staticPreview ? 'live' : 'connecting')
+  const [sources, { mutate: mutateSources }] = createResource(
+    () => !staticPreview,
     () => getImportSources(),
   )
   const visibleSources = () =>
     staticPreview ? previewSources() : (sources() ?? [])
-  const sourceId = () => visibleSources()[0]?.id
-  const [failures] = createResource(
-    () => (staticPreview ? false : `${sourceId() ?? ''}:${refreshVersion()}`),
-    (key) => {
-      const id = key.split(':')[0]
-      return id ? getImportEntries(id, 'failed') : Promise.resolve([])
-    },
-  )
-  const visibleFailures = () =>
-    staticPreview ? previewFailures() : (failures() ?? [])
+  const sourceId = createMemo(() => visibleSources()[0]?.id)
 
-  onMount(() => {
-    const interval = window.setInterval(
-      () => setRefreshVersion((version) => version + 1),
-      30_000,
-    )
-    onCleanup(() => window.clearInterval(interval))
-  })
   createEffect(() => {
     if (sources.error instanceof Error) setNotice(sources.error.message)
+  })
+  createEffect(() => {
+    if (staticPreview) return
+    const id = sourceId()
+    if (!id) return
+
+    setStreamStatus('connecting')
+    const events = new EventSource(`/api/import-sources/${id}/events`)
+    events.onopen = () => setStreamStatus('live')
+    events.onerror = () => setStreamStatus('reconnecting')
+    events.addEventListener('entry', (event) => {
+      const entry = parseImportEntry((event as MessageEvent<string>).data)
+      if (!entry) return
+      setConsoleEntries((entries) => [entry, ...entries.slice(0, 199)])
+    })
+    events.addEventListener('status', (event) => {
+      const source = parseImportSource((event as MessageEvent<string>).data)
+      if (!source) return
+      mutateSources((sources) =>
+        (sources ?? []).map((item) => (item.id === source.id ? source : item)),
+      )
+    })
+    onCleanup(() => events.close())
   })
 
   const toggleSource = async (source: ImportSource) => {
@@ -64,8 +73,12 @@ export function ImportStatusView() {
           ),
         )
       } else {
-        await setImportSourceEnabled(source.id, !source.enabled)
-        setRefreshVersion((version) => version + 1)
+        const updated = await setImportSourceEnabled(source.id, !source.enabled)
+        mutateSources((sources) =>
+          (sources ?? []).map((item) =>
+            item.id === updated.id ? updated : item,
+          ),
+        )
       }
     } catch (error) {
       setNotice(
@@ -79,44 +92,21 @@ export function ImportStatusView() {
   const scan = async (source: ImportSource) => {
     setBusyId(source.id)
     setNotice(undefined)
+    setConsoleEntries([])
     try {
       const result: ImportScanResult = staticPreview
         ? {
-            discovered: 3,
-            imported: 2,
-            failed: 1,
-            skipped_hidden: 0,
-            skipped_special: 0,
+            job_id: 'preview-import-job',
+            status: 'pending',
           }
         : await scanImportSource(source.id)
       setNotice(
-        `Scan complete: ${result.imported} imported, ${result.failed} failed.`,
+        result.status === 'leased'
+          ? 'Import scan is already running in the background.'
+          : 'Import scan queued. It will continue in the background.',
       )
-      setRefreshVersion((version) => version + 1)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Scan failed.')
-    } finally {
-      setBusyId(undefined)
-    }
-  }
-
-  const retry = async (entry: ImportEntry) => {
-    const id = sourceId()
-    if (!id) return
-    setBusyId(entry.id)
-    setNotice(undefined)
-    try {
-      if (staticPreview) {
-        setPreviewFailures((items) =>
-          items.filter((item) => item.id !== entry.id),
-        )
-      } else {
-        await retryImportEntry(id, entry.id)
-        setRefreshVersion((version) => version + 1)
-      }
-      setNotice(`${entry.source_path} is ready to retry on the next scan.`)
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Retry failed.')
     } finally {
       setBusyId(undefined)
     }
@@ -159,16 +149,18 @@ export function ImportStatusView() {
                     <h2>{source.watch_path}</h2>
                     <p>Destination: Root folder</p>
                   </div>
-                  <div class="import-source__actions">
+                  <div class="folder-toolbar import-source__actions">
                     <button
+                      class="btn--primary"
                       type="button"
-                      disabled={busyId() === source.id}
+                      disabled={
+                        busyId() === source.id || streamStatus() !== 'live'
+                      }
                       onClick={() => void scan(source)}
                     >
                       {busyId() === source.id ? 'Working…' : 'Scan now'}
                     </button>
                     <button
-                      class="secondary"
                       type="button"
                       disabled={busyId() === source.id}
                       onClick={() => void toggleSource(source)}
@@ -189,50 +181,53 @@ export function ImportStatusView() {
                     ? new Date(source.last_scan_at).toLocaleString()
                     : 'Never'}
                 </p>
+                <section
+                  class="import-console"
+                  aria-labelledby={`import-console-${source.id}`}
+                >
+                  <div class="import-console__heading">
+                    <h3 id={`import-console-${source.id}`}>Import activity</h3>
+                    <span class={`is-${streamStatus()}`}>
+                      <i aria-hidden="true" />
+                      {streamStatus() === 'live'
+                        ? 'Live'
+                        : streamStatus() === 'connecting'
+                          ? 'Connecting'
+                          : 'Reconnecting'}
+                    </span>
+                  </div>
+                  <div
+                    class="import-console__output"
+                    role="log"
+                    aria-live="polite"
+                  >
+                    <Show
+                      when={consoleEntries().length > 0}
+                      fallback={
+                        <p class="import-console__empty">
+                          Waiting for import activity…
+                        </p>
+                      }
+                    >
+                      <For each={consoleEntries()}>
+                        {(entry) => (
+                          <p class={`is-${entry.state}`}>
+                            <time dateTime={entry.updated_at}>
+                              {new Date(entry.updated_at).toLocaleTimeString()}
+                            </time>
+                            <span>{consoleLabel(entry.state)}</span>
+                            <strong>{entry.source_path}</strong>
+                          </p>
+                        )}
+                      </For>
+                    </Show>
+                  </div>
+                </section>
               </article>
             )}
           </For>
         </Show>
       </div>
-
-      <section class="import-errors" aria-labelledby="import-errors-title">
-        <div class="import-errors__heading">
-          <div>
-            <p class="workspace-view__eyebrow">Needs attention</p>
-            <h2 id="import-errors-title">Import errors</h2>
-          </div>
-          <span>{visibleFailures().length}</span>
-        </div>
-        <Show
-          when={visibleFailures().length > 0}
-          fallback={
-            <p class="import-errors__empty">No unresolved import errors.</p>
-          }
-        >
-          <div class="import-errors__list">
-            <For each={visibleFailures()}>
-              {(entry) => (
-                <article class="import-error">
-                  <div>
-                    <h3>{entry.source_path}</h3>
-                    <p>{entry.error_message ?? 'Import failed.'}</p>
-                    <time dateTime={entry.updated_at}>
-                      {new Date(entry.updated_at).toLocaleString()}
-                    </time>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busyId() === entry.id}
-                    onClick={() => void retry(entry)}
-                  >
-                    {busyId() === entry.id ? 'Retrying…' : 'Retry'}
-                  </button>
-                </article>
-              )}
-            </For>
-          </div>
-        </Show>
-      </section>
     </section>
   )
 }
@@ -263,15 +258,15 @@ const sampleSources: ImportSource[] = [
   },
 ]
 
-const sampleFailures: ImportEntry[] = [
+const sampleConsoleEntries: ImportEntry[] = [
   {
     id: '30000000-0000-0000-0000-000000000001',
     source_path: 'photos/2026/family.jpg',
     source_size: 4_821_771,
     source_modified_at: '2026-07-29T22:39:00Z',
-    state: 'failed',
-    resulting_node_id: null,
-    error_message: 'An active sibling already has this name',
+    state: 'imported',
+    resulting_node_id: '30000000-0000-0000-0000-000000000011',
+    error_message: null,
     updated_at: '2026-07-29T22:42:00Z',
   },
   {
@@ -285,3 +280,63 @@ const sampleFailures: ImportEntry[] = [
     updated_at: '2026-07-29T22:41:00Z',
   },
 ]
+
+function consoleLabel(state: ImportEntry['state']): string {
+  switch (state) {
+    case 'discovered':
+      return 'FOUND'
+    case 'stable':
+      return 'STAGED'
+    case 'importing':
+      return 'IMPORT'
+    case 'imported':
+      return 'DONE'
+    case 'failed':
+      return 'FAILED'
+  }
+}
+
+function parseImportEntry(data: string): ImportEntry | undefined {
+  try {
+    const value: unknown = JSON.parse(data)
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      !('id' in value) ||
+      typeof value.id !== 'string' ||
+      !('source_path' in value) ||
+      typeof value.source_path !== 'string' ||
+      !('state' in value) ||
+      !['discovered', 'stable', 'importing', 'imported', 'failed'].includes(
+        String(value.state),
+      ) ||
+      !('updated_at' in value) ||
+      typeof value.updated_at !== 'string'
+    ) {
+      return undefined
+    }
+    return value as ImportEntry
+  } catch {
+    return undefined
+  }
+}
+
+function parseImportSource(data: string): ImportSource | undefined {
+  try {
+    const value: unknown = JSON.parse(data)
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      !('id' in value) ||
+      typeof value.id !== 'string' ||
+      !('counts' in value) ||
+      typeof value.counts !== 'object' ||
+      value.counts === null
+    ) {
+      return undefined
+    }
+    return value as ImportSource
+  } catch {
+    return undefined
+  }
+}

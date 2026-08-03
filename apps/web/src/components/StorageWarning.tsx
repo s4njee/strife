@@ -4,14 +4,19 @@ import './StorageWarning.css'
 
 const CHECK_INTERVAL_MS = 60_000
 const previewUsage = Number(import.meta.env.VITE_PREVIEW_DISK_USAGE_PERCENT)
+const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
 
 export function StorageWarning() {
   const [usagePercent, setUsagePercent] = createSignal<number | undefined>(
-    Number.isFinite(previewUsage) ? previewUsage : undefined,
+    Number.isFinite(previewUsage)
+      ? previewUsage
+      : staticPreview
+        ? 27.4
+        : undefined,
   )
 
   onMount(() => {
-    if (Number.isFinite(previewUsage)) return
+    if (Number.isFinite(previewUsage) || staticPreview) return
     const controller = new AbortController()
     const refresh = () =>
       void getReadiness(controller.signal)

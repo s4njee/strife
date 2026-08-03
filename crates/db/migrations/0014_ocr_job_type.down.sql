@@ -1,0 +1,3 @@
+-- PostgreSQL enum values cannot be removed without rebuilding every dependent
+-- column. Leaving the unused OCR job type and skipped state in place makes
+-- rollback safe for existing job rows.

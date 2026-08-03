@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod backfills;
 pub mod config;
 pub mod files;
 pub mod folders;
@@ -6,11 +7,14 @@ pub mod health;
 pub mod imports;
 pub mod jobs;
 pub mod nodes;
+pub mod ocr;
+pub mod search;
 pub mod storage_usage;
 pub mod uploads;
 
 use std::{
     fs::{self, OpenOptions},
+    future::IntoFuture,
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
@@ -18,16 +22,26 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use axum::http::StatusCode;
 use config::Config;
 use health::LiveDependencyChecker;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_storage::{DiskGuard, LocalFsBackend};
-use tokio::{net::TcpListener, time::timeout};
-use tracing::info;
-use tracing::warn;
+use tokio::{
+    net::TcpListener,
+    sync::watch,
+    task::JoinHandle,
+    time::{MissedTickBehavior, timeout},
+};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Maximum time to wait for in-flight HTTP work after a shutdown signal.
+const HTTP_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum time to wait for the upload-cleanup task after shutdown.
+const CLEANUP_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const UPLOAD_CLEANUP_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 /// Configures structured JSON logging for the API process.
 pub fn init_tracing() {
@@ -40,7 +54,24 @@ pub fn init_tracing() {
         .init();
 }
 
+/// Logs an internal failure and returns HTTP 500 without changing the client contract.
+#[must_use]
+pub fn internal_error(error: impl std::fmt::Display) -> StatusCode {
+    error!(error = %error, "internal server error");
+    StatusCode::INTERNAL_SERVER_ERROR
+}
+
+/// Logs an internal failure and returns a typed API fallback (status/body unchanged).
+#[must_use]
+pub fn log_internal<T>(error: impl std::fmt::Display, fallback: T) -> T {
+    error!(error = %error, "internal server error");
+    fallback
+}
+
 /// Validates dependencies, applies migrations, and serves the API.
+///
+/// Listens until SIGTERM or Ctrl-C, then drains in-flight HTTP connections
+/// (bounded) and stops the upload-session cleanup task.
 ///
 /// # Errors
 ///
@@ -50,10 +81,12 @@ pub async fn run(config: Config) -> Result<()> {
     verify_storage_root(&config.storage_root)?;
     let pool = connect_database(&config.database_url).await?;
 
-    strife_db::MIGRATOR
-        .run(&pool)
-        .await
-        .context("failed to apply database migrations")?;
+    if config.run_migrations {
+        strife_db::MIGRATOR
+            .run(&pool)
+            .await
+            .context("failed to apply database migrations")?;
+    }
 
     let listener = TcpListener::bind(config.listen_addr)
         .await
@@ -81,12 +114,18 @@ pub async fn run(config: Config) -> Result<()> {
             .context("UPLOAD_SESSION_TTL_HOURS is too large")?,
     );
     recover_watched_imports(&pool, storage.as_ref(), config.disk_guard_percent).await;
-    spawn_upload_cleanup(pool.clone(), storage.clone());
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let cleanup_handle = spawn_upload_cleanup(pool.clone(), storage.clone(), shutdown_rx);
+
     let app = health::router(dependencies)
         .merge(admin::router(pool.clone()))
+        .merge(backfills::router(pool.clone()))
         .merge(jobs::router(pool.clone()))
         .merge(folders::router(pool.clone()))
         .merge(nodes::router(pool.clone()))
+        .merge(ocr::router(pool.clone()))
+        .merge(search::router(pool.clone()))
         .merge(storage_usage::router(pool.clone(), storage.clone()))
         .merge(files::router(pool.clone(), storage.clone()))
         .merge(imports::router(
@@ -103,9 +142,44 @@ pub async fn run(config: Config) -> Result<()> {
             config.disk_guard_percent,
         ));
 
-    axum::serve(listener, app)
-        .await
-        .context("API server failed")
+    let (signal_tx, signal_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            if let Err(error) = wait_for_shutdown().await {
+                warn!(%error, "shutdown signal handler failed");
+            }
+            info!("shutdown signal received; draining HTTP connections");
+            let _ = shutdown_tx.send(true);
+            let _ = signal_tx.send(());
+        })
+        .into_future();
+
+    tokio::select! {
+        result = server => {
+            result.context("API server failed")?;
+        }
+        () = async {
+            let _ = signal_rx.await;
+            tokio::time::sleep(HTTP_DRAIN_TIMEOUT).await;
+        } => {
+            warn!(
+                timeout_secs = HTTP_DRAIN_TIMEOUT.as_secs(),
+                "HTTP drain timed out; forcing process exit path"
+            );
+        }
+    }
+
+    match timeout(CLEANUP_DRAIN_TIMEOUT, cleanup_handle).await {
+        Ok(Ok(())) => info!("upload cleanup task joined"),
+        Ok(Err(error)) => warn!(%error, "upload cleanup task panicked"),
+        Err(_) => warn!(
+            timeout_secs = CLEANUP_DRAIN_TIMEOUT.as_secs(),
+            "upload cleanup did not stop within drain window"
+        ),
+    }
+
+    info!("API shutdown complete");
+    Ok(())
 }
 
 async fn recover_watched_imports(pool: &PgPool, storage: &LocalFsBackend, disk_guard_percent: u8) {
@@ -143,18 +217,69 @@ async fn recover_watched_imports(pool: &PgPool, storage: &LocalFsBackend, disk_g
     }
 }
 
-fn spawn_upload_cleanup(pool: PgPool, storage: Arc<LocalFsBackend>) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
-        loop {
-            interval.tick().await;
-            match uploads::cleanup_expired_uploads(&pool, storage.as_ref()).await {
-                Ok(count) if count > 0 => info!(expired_uploads = count, "expired uploads cleaned"),
-                Ok(_) => {}
-                Err(error) => warn!(%error, "expired upload cleanup failed"),
+fn spawn_upload_cleanup(
+    pool: PgPool,
+    storage: Arc<LocalFsBackend>,
+    shutdown: watch::Receiver<bool>,
+) -> JoinHandle<()> {
+    tokio::spawn(run_upload_cleanup(
+        pool,
+        storage,
+        shutdown,
+        UPLOAD_CLEANUP_INTERVAL,
+    ))
+}
+
+/// Periodically purges expired upload sessions until `shutdown` is signalled.
+async fn run_upload_cleanup(
+    pool: PgPool,
+    storage: Arc<LocalFsBackend>,
+    mut shutdown: watch::Receiver<bool>,
+    interval_period: Duration,
+) {
+    let mut interval = tokio::time::interval(interval_period);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        if *shutdown.borrow() {
+            info!("upload cleanup stopped");
+            return;
+        }
+        tokio::select! {
+            _ = interval.tick() => {
+                match uploads::cleanup_expired_uploads(&pool, storage.as_ref()).await {
+                    Ok(count) if count > 0 => {
+                        info!(expired_uploads = count, "expired uploads cleaned");
+                    }
+                    Ok(_) => {}
+                    Err(error) => warn!(%error, "expired upload cleanup failed"),
+                }
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    info!("upload cleanup stopped");
+                    return;
+                }
             }
         }
-    });
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown() -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut terminate = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
+    tokio::select! {
+        _ = terminate.recv() => {}
+        result = tokio::signal::ctrl_c() => result.context("install Ctrl-C handler")?,
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown() -> Result<()> {
+    tokio::signal::ctrl_c()
+        .await
+        .context("install Ctrl-C handler")
 }
 
 /// Connects to `PostgreSQL` within the startup deadline.
@@ -206,9 +331,14 @@ pub fn verify_storage_root(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
-    use super::verify_storage_root;
+    use axum::http::StatusCode;
+    use tokio::{sync::watch, time::timeout};
+
+    use super::{
+        HTTP_DRAIN_TIMEOUT, internal_error, log_internal, run_upload_cleanup, verify_storage_root,
+    };
 
     fn temporary_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -244,5 +374,59 @@ mod tests {
 
         fs::remove_file(&path).expect("remove test file");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn internal_error_maps_to_500_without_exposing_details() {
+        let status = internal_error("db connection refused");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            log_internal("same cause", StatusCode::INTERNAL_SERVER_ERROR),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn drain_timeouts_are_bounded() {
+        assert!(HTTP_DRAIN_TIMEOUT.as_secs() <= 60);
+        assert!(super::CLEANUP_DRAIN_TIMEOUT.as_secs() <= 15);
+    }
+
+    #[tokio::test]
+    async fn upload_cleanup_stops_promptly_on_shutdown_signal() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping upload cleanup shutdown test");
+            return;
+        };
+        let Ok(pool) = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+        else {
+            eprintln!("DATABASE_URL unreachable; skipping upload cleanup shutdown test");
+            return;
+        };
+        let storage_root = temporary_path("cleanup-shutdown");
+        fs::create_dir_all(&storage_root).expect("storage root");
+        let storage = Arc::new(
+            strife_storage::LocalFsBackend::new(&storage_root)
+                .await
+                .expect("storage"),
+        );
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(run_upload_cleanup(
+            pool,
+            storage,
+            shutdown_rx,
+            Duration::from_secs(60),
+        ));
+        // Allow the task to enter the select loop before signalling.
+        tokio::task::yield_now().await;
+        shutdown_tx.send(true).expect("signal shutdown");
+        timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("cleanup must stop within drain window")
+            .expect("cleanup task must not panic");
+        let _ = fs::remove_dir_all(&storage_root);
     }
 }

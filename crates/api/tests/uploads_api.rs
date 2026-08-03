@@ -439,14 +439,19 @@ async fn finalization_is_atomic_content_aware_and_idempotent() {
             .await
             .expect("check staging")
     );
-    let job_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM jobs WHERE target_node_id = $1 AND job_type = 'metadata_extraction'",
+    let job_counts: (i64, i64) = sqlx::query_as(
+        r"
+        SELECT
+            count(*) FILTER (WHERE job_type = 'metadata_extraction'),
+            count(*) FILTER (WHERE job_type = 'ocr')
+        FROM jobs WHERE target_node_id = $1
+        ",
     )
     .bind(node_id)
     .fetch_one(&pool)
     .await
     .expect("count jobs");
-    assert_eq!(job_count, 1);
+    assert_eq!(job_counts, (1, 1));
 
     let repeated: Value =
         response_json(finalize_request(app.clone(), created.session_id).await).await;

@@ -1,5 +1,4 @@
 import type { RouteSectionProps } from '@solidjs/router'
-import { CommandBar } from './components/CommandBar'
 import { Sidebar } from './components/Sidebar'
 import { StorageWarning } from './components/StorageWarning'
 import { ToastProvider } from './components/Toast'
@@ -12,10 +11,12 @@ function App(props: RouteSectionProps) {
     <UploadProvider>
       <ToastProvider>
         <div class="app-shell">
+          <a class="skip-link" href="#workspace-content">
+            Skip to files
+          </a>
           <Sidebar />
-          <main class="workspace">
+          <main id="workspace-content" class="workspace" tabIndex={-1}>
             <StorageWarning />
-            <CommandBar />
             {props.children}
           </main>
           <UploadProgressPanel />

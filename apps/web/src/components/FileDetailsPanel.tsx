@@ -1,6 +1,17 @@
-import { createResource, For, Show } from 'solid-js'
-import { getFileDetails, getFileStreams } from '../api/client'
-import type { FileDetails, FolderItem, MediaStream } from '../api/types'
+import { createResource, createSignal, For, Show } from 'solid-js'
+import {
+  getAllFileText,
+  getFileDetails,
+  getFileStreams,
+  getFileText,
+} from '../api/client'
+import type {
+  DocumentTextPage,
+  FileDetails,
+  FileText,
+  FolderItem,
+  MediaStream,
+} from '../api/types'
 import { formatFileSize } from './FileTable'
 import './FileDetailsPanel.css'
 
@@ -25,8 +36,33 @@ export function FileDetailsPanel(props: FileDetailsPanelProps) {
     () => (props.staticDetails ? false : props.item.id),
     (fileId) => getFileStreams(fileId),
   )
+  const [remoteText] = createResource(
+    () => (props.staticDetails ? false : props.item.id),
+    (fileId) => getFileText(fileId),
+  )
+  const [morePages, setMorePages] = createSignal<DocumentTextPage[]>([])
+  const [nextPage, setNextPage] = createSignal<number | null>()
   const details = () => props.staticDetails ?? remoteDetails()
   const streams = () => props.staticStreams ?? remoteStreams() ?? []
+  const text = () => (props.staticDetails ? sampleText : remoteText())
+  const textPages = () => [...(text()?.pages ?? []), ...morePages()]
+
+  const loadMoreText = async () => {
+    const cursor = nextPage() ?? text()?.next_page
+    if (!cursor) return
+    const result = await getFileText(props.item.id, cursor)
+    setMorePages((pages) => [...pages, ...result.pages])
+    setNextPage(result.next_page)
+  }
+
+  const copyDocument = async () => {
+    const document = props.staticDetails
+      ? sampleText
+      : await getAllFileText(props.item.id)
+    await navigator.clipboard.writeText(
+      document.pages.map((page) => page.content).join('\n\n'),
+    )
+  }
 
   return (
     <aside class="file-details" aria-label={`Details for ${props.item.name}`}>
@@ -134,6 +170,23 @@ export function FileDetailsPanel(props: FileDetailsPanelProps) {
                 />
               </Section>
             </Show>
+
+            <TextSection
+              text={text()}
+              pages={textPages()}
+              loading={!props.staticDetails && remoteText.loading}
+              error={
+                remoteText.error instanceof Error
+                  ? remoteText.error.message
+                  : undefined
+              }
+              hasMore={
+                (nextPage() ?? text()?.next_page) !== null &&
+                (nextPage() ?? text()?.next_page) !== undefined
+              }
+              onLoadMore={() => void loadMoreText()}
+              onCopyDocument={() => void copyDocument()}
+            />
           </div>
         )}
       </Show>
@@ -144,6 +197,125 @@ export function FileDetailsPanel(props: FileDetailsPanelProps) {
       </Show>
     </aside>
   )
+}
+
+function TextSection(props: {
+  text?: FileText
+  pages: DocumentTextPage[]
+  loading: boolean
+  error?: string
+  hasMore: boolean
+  onLoadMore: () => void
+  onCopyDocument: () => void
+}) {
+  const label = () =>
+    ({
+      not_processed: 'Not yet processed',
+      in_progress: 'OCR in progress',
+      completed: 'Extracted text',
+      failed: 'OCR failed',
+      skipped: 'OCR skipped',
+      skipped_embedded: 'Embedded text used; OCR skipped',
+      unsupported: 'OCR unsupported',
+    })[props.text?.status ?? 'not_processed']
+  return (
+    <section class="file-details__section file-text">
+      <div class="file-text__heading">
+        <h3>Extracted text</h3>
+        <Show when={props.pages.length > 0}>
+          <button type="button" onClick={() => props.onCopyDocument()}>
+            Copy document
+          </button>
+        </Show>
+      </div>
+      <Show when={!props.loading} fallback={<p>Loading extracted text…</p>}>
+        <p
+          class={`file-text__status is-${props.text?.status ?? 'not_processed'}`}
+        >
+          {label()}
+        </p>
+        <Show when={props.error}>
+          <p class="file-text__warning">{props.error}</p>
+        </Show>
+        <Show when={props.text?.engine_name}>
+          <p class="file-text__engine">
+            {props.text?.engine_name} · {props.text?.engine_version} ·{' '}
+            {props.text?.language}
+          </p>
+        </Show>
+        <For each={props.text?.warnings}>
+          {(warning) => <p class="file-text__warning">{warning}</p>}
+        </For>
+        <div class="file-text__pages">
+          <For each={props.pages}>
+            {(page) => (
+              <article
+                classList={{
+                  'file-text__page': true,
+                  'is-low-confidence':
+                    page.confidence !== null && page.confidence < 70,
+                }}
+              >
+                <header>
+                  <strong>Page {page.page_number}</strong>
+                  <span>
+                    {page.confidence === null
+                      ? 'Confidence unavailable'
+                      : `${page.confidence.toFixed(1)}% confidence`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void navigator.clipboard.writeText(page.content)
+                    }
+                  >
+                    Copy page
+                  </button>
+                </header>
+                <pre>{page.content || 'No recognized text on this page.'}</pre>
+              </article>
+            )}
+          </For>
+        </div>
+        <Show when={props.hasMore}>
+          <button
+            class="file-text__more"
+            type="button"
+            onClick={() => props.onLoadMore()}
+          >
+            Load more pages
+          </button>
+        </Show>
+      </Show>
+    </section>
+  )
+}
+
+const sampleText: FileText = {
+  status: 'completed',
+  source: 'ocr',
+  language: 'eng',
+  engine_name: 'tesseract',
+  engine_version: 'tesseract 5.5.0',
+  mean_confidence: 91.8,
+  warnings: ['Page 2 has lower recognition confidence.'],
+  pages: [
+    {
+      page_number: 1,
+      content: 'Quarterly field report\nSurvey completed on schedule.',
+      confidence: 96.4,
+      width: 1700,
+      height: 2200,
+    },
+    {
+      page_number: 2,
+      content: 'Handwritten annotation was not recognized.',
+      confidence: 66.2,
+      width: 1700,
+      height: 2200,
+    },
+  ],
+  next_page: null,
 }
 
 function Section(props: {

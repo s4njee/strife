@@ -1,5 +1,13 @@
+/*
+ * Fills the workspace column so the table absorbs the slack and the status
+ * footer stays pinned to the bottom edge, as in handoff #3a.
+ */
 .upload-drop-target {
   position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .upload-drop-overlay {

@@ -15,6 +15,8 @@ use strife_db::{
 use strife_domain::{FolderError, FolderRules};
 use uuid::Uuid;
 
+use crate::log_internal;
+
 const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 100;
 
@@ -197,7 +199,7 @@ impl From<FolderMutationError> for ApiError {
                     .map(MoveConflictResponse::from)
                     .collect(),
             ),
-            FolderMutationError::Database(_) => Self::Internal,
+            FolderMutationError::Database(error) => log_internal(error, Self::Internal),
         }
     }
 }
@@ -209,7 +211,7 @@ async fn list_children(
 ) -> Result<Json<ChildrenResponse>, ApiError> {
     let folder = strife_db::get_node_by_id(&state.pool, folder_id)
         .await
-        .map_err(|_| ApiError::Internal)?
+        .map_err(|error| log_internal(error, ApiError::Internal))?
         .filter(|node| node.kind == NodeKind::Folder)
         .ok_or(ApiError::NotFound)?;
     if folder.lifecycle_state != strife_db::LifecycleState::Active {
@@ -233,7 +235,7 @@ async fn list_children(
         &kinds,
     )
     .await
-    .map_err(|_| ApiError::Internal)?;
+    .map_err(|error| log_internal(error, ApiError::Internal))?;
     let has_more = nodes.len() > limit as usize;
     if has_more {
         nodes.pop();
@@ -242,7 +244,7 @@ async fn list_children(
     let node_ids: Vec<Uuid> = nodes.iter().map(|node| node.id).collect();
     let favorite_ids = strife_db::favorite_ids_among(&state.pool, &node_ids)
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .map_err(|error| log_internal(error, ApiError::Internal))?;
     let favorite_set: std::collections::HashSet<Uuid> = favorite_ids.into_iter().collect();
 
     Ok(Json(ChildrenResponse {
@@ -306,7 +308,7 @@ async fn list_ancestors(
 ) -> Result<Json<Vec<AncestorResponse>>, ApiError> {
     let ancestors = strife_db::list_ancestors(&state.pool, folder_id)
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .map_err(|error| log_internal(error, ApiError::Internal))?;
     if ancestors.is_empty() {
         return Err(ApiError::NotFound);
     }

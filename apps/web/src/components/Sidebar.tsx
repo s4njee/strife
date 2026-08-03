@@ -1,6 +1,7 @@
 import { A, useLocation } from '@solidjs/router'
 import { createResource, createSignal, For, Show } from 'solid-js'
-import { getImportEntries, getStorageUsage } from '../api/client'
+import { getImportEntries, getOcrStatus, getStorageUsage } from '../api/client'
+import type { StorageUsage } from '../api/client'
 import { useTheme } from '../theme/ThemeProvider'
 import './Sidebar.css'
 
@@ -8,9 +9,20 @@ const navigation = [
   { href: '/', label: 'All Files', icon: 'grid', end: true },
   { href: '/favorites', label: 'Favorites', icon: 'star', end: false },
   { href: '/imports', label: 'Imports', icon: 'inbox', end: false },
+  { href: '/ocr', label: 'OCR', icon: 'scan', end: false },
   { href: '/errors', label: 'Errors', icon: 'alert', end: false },
   { href: '/trash', label: 'Trash', icon: 'trash', end: false },
 ] as const
+
+const previewStorageUsage: StorageUsage = {
+  total_bytes: 5_000_000_000_000,
+  used_bytes: 1_370_000_000_000,
+  available_bytes: 3_630_000_000_000,
+  originals_bytes: 1_260_000_000_000,
+  artifacts_bytes: 85_000_000_000,
+  trash_bytes: 25_000_000_000,
+  usage_percent: 27.4,
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1000) return `${bytes} B`
@@ -25,23 +37,41 @@ function formatBytes(bytes: number): string {
 }
 
 export function Sidebar() {
+  const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
   const location = useLocation()
   const { theme, toggleTheme } = useTheme()
   const [showDetails, setShowDetails] = createSignal(false)
-  const [usage] = createResource(() => getStorageUsage())
-  const [errorCount] = createResource(async () => {
-    try {
-      const entries = await getImportEntries(
-        '00000000-0000-0000-0000-000000000003',
-        'failed',
-      )
-      return entries.length
-    } catch {
-      return 0
-    }
-  })
+  const [usage] = createResource(
+    () => !staticPreview,
+    () => getStorageUsage(),
+  )
+  const [errorCount] = createResource(
+    () => !staticPreview,
+    async () => {
+      try {
+        const entries = await getImportEntries(
+          '00000000-0000-0000-0000-000000000003',
+          'failed',
+        )
+        return entries.length
+      } catch {
+        return 0
+      }
+    },
+  )
+  const [ocrPending] = createResource(
+    () => !staticPreview,
+    async () => {
+      try {
+        return (await getOcrStatus()).counts.remaining
+      } catch {
+        return 0
+      }
+    },
+  )
+  const currentUsage = () => (staticPreview ? previewStorageUsage : usage())
 
-  const percent = () => Math.round(usage()?.usage_percent ?? 0)
+  const percent = () => Math.round(currentUsage()?.usage_percent ?? 0)
   const meterClass = () => {
     const value = percent()
     if (value >= 90) return 'is-critical'
@@ -81,6 +111,9 @@ export function Sidebar() {
               <Show when={item.href === '/errors' && (errorCount() ?? 0) > 0}>
                 <span class="sidebar__badge">{errorCount()}</span>
               </Show>
+              <Show when={item.href === '/ocr' && (ocrPending() ?? 0) > 0}>
+                <span class="sidebar__badge">{ocrPending()}</span>
+              </Show>
             </A>
           )}
         </For>
@@ -115,10 +148,10 @@ export function Sidebar() {
           </div>
         </button>
         <p>
-          {formatBytes(usage()?.used_bytes ?? 0)} of{' '}
-          {formatBytes(usage()?.total_bytes ?? 0)} used
+          {formatBytes(currentUsage()?.used_bytes ?? 0)} of{' '}
+          {formatBytes(currentUsage()?.total_bytes ?? 0)} used
         </p>
-        <Show when={showDetails() && usage()}>
+        <Show when={showDetails() && currentUsage()}>
           {(data) => (
             <ul class="storage-summary__breakdown">
               <li>Originals · {formatBytes(data().originals_bytes)}</li>
@@ -137,13 +170,15 @@ export function Sidebar() {
   )
 }
 
-type IconName = 'grid' | 'star' | 'inbox' | 'trash' | 'sun' | 'moon' | 'alert'
+type IconName =
+  'grid' | 'star' | 'inbox' | 'scan' | 'trash' | 'sun' | 'moon' | 'alert'
 
 function SidebarIcon(props: { name: IconName }) {
   const paths: Record<IconName, string> = {
     grid: 'M4 4h5v5H4zM15 4h5v5h-5zM4 15h5v5H4zM15 15h5v5h-5z',
     star: 'm12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z',
     inbox: 'M4 5h16v14H4zM4 14h4l2 2h4l2-2h4',
+    scan: 'M7 3H3v4m14-4h4v4M7 21H3v-4m14 4h4v-4M7 9h10v6H7z',
     trash: 'M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5',
     sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8m0-5v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4',
     moon: 'M20 15.2A8.5 8.5 0 0 1 8.8 4 8.5 8.5 0 1 0 20 15.2',

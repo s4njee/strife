@@ -16,6 +16,8 @@ use strife_db::{
 use strife_domain::FolderError;
 use uuid::Uuid;
 
+use crate::log_internal;
+
 #[derive(Clone)]
 struct NodesState {
     pool: PgPool,
@@ -163,11 +165,11 @@ impl From<TrashMutationError> for ApiError {
             TrashMutationError::Rule(FolderError::NotFound) => Self::NotFound,
             TrashMutationError::Rule(FolderError::NameConflict) => Self::NameConflict,
             TrashMutationError::Rule(FolderError::InvalidName | FolderError::CycleDetected) => {
-                Self::Internal
+                log_internal("invalid trash rule state", Self::Internal)
             }
             TrashMutationError::CannotTrashRoot => Self::CannotTrashRoot,
             TrashMutationError::NotTrashed => Self::NotTrashed,
-            TrashMutationError::Database(_) => Self::Internal,
+            TrashMutationError::Database(error) => log_internal(error, Self::Internal),
         }
     }
 }
@@ -178,8 +180,11 @@ impl From<FolderMutationError> for ApiError {
             FolderMutationError::Rule(FolderError::NotFound) => Self::NotFound,
             FolderMutationError::Rule(FolderError::NameConflict) => Self::NameConflict,
             FolderMutationError::Rule(FolderError::InvalidName | FolderError::CycleDetected)
-            | FolderMutationError::MoveConflict(_)
-            | FolderMutationError::Database(_) => Self::Internal,
+            | FolderMutationError::MoveConflict(_) => log_internal(
+                "unexpected folder mutation rule for nodes API",
+                Self::Internal,
+            ),
+            FolderMutationError::Database(error) => log_internal(error, Self::Internal),
         }
     }
 }
@@ -216,7 +221,7 @@ async fn restore_node(
 async fn list_trash(State(state): State<NodesState>) -> Result<Json<TrashListResponse>, ApiError> {
     let items = strife_db::list_trash(&state.pool)
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .map_err(|error| log_internal(error, ApiError::Internal))?;
     Ok(Json(TrashListResponse {
         items: items.into_iter().map(TrashItemResponse::from).collect(),
     }))
@@ -227,7 +232,7 @@ async fn list_favorites(
 ) -> Result<Json<FavoritesListResponse>, ApiError> {
     let items = strife_db::list_favorites(&state.pool)
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .map_err(|error| log_internal(error, ApiError::Internal))?;
     Ok(Json(FavoritesListResponse {
         items: items.into_iter().map(FavoriteItemResponse::from).collect(),
     }))
@@ -247,7 +252,7 @@ async fn remove_favorite(
 ) -> Result<StatusCode, ApiError> {
     strife_db::remove_favorite(&state.pool, node_id)
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .map_err(|error| log_internal(error, ApiError::Internal))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -262,7 +267,7 @@ async fn permanent_delete(
         // Already deleted, or an identical job is already pending/leased.
         let existing = strife_db::get_node_by_id(&state.pool, node_id)
             .await
-            .map_err(|_| ApiError::Internal)?;
+            .map_err(|error| log_internal(error, ApiError::Internal))?;
         if existing.is_none() {
             (StatusCode::OK, "already_deleted", None)
         } else {

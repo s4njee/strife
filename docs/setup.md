@@ -107,6 +107,25 @@ Integration tests skip cleanly when `DATABASE_URL` is unset.
 - Set `WORKER_CONCURRENCY=1` or `2` and `EXTRACTOR_CONCURRENCY=1` ([performance.md](performance.md)).
 - Run [validation/arm64.md](validation/arm64.md) / `./scripts/validate-arm64.sh`.
 
+## 6. Production LAN self-host (Compose)
+
+v1 ships a production Docker Compose stack for a single trusted LAN host:
+
+```sh
+# Required secret (do not use the dev password on a real host)
+export POSTGRES_PASSWORD='choose-a-strong-password'
+export STRIFE_IMAGE_TAG=latest          # or a pinned tag
+export STRIFE_REVISION="$(git rev-parse --short HEAD)"
+
+# Host data paths used by docker-compose.prod.yml
+sudo mkdir -p /srv/strife/{postgres,storage,import}
+
+docker compose -f docker-compose.prod.yml up -d --build
+curl -sf http://127.0.0.1/api/ready
+```
+
+Required production variables are documented in `.env.example` (`POSTGRES_PASSWORD`, optional `STRIFE_IMAGE_TAG` / `STRIFE_REVISION`). The stack is intentionally **LAN-only**: no product auth or TLS termination. For a hardened host layout (systemd unit, ZFS paths), see [deploy/orion/README.md](../deploy/orion/README.md).
+
 ## Project layout
 
 See [architecture.md](architecture.md).

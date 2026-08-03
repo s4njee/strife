@@ -25,6 +25,8 @@ use uuid::Uuid;
 
 use crate::folders::FolderResponse;
 
+use crate::log_internal;
+
 #[derive(Clone)]
 struct UploadState {
     pool: PgPool,
@@ -206,14 +208,14 @@ async fn create_upload(
 
     let folder = strife_db::get_node_by_id(&state.pool, request.folder_id)
         .await
-        .map_err(|_| UploadApiError::Internal)?
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?
         .filter(|node| {
             node.kind == NodeKind::Folder && node.lifecycle_state == LifecycleState::Active
         })
         .ok_or(UploadApiError::NotFound)?;
     if strife_db::active_child_name_exists(&state.pool, folder.id, &request.name)
         .await
-        .map_err(|_| UploadApiError::Internal)?
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?
     {
         return Err(UploadApiError::NameConflict);
     }
@@ -222,7 +224,7 @@ async fn create_upload(
         .storage
         .disk_usage()
         .await
-        .map_err(|_| UploadApiError::Internal)?;
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let incoming_bytes = request
         .size
         .and_then(|size| u64::try_from(size).ok())
@@ -240,7 +242,7 @@ async fn create_upload(
             Box::pin(tokio::io::empty()),
         )
         .await
-        .map_err(|_| UploadApiError::Internal)?;
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let session_result = strife_db::create_session(
         &state.pool,
         CreateUploadSession {
@@ -281,7 +283,7 @@ async fn get_upload(
 ) -> Result<Json<UploadSessionResponse>, UploadApiError> {
     let progress = strife_db::get_session_progress(&state.pool, session_id)
         .await
-        .map_err(|_| UploadApiError::Internal)?
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?
         .ok_or(UploadApiError::NotFound)?;
     Ok(Json(progress_response(progress)))
 }
@@ -292,12 +294,12 @@ async fn list_uploads(
 ) -> Result<Json<Vec<UploadSessionResponse>>, UploadApiError> {
     let sessions = strife_db::list_active_upload_sessions(&state.pool, query.folder_id)
         .await
-        .map_err(|_| UploadApiError::Internal)?;
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let mut responses = Vec::with_capacity(sessions.len());
     for session in sessions {
         let progress = strife_db::get_session_progress(&state.pool, session.id)
             .await
-            .map_err(|_| UploadApiError::Internal)?
+            .map_err(|error| log_internal(error, UploadApiError::Internal))?
             .ok_or(UploadApiError::NotFound)?;
         responses.push(progress_response(progress));
     }
@@ -340,7 +342,7 @@ async fn finalize_upload(
 ) -> Result<Json<FolderResponse>, UploadApiError> {
     let progress = strife_db::get_session_progress(&state.pool, session_id)
         .await
-        .map_err(|_| UploadApiError::Internal)?
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?
         .ok_or(UploadApiError::NotFound)?;
     if progress.session.state == UploadSessionState::Completed {
         let node_id = progress
@@ -349,7 +351,7 @@ async fn finalize_upload(
             .ok_or(UploadApiError::Internal)?;
         let node = strife_db::get_node_by_id(&state.pool, node_id)
             .await
-            .map_err(|_| UploadApiError::Internal)?
+            .map_err(|error| log_internal(error, UploadApiError::Internal))?
             .ok_or(UploadApiError::NotFound)?;
         return Ok(Json(node.into()));
     }
@@ -364,14 +366,14 @@ async fn finalize_upload(
         return Err(UploadApiError::Incomplete);
     }
 
-    let staging_id =
-        Uuid::parse_str(&progress.session.staging_key).map_err(|_| UploadApiError::Internal)?;
+    let staging_id = Uuid::parse_str(&progress.session.staging_key)
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let staging_key = StorageKey::staging(staging_id);
     if !state
         .storage
         .exists(staging_key)
         .await
-        .map_err(|_| UploadApiError::Internal)?
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?
     {
         return Err(UploadApiError::NotFound);
     }
@@ -380,21 +382,21 @@ async fn finalize_upload(
             .storage
             .get_stream(staging_key)
             .await
-            .map_err(|_| UploadApiError::Internal)?,
+            .map_err(|error| log_internal(error, UploadApiError::Internal))?,
     )
     .await?;
     let mime_type = state
         .storage
         .detect_mime(staging_key)
         .await
-        .map_err(|_| UploadApiError::Internal)?;
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let original_id = Uuid::new_v4();
     let original_key = StorageKey::original(original_id);
     state
         .storage
         .move_object(staging_key, original_key)
         .await
-        .map_err(|_| UploadApiError::Internal)?;
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let finalized = strife_db::finalize_upload(
         &state.pool,
         session_id,
@@ -427,7 +429,9 @@ async fn finalize_upload(
                 FinalizeUploadError::NotActive => UploadApiError::Gone,
                 FinalizeUploadError::Incomplete => UploadApiError::Incomplete,
                 FinalizeUploadError::NameConflict => UploadApiError::NameConflict,
-                FinalizeUploadError::Database(_) => UploadApiError::Internal,
+                FinalizeUploadError::Database(error) => {
+                    log_internal(error, UploadApiError::Internal)
+                }
             })
         }
     }
@@ -449,12 +453,13 @@ async fn cancel_upload(
     if session.state != UploadSessionState::Cancelled {
         return Err(UploadApiError::Gone);
     }
-    let staging_id = Uuid::parse_str(&session.staging_key).map_err(|_| UploadApiError::Internal)?;
+    let staging_id = Uuid::parse_str(&session.staging_key)
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     state
         .storage
         .delete(StorageKey::staging(staging_id))
         .await
-        .map_err(|_| UploadApiError::Internal)?;
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -497,7 +502,7 @@ async fn checksum_reader(
         let read = reader
             .read(&mut buffer)
             .await
-            .map_err(|_| UploadApiError::Internal)?;
+            .map_err(|error| log_internal(error, UploadApiError::Internal))?;
         if read == 0 {
             break;
         }
@@ -521,7 +526,7 @@ async fn upload_chunk(
         ))?;
     let progress = strife_db::get_session_progress(&state.pool, session_id)
         .await
-        .map_err(|_| UploadApiError::Internal)?
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?
         .ok_or(UploadApiError::NotFound)?;
     if progress.session.state != UploadSessionState::Active {
         return Err(UploadApiError::Gone);
@@ -539,19 +544,20 @@ async fn upload_chunk(
         return Err(UploadApiError::RangeConflict);
     }
 
-    let staging_id =
-        Uuid::parse_str(&progress.session.staging_key).map_err(|_| UploadApiError::Internal)?;
+    let staging_id = Uuid::parse_str(&progress.session.staging_key)
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let stream = body.into_data_stream().map_err(std::io::Error::other);
     let reader = StreamReader::new(stream);
     let written = state
         .storage
         .write_range(
             StorageKey::staging(staging_id),
-            u64::try_from(content_range.start).map_err(|_| UploadApiError::Internal)?,
+            u64::try_from(content_range.start)
+                .map_err(|error| log_internal(error, UploadApiError::Internal))?,
             Box::pin(reader),
         )
         .await
-        .map_err(|_| UploadApiError::Internal)?;
+        .map_err(|error| log_internal(error, UploadApiError::Internal))?;
     let expected_length = content_range
         .end
         .checked_sub(content_range.start)
@@ -575,7 +581,7 @@ async fn upload_chunk(
         RecordChunkError::NotFound => UploadApiError::NotFound,
         RecordChunkError::NotActive => UploadApiError::Gone,
         RecordChunkError::Overlap => UploadApiError::RangeConflict,
-        RecordChunkError::Database(_) => UploadApiError::Internal,
+        RecordChunkError::Database(error) => log_internal(error, UploadApiError::Internal),
     })?;
     Ok(Json(UploadProgressResponse {
         received_bytes: session.received_bytes,

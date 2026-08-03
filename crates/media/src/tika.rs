@@ -8,6 +8,7 @@ use tokio_util::io::ReaderStream;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const TIKA_PDF_OCR_STRATEGY_HEADER: &str = "x-tika-pdfocrstrategy";
 
 /// Complete Apache Tika metadata plus normalized document properties.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,6 +21,15 @@ pub struct TikaResult {
     pub word_count: Option<i64>,
     pub warnings: Vec<String>,
     pub raw_payload: Value,
+}
+
+/// Embedded text returned by Tika without invoking its OCR parser.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedPdfText {
+    pub content: String,
+    pub non_whitespace_chars: usize,
+    pub usable: bool,
+    pub warnings: Vec<String>,
 }
 
 /// Sends a document to Apache Tika's `/meta` endpoint with default safety limits.
@@ -54,6 +64,7 @@ pub async fn extract_tika_with_limits(
         .put(format!("{}/meta", tika_url.trim_end_matches('/')))
         .header(header::ACCEPT, "application/json")
         .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(TIKA_PDF_OCR_STRATEGY_HEADER, "no_ocr")
         .body(Body::wrap_stream(ReaderStream::new(file)))
         .send()
         .await
@@ -70,6 +81,66 @@ pub async fn extract_tika_with_limits(
         payload.extend_from_slice(&chunk);
     }
     parse_tika_payload(serde_json::from_slice(&payload).context("parse Tika JSON")?)
+}
+
+/// Extracts only a PDF's embedded text through Tika's `/tika` endpoint.
+///
+/// Tika OCR is explicitly disabled so this detection request cannot duplicate the
+/// dedicated OCR pipeline. Tika's plain-text endpoint does not preserve PDF page
+/// boundaries, so callers store usable output as a single page with the returned warning.
+///
+/// # Errors
+///
+/// Returns an error for file, HTTP, size-limit, or malformed UTF-8 failures.
+pub async fn extract_embedded_pdf_text(
+    path: &Path,
+    tika_url: &str,
+    minimum_non_whitespace_chars: usize,
+) -> Result<EmbeddedPdfText> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .context("open PDF for embedded-text detection")?;
+    let client = Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
+        .build()
+        .context("build Tika HTTP client")?;
+    let response = client
+        .put(format!("{}/tika", tika_url.trim_end_matches('/')))
+        .header(header::ACCEPT, "text/plain")
+        .header(header::CONTENT_TYPE, "application/pdf")
+        .header(TIKA_PDF_OCR_STRATEGY_HEADER, "no_ocr")
+        .body(Body::wrap_stream(ReaderStream::new(file)))
+        .send()
+        .await
+        .context("send PDF to Tika for embedded-text detection")?
+        .error_for_status()
+        .context("Tika returned an unsuccessful status")?;
+    let mut payload = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.try_next().await.context("read Tika text response")? {
+        if payload.len().saturating_add(chunk.len()) > DEFAULT_MAX_RESPONSE_BYTES {
+            bail!("Tika embedded-text response exceeded {DEFAULT_MAX_RESPONSE_BYTES} bytes");
+        }
+        payload.extend_from_slice(&chunk);
+    }
+    let content = String::from_utf8(payload).context("Tika embedded text was not UTF-8")?;
+    let non_whitespace_chars = content
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .count();
+    let usable = non_whitespace_chars >= minimum_non_whitespace_chars;
+    Ok(EmbeddedPdfText {
+        content,
+        non_whitespace_chars,
+        usable,
+        warnings: usable
+            .then(|| {
+                "Tika plain-text extraction does not expose PDF page boundaries; stored as page 1"
+                    .to_owned()
+            })
+            .into_iter()
+            .collect(),
+    })
 }
 
 fn parse_tika_payload(raw_payload: Value) -> Result<TikaResult> {
@@ -142,7 +213,7 @@ mod tests {
     use serde_json::{Value, json};
     use uuid::Uuid;
 
-    use super::extract_tika;
+    use super::{extract_embedded_pdf_text, extract_tika};
 
     struct Fixture(PathBuf);
 
@@ -166,6 +237,12 @@ mod tests {
             headers.get("accept").and_then(|value| value.to_str().ok()),
             Some("application/json")
         );
+        assert_eq!(
+            headers
+                .get("x-tika-pdfocrstrategy")
+                .and_then(|value| value.to_str().ok()),
+            Some("no_ocr")
+        );
         if body.starts_with(b"%PDF") {
             axum::Json(json!({
                 "dc:title": "Annual report",
@@ -181,6 +258,26 @@ mod tests {
                 "Creation-Date": "2026-01-02T03:04:05Z",
                 "meta:page-count": "3"
             }))
+        }
+    }
+
+    async fn embedded_text(headers: HeaderMap, body: Bytes) -> String {
+        assert_eq!(
+            headers.get("accept").and_then(|value| value.to_str().ok()),
+            Some("text/plain")
+        );
+        assert_eq!(
+            headers
+                .get("x-tika-pdfocrstrategy")
+                .and_then(|value| value.to_str().ok()),
+            Some("no_ocr")
+        );
+        match body.as_ref() {
+            bytes if bytes.windows(10).any(|window| window == b"text-layer") => {
+                "A complete embedded document text layer".to_owned()
+            }
+            bytes if bytes.windows(5).any(|window| window == b"stray") => "  x  ".to_owned(),
+            _ => "  \n\t".to_owned(),
         }
     }
 
@@ -208,6 +305,40 @@ mod tests {
             .expect("extract DOCX metadata");
         assert_eq!(docx_result.title.as_deref(), Some("Meeting notes"));
         assert_eq!(docx_result.page_count, Some(3));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn classifies_usable_scanned_and_empty_pdf_text_without_ocr() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock Tika");
+        let address = listener.local_addr().expect("mock Tika address");
+        let server = tokio::spawn(
+            axum::serve(listener, Router::new().route("/tika", put(embedded_text))).into_future(),
+        );
+        let tika_url = format!("http://{address}");
+        let text_pdf = Fixture::write("text.pdf", b"%PDF-1.7 text-layer %%EOF");
+        let scanned_pdf = Fixture::write("scan.pdf", b"%PDF-1.7 scanned-image %%EOF");
+        let empty_pdf = Fixture::write("empty.pdf", b"%PDF-1.7 stray %%EOF");
+
+        let text = extract_embedded_pdf_text(&text_pdf.0, &tika_url, 10)
+            .await
+            .expect("extract usable embedded text");
+        assert!(text.usable);
+        assert_eq!(text.warnings.len(), 1);
+
+        let scanned = extract_embedded_pdf_text(&scanned_pdf.0, &tika_url, 10)
+            .await
+            .expect("inspect scanned PDF");
+        assert!(!scanned.usable);
+        assert_eq!(scanned.non_whitespace_chars, 0);
+
+        let empty = extract_embedded_pdf_text(&empty_pdf.0, &tika_url, 10)
+            .await
+            .expect("inspect empty text layer");
+        assert!(!empty.usable);
+        assert_eq!(empty.non_whitespace_chars, 1);
         server.abort();
     }
 }

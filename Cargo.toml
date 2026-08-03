@@ -8,6 +8,7 @@ members = [
     "crates/db",
     "crates/media",
     "crates/importer",
+    "crates/migrate",
 ]
 
 [workspace.package]

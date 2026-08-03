@@ -7,31 +7,50 @@ use async_trait::async_trait;
 use chrono::Duration as ChronoDuration;
 use sqlx::PgPool;
 use strife_db::{
-    JobRecord, JobType, claim_job, complete_job, enqueue_expired_trash_deletions, fail_job,
-    get_job, release_expired_leases,
+    JobRecord, JobType, claim_job_with_resource_lease, complete_job,
+    enqueue_expired_trash_deletions, fail_job, get_job, release_expired_leases, renew_job_lease,
 };
 use strife_storage::StorageBackend;
 use tokio::{sync::watch, task::JoinSet, time::MissedTickBehavior};
 use tracing::{Instrument, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
+mod backfill;
 mod deletion;
+mod imports;
 mod metadata;
+mod ocr;
 
+pub use backfill::{BackfillCandidateProvider, BackfillCoordinator};
 pub use deletion::DeletionService;
+pub use imports::ImportHandler;
 pub use metadata::MetadataHandler;
+pub use ocr::{OcrHandler, OcrSettings};
 
 /// Runtime settings loaded from environment variables.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerConfig {
     pub database_url: String,
+    pub run_migrations: bool,
+    pub backfill_enabled: bool,
     pub storage_root: PathBuf,
     pub tika_url: String,
     pub concurrency: usize,
     pub extractor_concurrency: usize,
     pub preview_concurrency: usize,
+    pub watch_root: PathBuf,
+    pub disk_guard_percent: u8,
     pub poll_interval: Duration,
     pub lease_ttl: ChronoDuration,
+    pub minimum_embedded_text_chars: usize,
+    pub ocr_language: String,
+    pub tesseract_binary: String,
+    pub ocr_raster_dpi: u32,
+    pub ocr_max_pages: u32,
+    pub ocr_max_pixels_per_page: u64,
+    pub ocr_file_timeout: Duration,
+    pub ocr_memory_limit_bytes: u64,
+    pub ocr_max_text_bytes: usize,
 }
 
 impl WorkerConfig {
@@ -43,18 +62,61 @@ impl WorkerConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             database_url: required("DATABASE_URL")?,
+            run_migrations: boolean("RUN_MIGRATIONS", true)?,
+            backfill_enabled: boolean("BACKFILL_ENABLED", false)?,
             storage_root: PathBuf::from(required("STORAGE_ROOT")?),
             tika_url: required("TIKA_URL")?,
             concurrency: positive_usize("WORKER_CONCURRENCY", 2)?,
             extractor_concurrency: positive_usize("EXTRACTOR_CONCURRENCY", 1)?,
             preview_concurrency: positive_usize("PREVIEW_CONCURRENCY", 2)?,
+            watch_root: PathBuf::from(
+                env::var("IMPORT_WATCH_ROOT").unwrap_or_else(|_| "/mnt/ext/watch".into()),
+            ),
+            disk_guard_percent: percentage("DISK_GUARD_PERCENT", 90)?,
             poll_interval: Duration::from_secs(positive_u64("WORKER_POLL_INTERVAL_SECONDS", 5)?),
             lease_ttl: ChronoDuration::seconds(i64::try_from(positive_u64(
                 "WORKER_LEASE_TTL_SECONDS",
                 300,
             )?)?),
+            minimum_embedded_text_chars: positive_usize("OCR_EMBEDDED_TEXT_MIN_CHARS", 20)?,
+            ocr_language: env::var("STRIFE_OCR_LANGUAGE").unwrap_or_else(|_| "eng".to_owned()),
+            tesseract_binary: env::var("TESSERACT_BIN").unwrap_or_else(|_| "tesseract".to_owned()),
+            ocr_raster_dpi: u32::try_from(positive_u64("OCR_RASTER_DPI", 200)?)
+                .context("OCR_RASTER_DPI is too large")?,
+            ocr_max_pages: u32::try_from(positive_u64("OCR_MAX_PAGES", 100)?)
+                .context("OCR_MAX_PAGES is too large")?,
+            ocr_max_pixels_per_page: positive_u64("OCR_MAX_PIXELS_PER_PAGE", 40_000_000)?,
+            ocr_file_timeout: Duration::from_secs(positive_u64("OCR_FILE_TIMEOUT_SECONDS", 600)?),
+            ocr_memory_limit_bytes: positive_u64("OCR_MEMORY_LIMIT_BYTES", 512 * 1024 * 1024)?,
+            ocr_max_text_bytes: positive_usize("OCR_MAX_TEXT_BYTES", 16 * 1024 * 1024)?,
         })
     }
+}
+
+fn boolean(name: &str, default: bool) -> Result<bool> {
+    match env::var(name) {
+        Ok(value) => match value.as_str() {
+            "true" | "1" | "yes" | "on" => Ok(true),
+            "false" | "0" | "no" | "off" => Ok(false),
+            _ => bail!("{name} must be true or false"),
+        },
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error).with_context(|| format!("read {name}")),
+    }
+}
+
+fn percentage(name: &str, default: u8) -> Result<u8> {
+    let value = match env::var(name) {
+        Ok(value) => value
+            .parse::<u8>()
+            .with_context(|| format!("{name} must be an integer from 1 to 100"))?,
+        Err(env::VarError::NotPresent) => default,
+        Err(error) => return Err(error).with_context(|| format!("read {name}")),
+    };
+    if !(1..=100).contains(&value) {
+        bail!("{name} must be between 1 and 100");
+    }
+    Ok(value)
 }
 
 fn required(name: &str) -> Result<String> {
@@ -89,6 +151,8 @@ pub trait JobHandler: Send + Sync {
 pub struct WorkerHandler {
     metadata: MetadataHandler,
     deletion: DeletionService,
+    imports: Option<ImportHandler>,
+    ocr: OcrHandler,
 }
 
 impl WorkerHandler {
@@ -104,12 +168,48 @@ impl WorkerHandler {
             metadata: MetadataHandler::new(
                 pool.clone(),
                 storage.clone(),
-                tika_url,
+                tika_url.clone(),
                 extractor_concurrency,
                 preview_concurrency,
             ),
-            deletion: DeletionService::new(pool, storage),
+            deletion: DeletionService::new(pool.clone(), storage.clone()),
+            ocr: OcrHandler::new(pool, storage, tika_url, 20),
+            imports: None,
         }
+    }
+
+    /// Sets the global minimum used to distinguish usable embedded PDF text.
+    #[must_use]
+    pub fn with_embedded_text_minimum(mut self, minimum_chars: usize) -> Self {
+        self.ocr.set_minimum_embedded_text_chars(minimum_chars);
+        self
+    }
+
+    /// Applies the verified global OCR engine and resource settings.
+    #[must_use]
+    pub fn with_ocr_settings(mut self, settings: OcrSettings) -> Self {
+        self.ocr.set_settings(settings);
+        self
+    }
+
+    /// Enables durable watched-folder scan processing for this worker.
+    #[must_use]
+    pub fn with_imports(
+        mut self,
+        pool: PgPool,
+        storage: Arc<dyn StorageBackend>,
+        storage_root: PathBuf,
+        watch_root: PathBuf,
+        disk_guard_percent: u8,
+    ) -> Self {
+        self.imports = Some(ImportHandler::new(
+            pool,
+            storage,
+            storage_root,
+            watch_root,
+            disk_guard_percent,
+        ));
+        self
     }
 }
 
@@ -121,6 +221,14 @@ impl JobHandler for WorkerHandler {
                 self.metadata.handle(job).await
             }
             JobType::PermanentDeletion | JobType::TrashCleanup => self.deletion.purge(job).await,
+            JobType::ImportScan => {
+                self.imports
+                    .as_ref()
+                    .context("import scan processing is not configured")?
+                    .scan(job)
+                    .await
+            }
+            JobType::Ocr => self.ocr.handle(job).await,
         }
     }
 }
@@ -156,7 +264,20 @@ pub async fn run(
             shutdown_rx.clone(),
         ));
     }
+    tasks.spawn(import_processor_loop(
+        config.clone(),
+        pool.clone(),
+        Arc::clone(&handler),
+        shutdown_rx.clone(),
+    ));
     tasks.spawn(lease_reaper(pool.clone(), shutdown_rx.clone()));
+    if config.backfill_enabled {
+        tasks.spawn(backfill::coordinator_loop(
+            pool.clone(),
+            config.poll_interval,
+            shutdown_rx.clone(),
+        ));
+    }
     tasks.spawn(trash_cleanup_loop(pool, shutdown_rx));
 
     wait_for_shutdown().await?;
@@ -180,18 +301,87 @@ async fn processor_loop(
         if *shutdown.borrow() {
             return Ok(());
         }
-        let job = claim_next_job(&pool, &owner, config.lease_ttl).await?;
+        let job = match claim_next_job(&pool, &owner, config.lease_ttl).await {
+            Ok(job) => job,
+            Err(error) => {
+                error!(%error, "failed to claim background job");
+                if wait_for_next_poll(&mut shutdown, config.poll_interval).await {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
         match job {
-            Some(job) => process_job(&pool, handler.as_ref(), job).await?,
+            Some(job) => {
+                if let Err(error) = process_job(
+                    &pool,
+                    handler.as_ref(),
+                    job.clone(),
+                    lease_ttl_for(job.job_type, config.lease_ttl),
+                )
+                .await
+                {
+                    error!(%error, "background job processor failed");
+                }
+            }
             None => {
-                tokio::select! {
-                    () = tokio::time::sleep(config.poll_interval) => {}
-                    changed = shutdown.changed() => {
-                        if changed.is_err() || *shutdown.borrow() { return Ok(()); }
-                    }
+                if wait_for_next_poll(&mut shutdown, config.poll_interval).await {
+                    return Ok(());
                 }
             }
         }
+    }
+}
+
+async fn import_processor_loop(
+    config: WorkerConfig,
+    pool: PgPool,
+    handler: Arc<dyn JobHandler>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    let owner = format!("{}-import", std::process::id());
+    loop {
+        if *shutdown.borrow() {
+            return Ok(());
+        }
+        let job = match claim_job_with_resource_lease(
+            &pool,
+            JobType::ImportScan,
+            &owner,
+            config.lease_ttl,
+        )
+        .await
+        {
+            Ok(job) => job,
+            Err(error) => {
+                error!(%error, "failed to claim import scan job");
+                if wait_for_next_poll(&mut shutdown, config.poll_interval).await {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+        match job {
+            Some(job) => {
+                if let Err(error) =
+                    process_job(&pool, handler.as_ref(), job, config.lease_ttl).await
+                {
+                    error!(%error, "import scan processor failed");
+                }
+            }
+            None => {
+                if wait_for_next_poll(&mut shutdown, config.poll_interval).await {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+async fn wait_for_next_poll(shutdown: &mut watch::Receiver<bool>, interval: Duration) -> bool {
+    tokio::select! {
+        () = tokio::time::sleep(interval) => false,
+        changed = shutdown.changed() => changed.is_err() || *shutdown.borrow(),
     }
 }
 
@@ -200,27 +390,49 @@ async fn claim_next_job(
     owner: &str,
     lease_ttl: ChronoDuration,
 ) -> Result<Option<JobRecord>> {
-    for job_type in [
-        JobType::PermanentDeletion,
-        JobType::TrashCleanup,
-        JobType::MetadataExtraction,
-        JobType::PreviewGeneration,
-    ] {
-        if let Some(job) = claim_job(pool, job_type, owner, lease_ttl).await? {
+    for job_type in PROCESSOR_CLAIM_ORDER {
+        if let Some(job) =
+            claim_job_with_resource_lease(pool, job_type, owner, lease_ttl_for(job_type, lease_ttl))
+                .await?
+        {
             return Ok(Some(job));
         }
     }
     Ok(None)
 }
 
-async fn process_job(pool: &PgPool, handler: &dyn JobHandler, job: JobRecord) -> Result<()> {
+const PROCESSOR_CLAIM_ORDER: [JobType; 5] = [
+    JobType::PermanentDeletion,
+    JobType::TrashCleanup,
+    JobType::MetadataExtraction,
+    JobType::PreviewGeneration,
+    JobType::Ocr,
+];
+
+fn lease_ttl_for(job_type: JobType, base_ttl: ChronoDuration) -> ChronoDuration {
+    if job_type == JobType::Ocr {
+        base_ttl * 3
+    } else {
+        base_ttl
+    }
+}
+
+async fn process_job(
+    pool: &PgPool,
+    handler: &dyn JobHandler,
+    job: JobRecord,
+    lease_ttl: ChronoDuration,
+) -> Result<()> {
     let span = info_span!("job", job_id = %job.id, job_type = ?job.job_type);
     async move {
         info!(attempt = job.attempts, "processing job");
-        match handler.handle(&job).await {
+        match handle_with_lease_renewal(pool, handler, &job, lease_ttl).await {
             Ok(()) => {
                 // Permanent deletion cascades jobs when the target node is removed.
-                if get_job(pool, job.id).await?.is_some() {
+                if get_job(pool, job.id)
+                    .await?
+                    .is_some_and(|record| record.state == strife_db::JobState::Leased)
+                {
                     complete_job(pool, job.id).await?;
                 }
                 info!("job completed");
@@ -239,6 +451,37 @@ async fn process_job(pool: &PgPool, handler: &dyn JobHandler, job: JobRecord) ->
     }
     .instrument(span)
     .await
+}
+
+async fn handle_with_lease_renewal(
+    pool: &PgPool,
+    handler: &dyn JobHandler,
+    job: &JobRecord,
+    lease_ttl: ChronoDuration,
+) -> Result<()> {
+    let owner = job
+        .lease_owner
+        .as_deref()
+        .context("leased job is missing its owner")?;
+    let renewal_millis = (lease_ttl.num_milliseconds() / 3).max(100);
+    let mut interval = tokio::time::interval(Duration::from_millis(
+        u64::try_from(renewal_millis).context("job lease renewal interval is invalid")?,
+    ));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    interval.tick().await;
+
+    let work = handler.handle(job);
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            result = &mut work => return result,
+            _ = interval.tick() => {
+                if !renew_job_lease(pool, job.id, owner, lease_ttl).await? {
+                    bail!("job lease was lost while work was still running");
+                }
+            }
+        }
+    }
 }
 
 async fn lease_reaper(pool: PgPool, mut shutdown: watch::Receiver<bool>) -> Result<()> {
@@ -300,6 +543,36 @@ async fn wait_for_shutdown() -> Result<()> {
         result = tokio::signal::ctrl_c() => result.context("install Ctrl-C handler")?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration as ChronoDuration;
+    use strife_db::JobType;
+
+    use super::{PROCESSOR_CLAIM_ORDER, lease_ttl_for};
+
+    #[test]
+    fn ocr_is_claimed_after_interactive_work_with_a_longer_lease() {
+        let ocr_position = PROCESSOR_CLAIM_ORDER
+            .iter()
+            .position(|job_type| *job_type == JobType::Ocr)
+            .expect("OCR in claim order");
+        let metadata_position = PROCESSOR_CLAIM_ORDER
+            .iter()
+            .position(|job_type| *job_type == JobType::MetadataExtraction)
+            .expect("metadata in claim order");
+        let preview_position = PROCESSOR_CLAIM_ORDER
+            .iter()
+            .position(|job_type| *job_type == JobType::PreviewGeneration)
+            .expect("preview in claim order");
+        assert!(ocr_position > metadata_position);
+        assert!(ocr_position > preview_position);
+        assert_eq!(
+            lease_ttl_for(JobType::Ocr, ChronoDuration::minutes(5)),
+            ChronoDuration::minutes(15)
+        );
+    }
 }
 
 #[cfg(not(unix))]

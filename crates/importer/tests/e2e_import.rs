@@ -1,6 +1,6 @@
 //! Watched-folder import E2E: scan → import → recovery without duplicates → name conflict.
 
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use strife_db::{
     DEFAULT_IMPORT_SOURCE_ID, ImportEntryState, MIGRATOR, ROOT_NODE_ID, list_import_entries,
     list_pending_entries,
@@ -10,6 +10,8 @@ use strife_importer::{
 };
 use strife_storage::{DiskGuard, LocalFsBackend};
 use uuid::Uuid;
+
+const IMPORT_TEST_LOCK_KEY: i64 = 0x5354_5249_4645;
 
 async fn test_pool() -> Option<PgPool> {
     let database_url = std::env::var("DATABASE_URL").ok()?;
@@ -22,6 +24,16 @@ async fn test_pool() -> Option<PgPool> {
     Some(pool)
 }
 
+async fn lock_import_suite(pool: &PgPool) -> Transaction<'_, Postgres> {
+    let mut tx = pool.begin().await.expect("begin import suite lock");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(IMPORT_TEST_LOCK_KEY)
+        .execute(&mut *tx)
+        .await
+        .expect("acquire import suite lock");
+    tx
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn import_scan_recovery_and_name_conflict() {
@@ -29,6 +41,7 @@ async fn import_scan_recovery_and_name_conflict() {
         eprintln!("DATABASE_URL unset; skipping import e2e");
         return;
     };
+    let _import_lock = lock_import_suite(&pool).await;
 
     let fixture = format!("e2e-import-{}", Uuid::new_v4());
     let watch_root = std::env::temp_dir().join(format!("strife-watch-{fixture}"));

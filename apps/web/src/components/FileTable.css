@@ -11,14 +11,19 @@
   font-size: var(--font-size-base);
 }
 
+/*
+ * Handoff #3a: a pill that hugs its content and sits at the right edge of the
+ * row above the table — not a full-width band.
+ */
 .file-table-selection {
   display: flex;
+  width: fit-content;
+  max-width: calc(100% - var(--page-pad-x) * 2);
   align-items: center;
-  justify-content: space-between;
   gap: 0.625rem;
-  margin: 0 var(--page-pad-x);
+  margin: 0 var(--page-pad-x) 0.5rem auto;
   padding: 0.3125rem 0.625rem;
-  border: 1px solid var(--color-accent-soft);
+  border: 1px solid transparent;
   border-radius: var(--radius-control);
   color: var(--color-accent);
   background: var(--color-accent-soft);
@@ -29,17 +34,24 @@
   text-transform: uppercase;
 }
 
+.file-table-selection__divider {
+  width: 1px;
+  height: 0.75rem;
+  flex: none;
+  background: var(--color-border-raised);
+}
+
 .file-table-selection__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.625rem;
 }
 
 .file-table-selection button {
   border: 0;
   border-radius: var(--radius-xs);
-  padding: 0.15rem 0.4rem;
+  padding: 0.125rem 0;
   background: transparent;
   color: var(--color-text-secondary);
   font-family: var(--font-sans);
@@ -119,6 +131,12 @@
 .file-table__row.is-selected:hover {
   background: var(--color-surface-selected);
   box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.file-table__row:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline-offset: -2px;
 }
 
 .file-table__row[data-kind='folder'] {

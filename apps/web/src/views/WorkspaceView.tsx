@@ -25,6 +25,8 @@ import {
 import type { FolderAncestor, FolderItem } from '../api/types'
 import type { FileDetails, MediaStream } from '../api/types'
 import { Breadcrumb } from '../components/Breadcrumb'
+import { CommandBar } from '../components/CommandBar'
+import { ContentSearch } from '../components/ContentSearch'
 import { CreateFolderDialog } from '../components/CreateFolderDialog'
 import '../components/CreateFolderDialog.css'
 import { FileTable } from '../components/FileTable'
@@ -60,7 +62,9 @@ function WorkspaceView(props: WorkspaceViewProps) {
         <h1>{props.title}</h1>
         <p class="workspace-view__description">{props.description}</p>
       </header>
+      <ContentSearch />
       <div class="workspace-view__surface">{props.children}</div>
+      <CommandBar />
     </section>
   )
 }
@@ -399,45 +403,47 @@ function FolderContents(props: { folderId: string }) {
       <Show when={dragDepth() > 0}>
         <div class="upload-drop-overlay">Drop files or folders to upload</div>
       </Show>
-      <div class="folder-toolbar">
-        <FileUploadControl
-          folderId={props.folderId}
-          onComplete={() => void refetch()}
-        />
-        <FolderUploadControl
-          folderId={props.folderId}
-          onComplete={() => void refetch()}
-        />
-        <button type="button" onClick={() => setShowCreateDialog(true)}>
-          New Folder
-        </button>
-      </div>
-      <div class="folder-filters" role="toolbar" aria-label="Kind filters">
-        <For
-          each={
-            [
-              ['folder', 'Folders'],
-              ['image', 'Images'],
-              ['document', 'Documents'],
-              ['video', 'Video'],
-              ['audio', 'Audio'],
-            ] as const
-          }
-        >
-          {([kind, label]) => (
-            <button
-              type="button"
-              classList={{
-                'folder-filters__chip': true,
-                'is-active': kindFilters().includes(kind),
-              }}
-              aria-pressed={kindFilters().includes(kind)}
-              onClick={() => toggleKindFilter(kind)}
-            >
-              {label}
-            </button>
-          )}
-        </For>
+      <div class="folder-actionbar">
+        <div class="folder-filters" role="toolbar" aria-label="Kind filters">
+          <For
+            each={
+              [
+                ['folder', 'Folders'],
+                ['image', 'Images'],
+                ['document', 'Documents'],
+                ['video', 'Video'],
+                ['audio', 'Audio'],
+              ] as const
+            }
+          >
+            {([kind, label]) => (
+              <button
+                type="button"
+                classList={{
+                  'folder-filters__chip': true,
+                  'is-active': kindFilters().includes(kind),
+                }}
+                aria-pressed={kindFilters().includes(kind)}
+                onClick={() => toggleKindFilter(kind)}
+              >
+                {label}
+              </button>
+            )}
+          </For>
+        </div>
+        <div class="folder-toolbar">
+          <FileUploadControl
+            folderId={props.folderId}
+            onComplete={() => void refetch()}
+          />
+          <FolderUploadControl
+            folderId={props.folderId}
+            onComplete={() => void refetch()}
+          />
+          <button type="button" onClick={() => setShowCreateDialog(true)}>
+            New Folder
+          </button>
+        </div>
       </div>
       <Show when={dropResults().length > 0}>
         <div class="upload-drop-report" role="status">
@@ -986,10 +992,12 @@ export function TrashView() {
       title="Trash"
       description="Deleted items are retained for 30 days."
     >
-      <div class="folder-toolbar">
-        <button type="button" onClick={() => void emptyTrash()}>
-          Empty Trash
-        </button>
+      <div class="folder-actionbar">
+        <div class="folder-toolbar">
+          <button type="button" onClick={() => void emptyTrash()}>
+            Empty Trash
+          </button>
+        </div>
       </div>
       <FileTable
         items={items()}

@@ -20,15 +20,18 @@ User-facing summary of what Strife v1 does **not** include. Deferred work lives 
 ## Media
 
 - No video transcoding for unsupported codecs
-- No OCR or document text search
+- OCR is print-text only; handwriting recognition and user corrections are not supported
+- `OCR_MEMORY_LIMIT_BYTES` constrains ImageMagick normalization, while Tesseract relies on the worker container's 1.5 GiB ceiling rather than a per-process kernel memory limit
 - No global filename/metadata search
 - No gallery/grid or mobile layout (desktop table only)
 
 ## Operations
 
-- Development-oriented Docker Compose; production packaging deferred
+- Production Compose stack is **LAN self-host only** (no auth/TLS productization; operator-supplied reverse proxy if needed)
 - No automated backup/restore product
 - Worker concurrency must be kept low on 4 GB hosts (see [performance.md](performance.md))
+- OCR page, pixel, time, memory, and text defaults are provisional until Orion profiling is complete
+- Image tags/revisions and host paths (`/srv/strife/*`) must be set by the operator
 
 ## Interface
 

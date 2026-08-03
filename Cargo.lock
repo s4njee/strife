@@ -1965,6 +1965,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "strife-migrate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sqlx",
+ "strife-db",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "strife-storage"
 version = "0.1.0"
 dependencies = [
@@ -1981,10 +1993,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "serde_json",
  "sqlx",
  "strife-db",
+ "strife-importer",
  "strife-media",
  "strife-storage",
  "tokio",

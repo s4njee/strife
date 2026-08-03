@@ -148,6 +148,40 @@ async fn api_fails_fast_on_unreachable_postgres_and_missing_storage() {
 }
 
 #[tokio::test]
+async fn internal_failure_returns_500_without_leaking_driver_details() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL unset; skipping");
+        return;
+    };
+    // Shared mapper used by storage_usage / jobs / admin / files bare StatusCode paths.
+    let status = strife_api::internal_error("injected failure for 5xx logging coverage");
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Drive a real route after closing the pool so SQLx fails on the shipped path.
+    pool.close().await;
+    let app = strife_api::jobs::router(pool);
+    let response = app
+        .oneshot(
+            Request::get("/api/jobs?count=true")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("send");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("body");
+    let body_text = String::from_utf8_lossy(&body);
+    assert!(
+        !body_text.to_lowercase().contains("postgres")
+            && !body_text.to_lowercase().contains("sqlx")
+            && !body_text.to_lowercase().contains("connection"),
+        "5xx body must not leak internal driver details: {body_text}"
+    );
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn interrupted_upload_resumes_remaining_chunks() {
     let Some(pool) = test_pool().await else {
@@ -466,7 +500,11 @@ async fn trash_cleanup_enqueues_batch_of_expired_items() {
             id: Uuid::new_v4(),
             job_type: JobType::PermanentDeletion,
             target_node_id: *id,
+            import_source_id: None,
             state: strife_db::JobState::Leased,
+            origin: strife_db::JobOrigin::Foreground,
+            campaign_id: None,
+            resource_class: strife_db::JobResourceClass::Light,
             priority: 0,
             attempts: 1,
             max_attempts: 3,

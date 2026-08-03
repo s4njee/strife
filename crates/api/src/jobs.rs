@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::internal_error;
+
 #[derive(Serialize)]
 struct JobStatus {
     id: Uuid,
@@ -39,7 +41,7 @@ async fn status(
 ) -> Result<Json<JobStatus>, StatusCode> {
     let job = strife_db::get_job(&pool, id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(internal_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(JobStatus {
         id,
@@ -71,7 +73,7 @@ async fn list_or_count(
     .bind(&states)
     .fetch_one(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(internal_error)?;
 
     let _ = query.count;
     Ok(Json(JobCountResponse { count }))

@@ -1,8 +1,8 @@
 use chrono::Duration;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use strife_db::{
-    JobState, JobType, MIGRATOR, ROOT_NODE_ID, claim_job, complete_job, enqueue_job, fail_job,
-    release_expired_leases,
+    JobState, JobType, MIGRATOR, ROOT_NODE_ID, claim_job, complete_job, enqueue_import_scan,
+    enqueue_job, fail_job, release_expired_leases, renew_job_lease,
 };
 use uuid::Uuid;
 
@@ -55,6 +55,11 @@ async fn queue_is_idempotent_and_supports_completion_and_retry() {
     assert_eq!(leased.id, enqueued.id);
     assert_eq!(leased.attempts, 1);
     assert_eq!(leased.state, JobState::Leased);
+    assert!(
+        renew_job_lease(&pool, leased.id, "worker-a", Duration::minutes(2))
+            .await
+            .expect("renew lease")
+    );
 
     let retry = fail_job(&pool, leased.id, "temporary failure")
         .await
@@ -107,4 +112,97 @@ async fn queue_is_idempotent_and_supports_completion_and_retry() {
         .execute(&pool)
         .await
         .expect("clean up node and jobs");
+}
+
+#[tokio::test]
+async fn import_scan_queue_is_source_scoped_and_idempotent() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let source_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO import_sources (id, watch_path, destination_folder_id) VALUES ($1, $2, $3)",
+    )
+    .bind(source_id)
+    .bind(format!("/tmp/strife-job-source-{source_id}"))
+    .bind(ROOT_NODE_ID)
+    .execute(&pool)
+    .await
+    .expect("create import source");
+
+    let first = enqueue_import_scan(&pool, source_id)
+        .await
+        .expect("enqueue import scan")
+        .expect("enabled source");
+    let repeated = enqueue_import_scan(&pool, source_id)
+        .await
+        .expect("repeat import scan")
+        .expect("enabled source");
+    assert_eq!(repeated.id, first.id);
+    assert_eq!(first.job_type, JobType::ImportScan);
+    assert_eq!(first.import_source_id, Some(source_id));
+
+    sqlx::query("DELETE FROM import_sources WHERE id = $1")
+        .bind(source_id)
+        .execute(&pool)
+        .await
+        .expect("clean up source and job");
+}
+
+#[tokio::test]
+async fn ocr_queue_is_unique_uses_extended_attempts_and_renews_to_completion() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let mut ocr_lock = pool.begin().await.expect("begin OCR test lock");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(0x4f43_5200_i64)
+        .execute(&mut *ocr_lock)
+        .await
+        .expect("acquire OCR test lock");
+    let node_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
+        .bind(node_id)
+        .bind(ROOT_NODE_ID)
+        .bind(format!("ocr-job-test-{node_id}"))
+        .execute(&pool)
+        .await
+        .expect("create OCR target");
+
+    let queued = enqueue_job(&pool, JobType::Ocr, node_id, -10)
+        .await
+        .expect("enqueue OCR")
+        .expect("new OCR job");
+    assert_eq!(queued.max_attempts, 5);
+    assert!(
+        enqueue_job(&pool, JobType::Ocr, node_id, -10)
+            .await
+            .expect("idempotent OCR enqueue")
+            .is_none(),
+        "the generic active-job index must reject duplicate OCR work"
+    );
+
+    let base_ttl = Duration::milliseconds(40);
+    let leased = claim_job(&pool, JobType::Ocr, "ocr-worker", base_ttl)
+        .await
+        .expect("claim OCR")
+        .expect("leased OCR job");
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    assert!(
+        renew_job_lease(&pool, leased.id, "ocr-worker", Duration::milliseconds(100))
+            .await
+            .expect("renew OCR lease")
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    let completed = complete_job(&pool, leased.id)
+        .await
+        .expect("complete OCR")
+        .expect("OCR remained leased beyond its initial TTL");
+    assert_eq!(completed.state, JobState::Completed);
+
+    sqlx::query("DELETE FROM nodes WHERE id = $1")
+        .bind(node_id)
+        .execute(&pool)
+        .await
+        .expect("clean up OCR target");
 }

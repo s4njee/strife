@@ -33,35 +33,35 @@ Development proceeds in small vertical slices. Every milestone must leave the ap
 
 ## 2. Settled v1 Decisions
 
-| Area | Decision |
-|---|---|
-| Users | Single-user |
-| Network | Private LAN only; normal operation must not require internet access |
-| Authentication | None in v1 |
-| Host | Gentoo Linux on Raspberry Pi 5, ARM64, 4 GB RAM |
-| Additional architecture | x86-64 must also be supported |
-| Capacity | 5 TB external HDD mounted at `/mnt/ext` |
-| Storage backend | Direct opaque-key storage on a reformatted ZFS volume; no MinIO in v1 |
-| Managed paths | Strife owns `/mnt/ext/strife`; storage and import roots are separate subtrees |
-| Database | PostgreSQL |
-| Frontend | SolidJS with TypeScript |
-| Backend | Rust with Axum and Tokio |
-| Deployment direction | Docker Compose; packaged deployment is deferred, so v1 starts with a development setup |
-| Uploads | Resumable and chunked; no Strife-configured per-file size limit |
-| Import | Watch a server-side folder and import discovered files into Strife |
-| Duplicate sibling name | Reject the operation |
-| File versions | Not supported |
-| Integrity | Calculate checksums, but do not deduplicate content |
-| Disk guard | Reject new uploads/imports at 90% disk usage |
-| Usage display | Originals, trash, and generated artifacts all count |
-| Trash | Retain for 30 days; explicit permanent deletion removes bytes immediately |
-| Metadata | ExifTool, Apache Tika, ffprobe, and format-specific tools as appropriate |
-| Previews | Images, video, audio, PDF, and DOCX; generated on demand and cached |
-| Video | Do not transcode unsupported codecs in v1 |
-| Interface | Desktop table view only; no gallery or mobile/tablet layout |
-| Themes | True-black dark theme plus a light theme |
-| Browser support | Current stable desktop browsers only |
-| OCR, search, sharing | Deferred to v2 |
+| Area                    | Decision                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Users                   | Single-user                                                                                                         |
+| Network                 | Private LAN only; normal operation must not require internet access                                                 |
+| Authentication          | None in v1                                                                                                          |
+| Host                    | Gentoo Linux on Raspberry Pi 5, ARM64, 4 GB RAM                                                                     |
+| Additional architecture | x86-64 must also be supported                                                                                       |
+| Capacity                | 5 TB external HDD mounted at `/mnt/ext`                                                                             |
+| Storage backend         | Direct opaque-key storage on a reformatted ZFS volume; no MinIO in v1                                               |
+| Managed paths           | Strife owns `/mnt/ext/strife`; storage and import roots are separate subtrees                                       |
+| Database                | PostgreSQL                                                                                                          |
+| Frontend                | SolidJS with TypeScript                                                                                             |
+| Backend                 | Rust with Axum and Tokio                                                                                            |
+| Deployment direction    | Docker Compose for LAN self-host (`docker-compose.prod.yml`); Kubernetes and public-internet hardening are deferred |
+| Uploads                 | Resumable and chunked; no Strife-configured per-file size limit                                                     |
+| Import                  | Watch a server-side folder and import discovered files into Strife                                                  |
+| Duplicate sibling name  | Reject the operation                                                                                                |
+| File versions           | Not supported                                                                                                       |
+| Integrity               | Calculate checksums, but do not deduplicate content                                                                 |
+| Disk guard              | Reject new uploads/imports at 90% disk usage                                                                        |
+| Usage display           | Originals, trash, and generated artifacts all count                                                                 |
+| Trash                   | Retain for 30 days; explicit permanent deletion removes bytes immediately                                           |
+| Metadata                | ExifTool, Apache Tika, ffprobe, and format-specific tools as appropriate                                            |
+| Previews                | Images, video, audio, PDF, and DOCX; generated on demand and cached                                                 |
+| Video                   | Do not transcode unsupported codecs in v1                                                                           |
+| Interface               | Desktop table view only; no gallery or mobile/tablet layout                                                         |
+| Themes                  | True-black dark theme plus a light theme                                                                            |
+| Browser support         | Current stable desktop browsers only                                                                                |
+| OCR, search, sharing    | Deferred to v2                                                                                                      |
 
 ## 3. v1 Scope
 
@@ -100,7 +100,7 @@ Development proceeds in small vertical slices. Every milestone must leave the ap
 - Content deduplication
 - Symbolic links or special-file imports
 - Grid/gallery and mobile/tablet views
-- Production packaging, Kubernetes deployment, backup automation, and comprehensive security hardening
+- Kubernetes deployment, multi-host HA, backup automation, and public-internet security hardening
 
 See [`deferred.md`](deferred.md) for questions that may define v2 or later.
 
@@ -176,7 +176,7 @@ crates/
 
 ### Development orchestration
 
-Use a development Docker Compose configuration for PostgreSQL, Apache Tika, and any other service dependencies. The Rust and SolidJS applications may run through native development commands initially. Release containers, a polished deployment Compose file, and Kubernetes manifests are v2 concerns.
+Use `docker-compose.dev.yml` for local PostgreSQL and Apache Tika while running the Rust API/worker and SolidJS app natively. For LAN self-host, use `docker-compose.prod.yml` with the Dockerfiles under `deploy/docker/` (see [docs/setup.md](docs/setup.md) and [deploy/orion/README.md](deploy/orion/README.md)). Kubernetes manifests and public registry publishing remain deferred.
 
 ## 6. Storage Model
 
@@ -280,16 +280,20 @@ Metadata processing is asynchronous and must never prevent an otherwise valid or
 
 ### Initial tools
 
-| Content | Tool | Output |
-|---|---|---|
-| All files | libmagic/`file`, checksum library | detected MIME and integrity checksum |
-| Images | ExifTool plus an image/RAW adapter | dimensions, orientation, EXIF/IPTC/XMP, camera, GPS, capture time, color information |
-| Video/audio | ffprobe | container, codecs, streams, duration, bitrate, resolution, frame rate, language, tags |
-| PDF/office | Apache Tika plus PDF utilities where useful | title, author, dates, page/sheet counts, document properties |
+| Content     | Tool                                        | Output                                                                                |
+| ----------- | ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| All files   | libmagic/`file`, checksum library           | detected MIME and integrity checksum                                                  |
+| Images      | ExifTool plus an image/RAW adapter          | dimensions, orientation, EXIF/IPTC/XMP, camera, GPS, capture time, color information  |
+| Video/audio | ffprobe                                     | container, codecs, streams, duration, bitrate, resolution, frame rate, language, tags |
+| PDF/office  | Apache Tika plus PDF utilities where useful | title, author, dates, page/sheet counts, document properties                          |
 
 GPS metadata is displayed. Metadata is read-only in v1. Do not extract cover art, waveforms, embedded attachments, or archive listings.
 
 Record extractor versions and warnings. Preserve every successful raw metadata JSON result in full, targeting 10–15 GB per million files, and normalize common UI fields into a one-to-one typed metadata record. Tika document text and OCR text are stored separately from metadata JSON. The v1 acceptance matrix is DOC, DOCX, PDF, JPEG, GIF, PNG, NEF, DNG, MP4, MKV, MOV, MP3, and M4A; see [ADR 0005](docs/decisions/0005-metadata-storage-and-format-matrix.md). When an extractor or schema changes, enqueue gradual low-priority reprocessing rather than blocking startup.
+
+The post-v1 OCR contract uses explicit, English-first Tesseract jobs, stores
+embedded and recognized text in PostgreSQL, and disables implicit Tika OCR so a
+scanned PDF is not processed twice; see [ADR 0008](docs/decisions/0008-ocr-and-document-text.md).
 
 ## 11. Preview Pipeline
 

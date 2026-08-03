@@ -1,0 +1,3 @@
+-- PostgreSQL enum values cannot be removed without rebuilding every dependent
+-- column. The following migration removes the import-scan columns and indexes;
+-- leaving this unused enum value in place makes rollback safe for existing jobs.

@@ -166,9 +166,75 @@ export interface ImportEntry {
 }
 
 export interface ImportScanResult {
-  discovered: number
-  imported: number
+  job_id: string
+  status: 'pending' | 'leased'
+}
+
+export interface OcrCounts {
+  pending: number
+  running: number
+  completed: number
   failed: number
-  skipped_hidden: number
-  skipped_special: number
+  skipped: number
+  unsupported: number
+  remaining: number
+}
+
+export interface OcrStatus {
+  counts: OcrCounts
+  engine_name: string | null
+  engine_version: string | null
+  language: string | null
+}
+
+export interface OcrEvent {
+  id: number
+  node_id: string | null
+  name: string
+  state: 'running' | 'completed' | 'failed' | 'skipped' | 'unsupported'
+  page_count: number | null
+  mean_confidence: number | null
+  warning: string | null
+  created_at: string
+}
+
+export interface DocumentTextPage {
+  page_number: number
+  content: string
+  confidence: number | null
+  width: number | null
+  height: number | null
+}
+
+export interface FileText {
+  status:
+    | 'not_processed'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'skipped'
+    | 'skipped_embedded'
+    | 'unsupported'
+  source: 'embedded' | 'ocr' | null
+  language: string | null
+  engine_name: string | null
+  engine_version: string | null
+  mean_confidence: number | null
+  warnings: string[]
+  pages: DocumentTextPage[]
+  next_page: number | null
+}
+
+export interface TextSearchMatch {
+  node_id: string
+  name: string
+  page_number: number
+  snippet: string
+  score: number
+}
+
+export interface TextSearchResponse {
+  items: TextSearchMatch[]
+  next_cursor: string | null
+  indexed_documents: number
 }

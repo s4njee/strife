@@ -17,7 +17,7 @@ These questions are intentionally outside v1. They are not commitments: revisit 
 
 - Should Strife remain LAN-only, move behind a VPN such as Tailscale, or become reachable from the public internet?
 - If publicly reachable, what domain, TLS termination, and reverse proxy should be supported?
-- What should a production-ready Docker Compose bundle include?
+- What should be added beyond the existing LAN Compose stack (registry publishing, TLS/auth productization, multi-host)?
 - When should ARM64 and x86-64 release images be built and published?
 - Should native binaries be supported in addition to containers?
 - When is Kubernetes support justified, and what should its storage and ingress model be?
@@ -40,21 +40,13 @@ These questions are intentionally outside v1. They are not commitments: revisit 
 - Should successful imports optionally copy, archive, or retain their source instead of always moving it into managed storage?
 - Should external sources outside the single import inbox be monitored for later changes or disappearance?
 
-## OCR and Text Extraction
+## Implementation Profiling Follow-ups
 
-- Which OCR languages should be installed initially?
-- Should OCR language selection be global, automatic, or configurable per file?
-- Which formats should be OCR inputs: PDF, JPEG, PNG, TIFF, WebP, raw images, or others?
-- Should OCR run automatically for all supported inputs, only likely documents, or only on request?
-- How should Strife determine whether a PDF already contains usable text and can skip OCR?
-- What page-count, pixel-count, execution-time, memory, and output-size limits should OCR enforce?
-- Should OCRmyPDF create searchable PDF derivatives, and should users be able to download them?
-- Should extracted OCR text be visible and copyable in the interface?
-- Should results retain page/segment boundaries, language, and confidence?
-- Should the UI expose page-level confidence and warnings?
-- Should users be able to correct OCR text, or should it remain read-only and regenerable?
-- Is handwriting recognition a future requirement?
-- How should files be reprocessed when OCR models, languages, or tool versions change?
+- Profile OCR on Orion and replace the provisional page-count, pixel-count,
+  execution-time, memory, and stored-output limits with measured values.
+- Revisit whether engine or language version changes should offer an automatic
+  gradual reprocessing policy after the manual bounded re-trigger path has
+  production usage data.
 
 ## Search and Organization
 

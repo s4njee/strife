@@ -6,6 +6,7 @@ import './index.css'
 import App from './App.tsx'
 import { ImportStatusView } from './views/ImportStatusView'
 import { ErrorsView } from './views/ErrorsView'
+import { OcrStatusView } from './views/OcrStatusView'
 import { ThemeProvider } from './theme/ThemeProvider'
 import {
   FavoritesView,
@@ -28,6 +29,7 @@ render(
         <Route path="/folder/:id" component={FolderView} />
         <Route path="/favorites" component={FavoritesView} />
         <Route path="/imports" component={ImportStatusView} />
+        <Route path="/ocr" component={OcrStatusView} />
         <Route path="/errors" component={ErrorsView} />
         <Route path="/trash" component={TrashView} />
       </Router>

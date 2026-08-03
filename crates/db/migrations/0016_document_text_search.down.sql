@@ -1,0 +1,2 @@
+DROP INDEX document_text_pages_search_vector_idx;
+ALTER TABLE document_text_pages DROP COLUMN search_vector;

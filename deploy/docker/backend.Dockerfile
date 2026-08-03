@@ -12,7 +12,25 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY .sqlx ./.sqlx
 COPY crates ./crates
-RUN SQLX_OFFLINE=true cargo build --release --locked -p strife-api -p strife-worker
+RUN SQLX_OFFLINE=true cargo build --release --locked -p strife-api -p strife-worker -p strife-migrate
+
+FROM debian:trixie-slim AS migrate
+
+ARG STRIFE_REVISION=unknown
+LABEL org.opencontainers.image.title="Strife Database Migrator" \
+      org.opencontainers.image.revision="${STRIFE_REVISION}" \
+      org.opencontainers.image.source="https://github.com/s4njee/strife"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 strife \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent strife
+
+COPY --from=builder /src/target/release/strife-migrate /usr/local/bin/strife-migrate
+
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/strife-migrate"]
 
 FROM debian:trixie-slim AS api
 
@@ -49,6 +67,9 @@ RUN apt-get update \
         libimage-exiftool-perl \
         libraw-bin \
         libreoffice-writer \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-eng \
         unzip \
         zip \
     && rm -rf /var/lib/apt/lists/* \

@@ -1,4 +1,4 @@
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use strife_db::{DEFAULT_IMPORT_SOURCE_ID, MIGRATOR, ROOT_NODE_ID, list_pending_entries};
 use strife_importer::{
     PostgresDiscoverySink, ScanOptions, import_entry, recover_interrupted_imports, scan_directory,
@@ -6,6 +6,9 @@ use strife_importer::{
 };
 use strife_storage::{DiskGuard, LocalFsBackend, StorageBackend, StorageKey};
 use uuid::Uuid;
+
+/// Cross-crate coordination key for tests that mutate the fixed import source / entries.
+const IMPORT_TEST_LOCK_KEY: i64 = 0x5354_5249_4645; // "STRIFE"
 
 async fn test_pool() -> Option<PgPool> {
     let database_url = std::env::var("DATABASE_URL").ok()?;
@@ -18,6 +21,17 @@ async fn test_pool() -> Option<PgPool> {
     Some(pool)
 }
 
+/// Holds a transaction-scoped advisory lock so parallel import suites do not race.
+async fn lock_import_suite(pool: &PgPool) -> Transaction<'_, Postgres> {
+    let mut tx = pool.begin().await.expect("begin import suite lock");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(IMPORT_TEST_LOCK_KEY)
+        .execute(&mut *tx)
+        .await
+        .expect("acquire import suite lock");
+    tx
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn imports_a_tree_once_with_hierarchy_checksums_and_jobs() {
@@ -26,6 +40,7 @@ async fn imports_a_tree_once_with_hierarchy_checksums_and_jobs() {
         eprintln!("DATABASE_URL is unset; skipping PostgreSQL integration test");
         return;
     };
+    let _import_lock = lock_import_suite(&pool).await;
     let fixture = format!("pipeline-{}", Uuid::new_v4());
     let watch_root = std::env::temp_dir().join(format!("strife-watch-{fixture}"));
     let storage_root = std::env::temp_dir().join(format!("strife-storage-{fixture}"));
@@ -131,7 +146,7 @@ async fn imports_a_tree_once_with_hierarchy_checksums_and_jobs() {
     .await
     .expect("count imported files");
     assert_eq!(file_count, 5);
-    let object_and_job_count: (i64, i64) = sqlx::query_as(
+    let object_and_job_count: (i64, i64, i64) = sqlx::query_as(
         r"
         WITH RECURSIVE tree AS (
             SELECT id FROM nodes WHERE parent_id = $1 AND name = $2
@@ -144,7 +159,10 @@ async fn imports_a_tree_once_with_hierarchy_checksums_and_jobs() {
                AND checksum_sha256 IS NOT NULL),
             (SELECT count(*) FROM jobs
              WHERE target_node_id IN (SELECT id FROM tree)
-               AND job_type = 'metadata_extraction')
+               AND job_type = 'metadata_extraction'),
+            (SELECT count(*) FROM jobs
+             WHERE target_node_id IN (SELECT id FROM tree)
+               AND job_type = 'ocr')
         ",
     )
     .bind(ROOT_NODE_ID)
@@ -152,7 +170,7 @@ async fn imports_a_tree_once_with_hierarchy_checksums_and_jobs() {
     .fetch_one(&pool)
     .await
     .expect("count file objects and metadata jobs");
-    assert_eq!(object_and_job_count, (5, 5));
+    assert_eq!(object_and_job_count, (5, 5, 5));
     let finalized_count: i64 = sqlx::query_scalar(
         r"
         SELECT count(*) FROM import_entries
@@ -231,6 +249,7 @@ async fn startup_replays_an_interrupted_staged_entry_exactly_once() {
         eprintln!("DATABASE_URL is unset; skipping PostgreSQL integration test");
         return;
     };
+    let _import_lock = lock_import_suite(&pool).await;
     let fixture = format!("restart-{}", Uuid::new_v4());
     let watch_root = std::env::temp_dir().join(format!("strife-watch-{fixture}"));
     let storage_root = std::env::temp_dir().join(format!("strife-storage-{fixture}"));

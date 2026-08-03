@@ -22,6 +22,7 @@
 #   STRIFE_IMPORT_UID   inbox owner UID (default: 10001)
 #   STRIFE_IMPORT_GID   inbox owner GID (default: 10001)
 #   STRIFE_MANIFEST     local resume manifest (default: XDG state directory)
+#   SCAN_POLL_SECONDS   durable scan status interval (default: 15)
 #
 # Optimize Mac Storage may leave .icloud stubs in CloudDocs. This script
 # reports and skips them. Materialize those files first, then rerun; rsync
@@ -71,6 +72,7 @@ import_root=${STRIFE_IMPORT_ROOT:-/srv/strife/import}
 import_uid=${STRIFE_IMPORT_UID:-10001}
 import_gid=${STRIFE_IMPORT_GID:-10001}
 source_id=00000000-0000-0000-0000-000000000003
+poll_seconds=${SCAN_POLL_SECONDS:-15}
 remote_dir=${import_root%/}/$prefix
 
 case "$import_root" in
@@ -79,6 +81,9 @@ case "$import_root" in
 esac
 case "$import_uid:$import_gid" in
   *[!0-9:]*) echo "error: STRIFE_IMPORT_UID and STRIFE_IMPORT_GID must be numeric" >&2; exit 1 ;;
+esac
+case "$poll_seconds" in
+  *[!0-9]*|'') echo "error: SCAN_POLL_SECONDS must be numeric" >&2; exit 1 ;;
 esac
 
 for command in awk find python3 rsync shasum ssh; do
@@ -203,11 +208,37 @@ scan_response=$(ssh "$strife_ssh" "curl -fsS -X POST $quoted_scan_url") || {
 }
 
 echo "scan:        $scan_response"
+scan_job_id=$(printf '%s' "$scan_response" | python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+job_id = value.get("job_id")
+if not isinstance(job_id, str):
+    raise SystemExit("scan response did not contain a job_id")
+print(job_id)
+')
+printf -v quoted_job_url '%q' "${strife_url%/}/api/jobs/$scan_job_id"
+echo "scanning:    durable job $scan_job_id will continue if this shell disconnects"
+while :; do
+  # shellcheck disable=SC2029
+  job_response=$(ssh "$strife_ssh" "curl -fsS $quoted_job_url") || {
+    echo "error: could not read durable scan job status" >&2
+    exit 1
+  }
+  job_state=$(printf '%s' "$job_response" | python3 -c '
+import json, sys
+print(json.load(sys.stdin).get("status", "unknown"))
+')
+  case "$job_state" in
+    completed) break ;;
+    failed|cancelled)
+      echo "error: durable scan job $job_state: $job_response" >&2
+      exit 1
+      ;;
+    pending|leased) sleep "$poll_seconds" ;;
+    *) echo "error: unknown durable scan job state: $job_state" >&2; exit 1 ;;
+  esac
+done
+echo "scan:        durable job $scan_job_id completed"
 refresh_manifest
-failed=$(printf '%s' "$scan_response" | sed -n 's/.*"failed":\([0-9][0-9]*\).*/\1/p')
-if [ -n "$failed" ] && [ "$failed" -gt 0 ]; then
-  echo "error: $failed import(s) failed; sources remain in the inbox and appear on Strife's Errors page" >&2
-  exit 1
-fi
 
 echo "done: iCloud source staged and imported into $prefix/"

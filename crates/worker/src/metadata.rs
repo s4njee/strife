@@ -402,6 +402,11 @@ fn is_document_mime(mime: &str) -> bool {
     )
 }
 
+/// Content-MIME routing shared with the OCR handler after metadata detection.
+pub(crate) fn is_ocr_candidate_mime(mime: &str) -> bool {
+    strife_media::is_supported_ocr_mime(mime)
+}
+
 fn is_office_mime(mime: &str) -> bool {
     mime == "application/msword"
         || mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

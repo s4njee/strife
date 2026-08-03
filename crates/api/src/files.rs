@@ -15,7 +15,10 @@ use sqlx::PgPool;
 use strife_db::{ArtifactState, ArtifactType, JobType, UpsertArtifact};
 use strife_storage::{StorageBackend, StorageKey};
 use tokio_util::io::ReaderStream;
+use tracing::error;
 use uuid::Uuid;
+
+use crate::{internal_error, log_internal};
 
 #[derive(Clone)]
 struct FileState {
@@ -29,6 +32,7 @@ pub fn router(pool: PgPool, storage: Arc<dyn StorageBackend>) -> Router {
         .route("/api/files/{id}", get(file_details))
         .route("/api/files/{id}/metadata", get(file_metadata))
         .route("/api/files/{id}/streams", get(file_streams))
+        .route("/api/files/{id}/text", get(file_text))
         .route("/api/files/{id}/preview-native", get(preview_native))
         .route("/api/files/{id}/preview", get(preview_request))
         .route("/api/files/{id}/thumbnail", get(thumbnail_request))
@@ -41,8 +45,13 @@ async fn preview_request(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Response {
-    let Ok(Some(file)) = strife_db::get_file_object_by_node_id(&state.pool, id).await else {
-        return status_response(StatusCode::NOT_FOUND);
+    let file = match strife_db::get_file_object_by_node_id(&state.pool, id).await {
+        Ok(Some(file)) => file,
+        Ok(None) => return status_response(StatusCode::NOT_FOUND),
+        Err(error) => {
+            error!(%error, node_id = %id, "failed to load file for preview");
+            return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
     let mime = file
         .mime_type
@@ -57,8 +66,13 @@ async fn preview_request(
 }
 
 async fn thumbnail_request(State(state): State<FileState>, Path(id): Path<Uuid>) -> Response {
-    let Ok(Some(file)) = strife_db::get_file_object_by_node_id(&state.pool, id).await else {
-        return status_response(StatusCode::NOT_FOUND);
+    let file = match strife_db::get_file_object_by_node_id(&state.pool, id).await {
+        Ok(Some(file)) => file,
+        Ok(None) => return status_response(StatusCode::NOT_FOUND),
+        Err(error) => {
+            error!(%error, node_id = %id, "failed to load file for thumbnail");
+            return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
     artifact_request(
         &state,
@@ -121,7 +135,8 @@ async fn artifact_request(state: &FileState, id: Uuid, kind: ArtifactType, mime:
         },
     )
     .await;
-    if artifact.is_err() {
+    if let Err(error) = artifact {
+        error!(%error, node_id = %id, "failed to create generating artifact");
         return status_response(StatusCode::INTERNAL_SERVER_ERROR);
     }
     generating_response(state, id).await
@@ -138,9 +153,15 @@ async fn generating_response(state: &FileState, id: Uuid) -> Response {
         .await
         {
             Ok(job) => job,
-            Err(_) => return status_response(StatusCode::INTERNAL_SERVER_ERROR),
+            Err(error) => {
+                error!(%error, node_id = %id, "failed to load pending preview job");
+                return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+            }
         },
-        Err(_) => return status_response(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(error) => {
+            error!(%error, node_id = %id, "failed to enqueue preview generation");
+            return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
     (
         StatusCode::ACCEPTED,
@@ -222,6 +243,34 @@ struct MetadataQuery {
     raw: bool,
 }
 
+#[derive(Deserialize)]
+struct TextQuery {
+    after_page: Option<i32>,
+    limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+struct TextPageResponse {
+    page_number: i32,
+    content: String,
+    confidence: Option<f32>,
+    width: Option<i32>,
+    height: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct FileTextResponse {
+    status: String,
+    source: Option<String>,
+    language: Option<String>,
+    engine_name: Option<String>,
+    engine_version: Option<String>,
+    mean_confidence: Option<f32>,
+    warnings: Vec<String>,
+    pages: Vec<TextPageResponse>,
+    next_page: Option<i32>,
+}
+
 async fn file_details(
     State(state): State<FileState>,
     Path(node_id): Path<Uuid>,
@@ -242,7 +291,7 @@ async fn file_details(
     .bind(node_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(internal_error)?
     .ok_or(StatusCode::NOT_FOUND)?;
     details.processing_status = processing_status(&state.pool, node_id).await?;
     Ok(Json(details))
@@ -267,7 +316,7 @@ async fn processing_status(pool: &PgPool, node_id: Uuid) -> Result<ProcessingSta
         .bind(node_id)
         .fetch_one(pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?;
     Ok(if active > 0 {
         ProcessingStatus::Processing
     } else if successful > 0 && failed_metadata > 0 {
@@ -299,7 +348,7 @@ async fn file_metadata(
     .bind(query.raw)
     .fetch_all(&state.pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(internal_error)?;
     Ok(Json(records))
 }
 
@@ -318,8 +367,85 @@ async fn file_streams(
     .bind(node_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(internal_error)?;
     Ok(Json(streams))
+}
+
+async fn file_text(
+    State(state): State<FileState>,
+    Path(node_id): Path<Uuid>,
+    Query(query): Query<TextQuery>,
+) -> Result<Json<FileTextResponse>, StatusCode> {
+    ensure_active_file(&state.pool, node_id).await?;
+    let record = strife_db::get_document_text(&state.pool, node_id)
+        .await
+        .map_err(internal_error)?;
+    let Some(record) = record else {
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM jobs WHERE target_node_id = $1 AND job_type = 'ocr' AND state IN ('pending', 'leased'))",
+        )
+        .bind(node_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(internal_error)?;
+        return Ok(Json(FileTextResponse {
+            status: if active {
+                "in_progress"
+            } else {
+                "not_processed"
+            }
+            .to_owned(),
+            source: None,
+            language: None,
+            engine_name: None,
+            engine_version: None,
+            mean_confidence: None,
+            warnings: Vec::new(),
+            pages: Vec::new(),
+            next_page: None,
+        }));
+    };
+    let limit = query.limit.unwrap_or(25).clamp(1, 50);
+    let mut pages = sqlx::query_as::<_, TextPageResponse>(
+        r"
+        SELECT page_number, content, confidence, width, height
+        FROM document_text_pages
+        WHERE node_id = $1 AND page_number > $2
+        ORDER BY page_number
+        LIMIT $3
+        ",
+    )
+    .bind(node_id)
+    .bind(query.after_page.unwrap_or(0))
+    .bind(i64::from(limit.saturating_add(1)))
+    .fetch_all(&state.pool)
+    .await
+    .map_err(internal_error)?;
+    let has_more = pages.len() > limit as usize;
+    if has_more {
+        pages.pop();
+    }
+    let next_page = has_more
+        .then(|| pages.last().map(|page| page.page_number))
+        .flatten();
+    let status = if record.status == strife_db::DocumentTextStatus::Completed
+        && record.source == strife_db::DocumentTextSource::Embedded
+    {
+        "skipped_embedded".to_owned()
+    } else {
+        format!("{:?}", record.status).to_lowercase()
+    };
+    Ok(Json(FileTextResponse {
+        status,
+        source: Some(format!("{:?}", record.source).to_lowercase()),
+        language: Some(record.language),
+        engine_name: Some(record.engine_name),
+        engine_version: Some(record.engine_version),
+        mean_confidence: record.mean_confidence,
+        warnings: record.warnings,
+        pages,
+        next_page,
+    }))
 }
 
 async fn ensure_active_file(pool: &PgPool, node_id: Uuid) -> Result<(), StatusCode> {
@@ -329,7 +455,7 @@ async fn ensure_active_file(pool: &PgPool, node_id: Uuid) -> Result<(), StatusCo
     .bind(node_id)
     .fetch_one(pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(internal_error)?;
     if exists {
         Ok(())
     } else {
@@ -365,9 +491,10 @@ async fn try_serve_original(
 ) -> Result<Response, DownloadError> {
     let file = strife_db::get_download_file(&state.pool, node_id)
         .await
-        .map_err(|_| DownloadError::Internal)?
+        .map_err(|error| log_internal(error, DownloadError::Internal))?
         .ok_or(DownloadError::NotFound)?;
-    let object_id = Uuid::parse_str(&file.storage_key).map_err(|_| DownloadError::Internal)?;
+    let object_id = Uuid::parse_str(&file.storage_key)
+        .map_err(|error| log_internal(error, DownloadError::Internal))?;
     let mime = file
         .mime_type
         .as_deref()
@@ -375,7 +502,8 @@ async fn try_serve_original(
     if inline && !is_native_preview_mime(mime) {
         return Err(DownloadError::NotFound);
     }
-    let total = u64::try_from(file.byte_size).map_err(|_| DownloadError::Internal)?;
+    let total = u64::try_from(file.byte_size)
+        .map_err(|error| log_internal(error, DownloadError::Internal))?;
     let requested_range = headers
         .get(header::RANGE)
         .map(|value| parse_range(value, total).map_err(|()| DownloadError::Range(total)))

@@ -6,6 +6,7 @@ use anyhow::Result;
 
 mod exif;
 mod ffprobe;
+mod ocr;
 mod office;
 mod process;
 mod thumbnail;
@@ -15,9 +16,15 @@ pub use exif::{ExifResult, extract_exif, extract_exif_with_limits};
 pub use ffprobe::{
     FfprobeResult, StreamInfo, StreamType, extract_ffprobe, extract_ffprobe_with_limits,
 };
+pub use ocr::{
+    NormalizedOcrInput, NormalizedOcrPage, OcrNormalizationLimits, OcrPage, OcrResult, extract_ocr,
+    is_supported_ocr_mime, normalize_ocr_input, verify_tesseract,
+};
 pub use office::convert_office_to_pdf;
 pub use thumbnail::{ThumbnailResult, generate_image_preview, generate_thumbnail};
-pub use tika::{TikaResult, extract_tika, extract_tika_with_limits};
+pub use tika::{
+    EmbeddedPdfText, TikaResult, extract_embedded_pdf_text, extract_tika, extract_tika_with_limits,
+};
 
 /// Detects a file's MIME type from its bytes using the host's libmagic database.
 ///

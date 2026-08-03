@@ -11,7 +11,8 @@ Strife v1 needs predictable watched-folder behavior without destructive surprise
 
 - The sole v1 import source is `/mnt/ext/watch`; its contents map into Strife's root folder while preserving their relative hierarchy.
 - Scans run only when the user explicitly requests one. There is no polling interval or continuous watcher in v1.
-- A scan records regular, non-hidden files and directories. Special files are ignored. A file is eligible when its size and modification time remain unchanged while it is streamed into staging; a changed file is returned to `discovered` for a later manual scan.
+- A manual scan enqueues a durable background job. The worker records each regular, non-hidden file and immediately imports it before continuing the tree walk; special files are ignored. A file is eligible when its size and modification time remain unchanged while it is streamed into staging; a changed file is returned to `discovered` for a later pass.
+- Import-scan jobs renew their leases while running. If a worker stops, the expired lease returns to the queue and the next attempt safely revisits persisted entries while continuing remaining files.
 - Import uses move semantics: after the managed original and database records are finalized successfully, Strife removes the source file and then prunes empty source directories. A failure leaves the source in place.
 - Once a source has moved out of the inbox, Strife does not monitor its former path. A later file placed at that path is a new import attempt, but v1 never overwrites an existing node.
 - Name conflicts and other failures become persistent import-entry errors. They do not block unrelated files and can be retried after the user resolves the cause.

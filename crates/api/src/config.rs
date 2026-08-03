@@ -12,6 +12,7 @@ pub struct Config {
     pub tika_url: String,
     pub upload_session_ttl_hours: u64,
     pub disk_guard_percent: u8,
+    pub run_migrations: bool,
 }
 
 impl Config {
@@ -37,6 +38,11 @@ impl Config {
         }
         let disk_guard_percent =
             parse_disk_guard_percent(env::var("DISK_GUARD_PERCENT").ok().as_deref())?;
+        let run_migrations = parse_bool(
+            "RUN_MIGRATIONS",
+            env::var("RUN_MIGRATIONS").ok().as_deref(),
+            true,
+        )?;
 
         Ok(Self {
             database_url,
@@ -45,7 +51,17 @@ impl Config {
             tika_url,
             upload_session_ttl_hours,
             disk_guard_percent,
+            run_migrations,
         })
+    }
+}
+
+fn parse_bool(name: &str, value: Option<&str>, default: bool) -> Result<bool> {
+    match value {
+        None => Ok(default),
+        Some("true" | "1" | "yes" | "on") => Ok(true),
+        Some("false" | "0" | "no" | "off") => Ok(false),
+        Some(_) => bail!("{name} must be true or false"),
     }
 }
 
@@ -84,7 +100,7 @@ fn validate_http_url(name: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_disk_guard_percent, validate_http_url};
+    use super::{parse_bool, parse_disk_guard_percent, validate_http_url};
 
     #[test]
     fn accepts_absolute_http_urls() {
@@ -104,5 +120,13 @@ mod tests {
         assert_eq!(parse_disk_guard_percent(Some("87")).expect("custom"), 87);
         assert!(parse_disk_guard_percent(Some("0")).is_err());
         assert!(parse_disk_guard_percent(Some("101")).is_err());
+    }
+
+    #[test]
+    fn migration_toggle_defaults_on_and_parses_explicit_values() {
+        assert!(parse_bool("RUN_MIGRATIONS", None, true).expect("default"));
+        assert!(!parse_bool("RUN_MIGRATIONS", Some("false"), true).expect("disabled"));
+        assert!(parse_bool("RUN_MIGRATIONS", Some("1"), false).expect("enabled"));
+        assert!(parse_bool("RUN_MIGRATIONS", Some("sometimes"), true).is_err());
     }
 }

@@ -72,15 +72,25 @@ export function FileTable(props: FileTableProps) {
     return props.sortOrder === 'desc' ? ' ↓' : ' ↑'
   }
 
-  const headerButton = (column: FileTableSortColumn, label: string) => (
-    <button
-      type="button"
-      class="file-table__sort"
-      onClick={() => props.onSort?.(column)}
+  const sortableHeader = (column: FileTableSortColumn, label: string) => (
+    <th
+      aria-sort={
+        props.sortColumn === column
+          ? props.sortOrder === 'desc'
+            ? 'descending'
+            : 'ascending'
+          : 'none'
+      }
     >
-      {label}
-      {sortIndicator(column)}
-    </button>
+      <button
+        type="button"
+        class="file-table__sort"
+        onClick={() => props.onSort?.(column)}
+      >
+        {label}
+        {sortIndicator(column)}
+      </button>
+    </th>
   )
 
   const clearSelection = () => {
@@ -235,13 +245,11 @@ export function FileTable(props: FileTableProps) {
   }
 
   return (
-    <div class="file-table-wrap">
+    <div class="file-table-wrap" aria-busy={props.loading}>
       <Show when={selectedCount() > 0}>
         <div class="file-table-selection" role="status">
-          <span>
-            {selectedCount()} {selectedCount() === 1 ? 'item' : 'items'}{' '}
-            selected
-          </span>
+          <span>{selectedCount()} selected</span>
+          <span class="file-table-selection__divider" aria-hidden="true" />
           <div class="file-table-selection__actions">
             <Show when={props.trashMode}>
               <button
@@ -352,6 +360,7 @@ export function FileTable(props: FileTableProps) {
             }
           >
             <table class="file-table">
+              <caption class="sr-only">Files and folders</caption>
               <thead>
                 <tr>
                   <th class="file-table__check">
@@ -372,10 +381,10 @@ export function FileTable(props: FileTableProps) {
                   <th class="file-table__favorite">
                     <span class="sr-only">Favorite</span>
                   </th>
-                  <th>{headerButton('name', 'Name')}</th>
-                  <th>{headerButton('kind', 'Kind')}</th>
-                  <th>{headerButton('size', 'Size')}</th>
-                  <th>{headerButton('updated_at', 'Date Modified')}</th>
+                  {sortableHeader('name', 'Name')}
+                  {sortableHeader('kind', 'Kind')}
+                  {sortableHeader('size', 'Size')}
+                  {sortableHeader('updated_at', 'Date Modified')}
                 </tr>
               </thead>
               <tbody>
@@ -394,7 +403,22 @@ export function FileTable(props: FileTableProps) {
                           ? props.onPreview?.(item)
                           : openFolder(item)
                       }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          if (item.kind === 'file') {
+                            props.onPreview?.(item)
+                          } else {
+                            openFolder(item)
+                          }
+                        } else if (event.key === ' ') {
+                          event.preventDefault()
+                          toggleItem(item.id)
+                          setAnchorId(item.id)
+                        }
+                      }}
                       data-kind={item.kind}
+                      tabIndex={0}
                     >
                       <td class="file-table__check">
                         <input
@@ -504,7 +528,12 @@ function FolderEmptyIcon() {
 
 function FileTableSkeleton() {
   return (
-    <div class="file-table-skeleton" aria-label="Loading folder contents">
+    <div
+      class="file-table-skeleton"
+      role="status"
+      aria-label="Loading folder contents"
+    >
+      <span class="sr-only">Loading folder contents…</span>
       <For each={[1, 2, 3, 4, 5]}>
         {() => (
           <div class="file-table-skeleton__row">

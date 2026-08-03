@@ -1,11 +1,13 @@
 use chrono::Utc;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use strife_db::{
     DEFAULT_IMPORT_SOURCE_ID, ImportEntryState, MIGRATOR, ROOT_NODE_ID, UpsertImportEntry,
     get_import_source, list_pending_entries, mark_import_failed, mark_imported,
     upsert_import_entry,
 };
 use uuid::Uuid;
+
+const IMPORT_TEST_LOCK_KEY: i64 = 0x5354_5249_4645;
 
 async fn test_pool() -> Option<PgPool> {
     let database_url = std::env::var("DATABASE_URL").ok()?;
@@ -18,12 +20,23 @@ async fn test_pool() -> Option<PgPool> {
     Some(pool)
 }
 
+async fn lock_import_suite(pool: &PgPool) -> Transaction<'_, Postgres> {
+    let mut tx = pool.begin().await.expect("begin import suite lock");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(IMPORT_TEST_LOCK_KEY)
+        .execute(&mut *tx)
+        .await
+        .expect("acquire import suite lock");
+    tx
+}
+
 #[tokio::test]
 async fn fixed_source_and_entry_lifecycle_are_persisted() {
     let Some(pool) = test_pool().await else {
         eprintln!("DATABASE_URL is unset; skipping PostgreSQL integration test");
         return;
     };
+    let _import_lock = lock_import_suite(&pool).await;
     let source = get_import_source(&pool, DEFAULT_IMPORT_SOURCE_ID)
         .await
         .expect("load source")

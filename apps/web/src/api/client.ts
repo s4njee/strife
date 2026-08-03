@@ -17,7 +17,79 @@ import type {
   PreviewJobStatus,
   ReadinessResponse,
   UploadSession,
+  FileText,
+  OcrStatus,
+  TextSearchResponse,
 } from './types'
+
+export async function getOcrStatus(signal?: AbortSignal): Promise<OcrStatus> {
+  const response = await fetch('/api/ocr/status', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`OCR status failed (${response.status}).`)
+  return (await response.json()) as OcrStatus
+}
+
+export async function reprocessOcr(options: {
+  scope: 'node' | 'failed' | 'version'
+  nodeId?: string
+}): Promise<number> {
+  const params = new URLSearchParams({ extractor: 'ocr', scope: options.scope })
+  if (options.nodeId) params.set('node_id', options.nodeId)
+  const response = await fetch(`/api/admin/reprocess?${params.toString()}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok)
+    throw new ApiClientError(`OCR reprocessing failed (${response.status}).`)
+  const body = (await response.json()) as { enqueued?: unknown }
+  if (typeof body.enqueued !== 'number')
+    throw new ApiClientError('OCR reprocessing response was invalid.')
+  return body.enqueued
+}
+
+export async function getFileText(
+  fileId: string,
+  afterPage?: number,
+  signal?: AbortSignal,
+): Promise<FileText> {
+  const params = new URLSearchParams()
+  if (afterPage) params.set('after_page', afterPage.toString())
+  const suffix = params.size > 0 ? `?${params.toString()}` : ''
+  const response = await fetch(`/api/files/${fileId}/text${suffix}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Document text failed (${response.status}).`)
+  return (await response.json()) as FileText
+}
+
+export async function getAllFileText(fileId: string): Promise<FileText> {
+  let result = await getFileText(fileId)
+  const pages = [...result.pages]
+  while (result.next_page !== null) {
+    result = await getFileText(fileId, result.next_page)
+    pages.push(...result.pages)
+  }
+  return { ...result, pages }
+}
+
+export async function searchDocumentText(
+  query: string,
+  signal?: AbortSignal,
+): Promise<TextSearchResponse> {
+  const params = new URLSearchParams({ q: query })
+  const response = await fetch(`/api/search?${params.toString()}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Text search failed (${response.status}).`)
+  return (await response.json()) as TextSearchResponse
+}
 
 export async function prepareFilePreview(
   fileId: string,
@@ -983,13 +1055,8 @@ function isImportEntry(value: unknown): value is ImportEntry {
 function isImportScanResult(value: unknown): value is ImportScanResult {
   return (
     isRecord(value) &&
-    [
-      'discovered',
-      'imported',
-      'failed',
-      'skipped_hidden',
-      'skipped_special',
-    ].every((key) => typeof value[key] === 'number')
+    typeof value.job_id === 'string' &&
+    ['pending', 'leased'].includes(String(value.status))
   )
 }
 

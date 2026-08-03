@@ -5,6 +5,7 @@ import {
   retryImportEntry,
 } from '../api/client'
 import type { ImportEntry } from '../api/types'
+import { CommandBar } from '../components/CommandBar'
 import './ErrorsView.css'
 
 const DEFAULT_SOURCE = '00000000-0000-0000-0000-000000000003'
@@ -76,6 +77,7 @@ export function ErrorsView() {
           </Show>
         </Show>
       </div>
+      <CommandBar />
     </section>
   )
 }

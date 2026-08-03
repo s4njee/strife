@@ -61,6 +61,131 @@ pub enum ImportEntryState {
     Failed,
 }
 
+/// Provenance of text persisted for a document.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "document_text_source", rename_all = "lowercase")]
+pub enum DocumentTextSource {
+    Embedded,
+    Ocr,
+}
+
+/// Durable extraction state for a document's text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "document_text_status", rename_all = "lowercase")]
+pub enum DocumentTextStatus {
+    Pending,
+    Completed,
+    Failed,
+    Skipped,
+    Unsupported,
+}
+
+/// One document-level text extraction record.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct DocumentTextRecord {
+    pub node_id: Uuid,
+    pub source: DocumentTextSource,
+    pub status: DocumentTextStatus,
+    pub language: String,
+    pub engine_name: String,
+    pub engine_version: String,
+    pub page_count: Option<i32>,
+    pub mean_confidence: Option<f32>,
+    pub char_count: i32,
+    pub warnings: Vec<String>,
+    pub duration_ms: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One page of embedded or OCR-produced text.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct DocumentTextPageRecord {
+    pub id: Uuid,
+    pub node_id: Uuid,
+    pub page_number: i32,
+    pub content: String,
+    pub confidence: Option<f32>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
+/// Document-level values persisted by an extraction attempt.
+pub struct UpsertDocumentText<'a> {
+    pub node_id: Uuid,
+    pub source: DocumentTextSource,
+    pub status: DocumentTextStatus,
+    pub language: &'a str,
+    pub engine_name: &'a str,
+    pub engine_version: &'a str,
+    pub page_count: Option<i32>,
+    pub mean_confidence: Option<f32>,
+    pub char_count: i32,
+    pub warnings: &'a [String],
+    pub duration_ms: Option<i64>,
+}
+
+/// Page values used when atomically replacing a document's text.
+pub struct DocumentTextPageInput<'a> {
+    pub page_number: i32,
+    pub content: &'a str,
+    pub confidence: Option<f32>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
+/// Number of document text records in one durable state.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct DocumentTextStatusCount {
+    pub status: DocumentTextStatus,
+    pub count: i64,
+}
+
+/// OCR engine identity reported by the active worker.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct OcrEngineState {
+    pub engine_name: String,
+    pub engine_version: String,
+    pub language: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Durable per-file OCR activity used by the event stream.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct OcrEventRecord {
+    pub id: i64,
+    pub node_id: Option<Uuid>,
+    pub node_name: String,
+    pub state: String,
+    pub page_count: Option<i32>,
+    pub mean_confidence: Option<f32>,
+    pub warning: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One ranked page-level document text match.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct DocumentTextSearchResult {
+    pub cursor_id: Uuid,
+    pub node_id: Uuid,
+    pub node_name: String,
+    pub page_number: i32,
+    pub snippet: String,
+    pub score: f32,
+}
+
+/// Indexed aggregate OCR workload and durable outcome counts.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct OcrStatusCounts {
+    pub pending: i64,
+    pub running: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+    pub unsupported: i64,
+    pub remaining: i64,
+}
+
 /// Kind of durable background work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "job_type", rename_all = "snake_case")]
@@ -69,6 +194,8 @@ pub enum JobType {
     PreviewGeneration,
     TrashCleanup,
     PermanentDeletion,
+    ImportScan,
+    Ocr,
 }
 
 /// Lifecycle state of a durable background job.
@@ -80,6 +207,50 @@ pub enum JobState {
     Completed,
     Failed,
     Cancelled,
+    Skipped,
+}
+
+/// Why a job entered the queue. Claiming always favors interactive work.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "job_origin", rename_all = "snake_case")]
+pub enum JobOrigin {
+    Foreground,
+    Repair,
+    Backfill,
+}
+
+/// Shared capacity pool consumed by a job while it is leased.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "job_resource_class", rename_all = "snake_case")]
+pub enum JobResourceClass {
+    Light,
+    Extractor,
+    Preview,
+    HeavyCpu,
+    HeavyIo,
+}
+
+/// A bounded historical enrichment workload.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "backfill_kind", rename_all = "snake_case")]
+pub enum BackfillKind {
+    Email,
+    Ocr,
+    AttachmentText,
+    AttachmentOcr,
+}
+
+/// Durable operator-controlled lifecycle for a backfill campaign.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "backfill_state", rename_all = "snake_case")]
+pub enum BackfillState {
+    Draft,
+    Paused,
+    Running,
+    Draining,
+    Completed,
+    Cancelled,
+    Failed,
 }
 
 /// Persisted kind of an audio-visual stream.
@@ -221,13 +392,411 @@ pub async fn replace_media_streams(
     transaction.commit().await
 }
 
+/// Creates or replaces the document-level state for one node.
+///
+/// # Errors
+///
+/// Returns a database error when the document text record cannot be persisted.
+pub async fn upsert_document_text(
+    pool: &PgPool,
+    input: &UpsertDocumentText<'_>,
+) -> Result<DocumentTextRecord, sqlx::Error> {
+    sqlx::query_as::<_, DocumentTextRecord>(
+        r"
+        INSERT INTO document_text (
+            node_id, source, status, language, engine_name, engine_version,
+            page_count, mean_confidence, char_count, warnings, duration_ms
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (node_id) DO UPDATE SET
+            source = EXCLUDED.source,
+            status = EXCLUDED.status,
+            language = EXCLUDED.language,
+            engine_name = EXCLUDED.engine_name,
+            engine_version = EXCLUDED.engine_version,
+            page_count = EXCLUDED.page_count,
+            mean_confidence = EXCLUDED.mean_confidence,
+            char_count = EXCLUDED.char_count,
+            warnings = EXCLUDED.warnings,
+            duration_ms = EXCLUDED.duration_ms,
+            updated_at = now()
+        RETURNING *
+        ",
+    )
+    .bind(input.node_id)
+    .bind(input.source)
+    .bind(input.status)
+    .bind(input.language)
+    .bind(input.engine_name)
+    .bind(input.engine_version)
+    .bind(input.page_count)
+    .bind(input.mean_confidence)
+    .bind(input.char_count)
+    .bind(input.warnings)
+    .bind(input.duration_ms)
+    .fetch_one(pool)
+    .await
+}
+
+/// Atomically replaces every stored page for one document.
+///
+/// # Errors
+///
+/// Returns a database error and rolls back when the complete replacement
+/// cannot be committed.
+pub async fn replace_document_text_pages(
+    pool: &PgPool,
+    node_id: Uuid,
+    pages: &[DocumentTextPageInput<'_>],
+) -> Result<Vec<DocumentTextPageRecord>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("DELETE FROM document_text_pages WHERE node_id = $1")
+        .bind(node_id)
+        .execute(&mut *transaction)
+        .await?;
+    let mut stored = Vec::with_capacity(pages.len());
+    for page in pages {
+        stored.push(
+            sqlx::query_as::<_, DocumentTextPageRecord>(
+                r"
+                INSERT INTO document_text_pages (
+                    id, node_id, page_number, content, confidence, width, height
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING *
+                ",
+            )
+            .bind(Uuid::new_v4())
+            .bind(node_id)
+            .bind(page.page_number)
+            .bind(page.content)
+            .bind(page.confidence)
+            .bind(page.width)
+            .bind(page.height)
+            .fetch_one(&mut *transaction)
+            .await?,
+        );
+    }
+    transaction.commit().await?;
+    Ok(stored)
+}
+
+/// Atomically upserts document-level text state and replaces every page.
+///
+/// # Errors
+///
+/// Returns a database error and rolls back the entire document/page update when any row fails.
+pub async fn replace_document_text(
+    pool: &PgPool,
+    input: &UpsertDocumentText<'_>,
+    pages: &[DocumentTextPageInput<'_>],
+) -> Result<DocumentTextRecord, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let record = sqlx::query_as::<_, DocumentTextRecord>(
+        r"
+        INSERT INTO document_text (
+            node_id, source, status, language, engine_name, engine_version,
+            page_count, mean_confidence, char_count, warnings, duration_ms
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (node_id) DO UPDATE SET
+            source = EXCLUDED.source, status = EXCLUDED.status,
+            language = EXCLUDED.language, engine_name = EXCLUDED.engine_name,
+            engine_version = EXCLUDED.engine_version, page_count = EXCLUDED.page_count,
+            mean_confidence = EXCLUDED.mean_confidence, char_count = EXCLUDED.char_count,
+            warnings = EXCLUDED.warnings, duration_ms = EXCLUDED.duration_ms,
+            updated_at = now()
+        RETURNING *
+        ",
+    )
+    .bind(input.node_id)
+    .bind(input.source)
+    .bind(input.status)
+    .bind(input.language)
+    .bind(input.engine_name)
+    .bind(input.engine_version)
+    .bind(input.page_count)
+    .bind(input.mean_confidence)
+    .bind(input.char_count)
+    .bind(input.warnings)
+    .bind(input.duration_ms)
+    .fetch_one(&mut *transaction)
+    .await?;
+    sqlx::query("DELETE FROM document_text_pages WHERE node_id = $1")
+        .bind(input.node_id)
+        .execute(&mut *transaction)
+        .await?;
+    for page in pages {
+        sqlx::query(
+            r"
+            INSERT INTO document_text_pages (
+                id, node_id, page_number, content, confidence, width, height
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ",
+        )
+        .bind(Uuid::new_v4())
+        .bind(input.node_id)
+        .bind(page.page_number)
+        .bind(page.content)
+        .bind(page.confidence)
+        .bind(page.width)
+        .bind(page.height)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(record)
+}
+
+/// Fetches the document-level text state for one node.
+///
+/// # Errors
+///
+/// Returns a database error when the record cannot be queried.
+pub async fn get_document_text(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Option<DocumentTextRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DocumentTextRecord>("SELECT * FROM document_text WHERE node_id = $1")
+        .bind(node_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Lists stored pages for one node in source order.
+///
+/// # Errors
+///
+/// Returns a database error when pages cannot be queried.
+pub async fn list_document_text_pages(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Vec<DocumentTextPageRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DocumentTextPageRecord>(
+        "SELECT * FROM document_text_pages WHERE node_id = $1 ORDER BY page_number",
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Counts document text records by durable status.
+///
+/// # Errors
+///
+/// Returns a database error when status counts cannot be queried.
+pub async fn count_document_text_by_status(
+    pool: &PgPool,
+) -> Result<Vec<DocumentTextStatusCount>, sqlx::Error> {
+    sqlx::query_as::<_, DocumentTextStatusCount>(
+        r"
+        SELECT status, count(*) AS count
+        FROM document_text
+        GROUP BY status
+        ORDER BY status
+        ",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Records the OCR engine identity verified by the active worker.
+///
+/// # Errors
+///
+/// Returns a database error when the singleton state cannot be persisted.
+pub async fn set_ocr_engine_state(
+    pool: &PgPool,
+    engine_name: &str,
+    engine_version: &str,
+    language: &str,
+) -> Result<OcrEngineState, sqlx::Error> {
+    sqlx::query_as::<_, OcrEngineState>(
+        r"
+        INSERT INTO ocr_engine_state (singleton, engine_name, engine_version, language)
+        VALUES (TRUE, $1, $2, $3)
+        ON CONFLICT (singleton) DO UPDATE SET
+            engine_name = EXCLUDED.engine_name,
+            engine_version = EXCLUDED.engine_version,
+            language = EXCLUDED.language,
+            updated_at = now()
+        RETURNING engine_name, engine_version, language, updated_at
+        ",
+    )
+    .bind(engine_name)
+    .bind(engine_version)
+    .bind(language)
+    .fetch_one(pool)
+    .await
+}
+
+/// Loads the currently verified OCR engine identity.
+///
+/// # Errors
+///
+/// Returns a database error when the state cannot be queried.
+pub async fn get_ocr_engine_state(pool: &PgPool) -> Result<Option<OcrEngineState>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT engine_name, engine_version, language, updated_at FROM ocr_engine_state WHERE singleton",
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+/// Appends a bounded OCR lifecycle event and returns its cursor-bearing record.
+///
+/// # Errors
+///
+/// Returns a database error when the event cannot be written.
+pub async fn append_ocr_event(
+    pool: &PgPool,
+    node_id: Uuid,
+    state: &str,
+    page_count: Option<i32>,
+    mean_confidence: Option<f32>,
+    warning: Option<&str>,
+) -> Result<OcrEventRecord, sqlx::Error> {
+    sqlx::query_as::<_, OcrEventRecord>(
+        r"
+        INSERT INTO ocr_events (
+            node_id, node_name, state, page_count, mean_confidence, warning
+        )
+        SELECT id, name, $2, $3, $4, $5 FROM nodes WHERE id = $1
+        RETURNING id, node_id, node_name, state, page_count, mean_confidence,
+                  warning, created_at
+        ",
+    )
+    .bind(node_id)
+    .bind(state)
+    .bind(page_count)
+    .bind(mean_confidence)
+    .bind(warning)
+    .fetch_one(pool)
+    .await
+}
+
+/// Lists OCR events after a monotonically increasing cursor.
+///
+/// # Errors
+///
+/// Returns a database error when event history cannot be queried.
+pub async fn list_ocr_events_after(
+    pool: &PgPool,
+    after_id: i64,
+    limit: i64,
+) -> Result<Vec<OcrEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, OcrEventRecord>(
+        r"
+        SELECT id, node_id, node_name, state, page_count, mean_confidence,
+               warning, created_at
+        FROM ocr_events
+        WHERE id > $1
+        ORDER BY id
+        LIMIT $2
+        ",
+    )
+    .bind(after_id)
+    .bind(limit.clamp(1, 200))
+    .fetch_all(pool)
+    .await
+}
+
+/// Searches indexed English document text and returns stable relevance-ranked pages.
+///
+/// The cursor is the prior page row identifier; its score is recovered inside the query so
+/// pagination remains stable without exposing an offset.
+///
+/// # Errors
+///
+/// Returns a database error when the full-text query cannot be executed.
+pub async fn search_document_text(
+    pool: &PgPool,
+    query: &str,
+    include_trash: bool,
+    cursor: Option<Uuid>,
+    limit: u32,
+) -> Result<Vec<DocumentTextSearchResult>, sqlx::Error> {
+    sqlx::query_as::<_, DocumentTextSearchResult>(
+        r"
+        WITH search_query AS (
+            SELECT websearch_to_tsquery('english', $1) AS value
+        ),
+        ranked AS (
+            SELECT
+                p.id AS cursor_id,
+                n.id AS node_id,
+                n.name AS node_name,
+                p.page_number,
+                ts_headline(
+                    'english', p.content, search_query.value,
+                    'StartSel=<<strife>>, StopSel=<</strife>>, MaxFragments=3, MaxWords=35, MinWords=12'
+                ) AS snippet,
+                ts_rank_cd(p.search_vector, search_query.value) AS score
+            FROM document_text_pages p
+            JOIN nodes n ON n.id = p.node_id
+            CROSS JOIN search_query
+            WHERE p.search_vector @@ search_query.value
+              AND (
+                  (NOT $2 AND n.lifecycle_state = 'active')
+                  OR ($2 AND n.lifecycle_state <> 'deleted')
+              )
+        ),
+        cursor_row AS (
+            SELECT score, cursor_id FROM ranked WHERE cursor_id = $3
+        )
+        SELECT cursor_id, node_id, node_name, page_number, snippet, score
+        FROM ranked
+        WHERE $3::uuid IS NULL
+           OR score < (SELECT score FROM cursor_row)
+           OR (
+               score = (SELECT score FROM cursor_row)
+               AND cursor_id > (SELECT cursor_id FROM cursor_row)
+           )
+        ORDER BY score DESC, cursor_id
+        LIMIT $4
+        ",
+    )
+    .bind(query)
+    .bind(include_trash)
+    .bind(cursor)
+    .bind(i64::from(limit.clamp(1, 100)))
+    .fetch_all(pool)
+    .await
+}
+
+/// Loads OCR status using indexed SQL aggregates without materializing job or text rows.
+///
+/// # Errors
+///
+/// Returns a database error when the aggregate query cannot run.
+pub async fn get_ocr_status_counts(pool: &PgPool) -> Result<OcrStatusCounts, sqlx::Error> {
+    sqlx::query_as::<_, OcrStatusCounts>(
+        r"
+        SELECT
+            (SELECT count(*) FROM jobs WHERE job_type = 'ocr' AND state = 'pending') AS pending,
+            (SELECT count(*) FROM jobs WHERE job_type = 'ocr' AND state = 'leased') AS running,
+            (SELECT count(*) FROM document_text WHERE status = 'completed' AND source = 'ocr') AS completed,
+            (SELECT count(*) FROM document_text WHERE status = 'failed') AS failed,
+            (SELECT count(*) FROM document_text WHERE status = 'skipped' OR (status = 'completed' AND source = 'embedded')) AS skipped,
+            (SELECT count(*) FROM document_text WHERE status = 'unsupported') AS unsupported,
+            (SELECT count(*) FROM jobs WHERE job_type = 'ocr' AND state IN ('pending', 'leased')) AS remaining
+        ",
+    )
+    .fetch_one(pool)
+    .await
+}
+
 /// One durable background job.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct JobRecord {
     pub id: Uuid,
     pub job_type: JobType,
     pub target_node_id: Uuid,
+    pub import_source_id: Option<Uuid>,
     pub state: JobState,
+    pub origin: JobOrigin,
+    pub campaign_id: Option<Uuid>,
+    pub resource_class: JobResourceClass,
     pub priority: i32,
     pub attempts: i32,
     pub max_attempts: i32,
@@ -237,6 +806,370 @@ pub struct JobRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Durable campaign configuration, cursor, and aggregate progress.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct BackfillCampaignRecord {
+    pub id: Uuid,
+    pub kind: BackfillKind,
+    pub state: BackfillState,
+    pub candidate_definition: serde_json::Value,
+    pub snapshot_before: Option<DateTime<Utc>>,
+    pub cursor_created_at: Option<DateTime<Utc>>,
+    pub cursor_node_id: Option<Uuid>,
+    pub batch_size: i32,
+    pub max_queued: i32,
+    pub max_running: i32,
+    pub resource_class: JobResourceClass,
+    pub foreground_fairness: i32,
+    pub candidate_count: i64,
+    pub enqueued_count: i64,
+    pub completed_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub created_by_version: String,
+    pub last_error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub paused_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Append-only campaign audit entry, also used as an SSE cursor.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct BackfillCampaignEventRecord {
+    pub id: i64,
+    pub campaign_id: Uuid,
+    pub old_state: Option<BackfillState>,
+    pub new_state: Option<BackfillState>,
+    pub event_type: String,
+    pub reason: Option<String>,
+    pub details: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Low-water information consumed by a kind-specific candidate provider.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct BackfillRefillWindow {
+    pub campaign_id: Uuid,
+    pub batch_size: i32,
+    pub queued: i64,
+    pub allowance: i64,
+}
+
+/// Validated settings used to create an inert draft campaign.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewBackfillCampaign {
+    pub kind: BackfillKind,
+    pub candidate_definition: serde_json::Value,
+    pub batch_size: i32,
+    pub max_queued: i32,
+    pub max_running: i32,
+    pub resource_class: JobResourceClass,
+    pub foreground_fairness: i32,
+    pub created_by_version: String,
+}
+
+/// Creates a draft campaign and its first audit event.
+///
+/// # Errors
+///
+/// Returns a database error when the campaign or event cannot be persisted.
+pub async fn create_backfill_campaign(
+    pool: &PgPool,
+    request: &NewBackfillCampaign,
+) -> Result<BackfillCampaignRecord, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let campaign = sqlx::query_as::<_, BackfillCampaignRecord>(
+        r"
+        INSERT INTO backfill_campaigns (
+            id, kind, candidate_definition, batch_size, max_queued, max_running,
+            resource_class, foreground_fairness, created_by_version
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING *
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(request.kind)
+    .bind(&request.candidate_definition)
+    .bind(request.batch_size)
+    .bind(request.max_queued)
+    .bind(request.max_running)
+    .bind(request.resource_class)
+    .bind(request.foreground_fairness)
+    .bind(&request.created_by_version)
+    .fetch_one(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r"
+        INSERT INTO backfill_campaign_events
+            (campaign_id, new_state, event_type, details)
+        VALUES ($1, 'draft', 'created', $2)
+        ",
+    )
+    .bind(campaign.id)
+    .bind(&request.candidate_definition)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(campaign)
+}
+
+/// Returns all campaigns newest first.
+///
+/// # Errors
+///
+/// Returns a database error when campaigns cannot be queried.
+pub async fn list_backfill_campaigns(
+    pool: &PgPool,
+) -> Result<Vec<BackfillCampaignRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM backfill_campaigns ORDER BY created_at DESC, id DESC")
+        .fetch_all(pool)
+        .await
+}
+
+/// Fetches one campaign.
+///
+/// # Errors
+///
+/// Returns a database error when the campaign cannot be queried.
+pub async fn get_backfill_campaign(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<BackfillCampaignRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM backfill_campaigns WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Records a stable candidate snapshot and leaves the campaign paused.
+///
+/// # Errors
+///
+/// Returns a database error when the campaign or audit event cannot be updated.
+pub async fn prepare_backfill_campaign(
+    pool: &PgPool,
+    id: Uuid,
+    candidate_count: i64,
+    snapshot_before: DateTime<Utc>,
+    reason: Option<&str>,
+) -> Result<Option<BackfillCampaignRecord>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let campaign = sqlx::query_as::<_, BackfillCampaignRecord>(
+        r"
+        UPDATE backfill_campaigns
+        SET state = 'paused', candidate_count = $2, snapshot_before = $3,
+            updated_at = now()
+        WHERE id = $1 AND state = 'draft' AND $2 >= 0
+        RETURNING *
+        ",
+    )
+    .bind(id)
+    .bind(candidate_count)
+    .bind(snapshot_before)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if campaign.is_some() {
+        sqlx::query(
+            r"
+            INSERT INTO backfill_campaign_events
+                (campaign_id, old_state, new_state, event_type, reason,
+                 details)
+            VALUES ($1, 'draft', 'paused', 'prepared', $2,
+                    jsonb_build_object('candidate_count', $3, 'snapshot_before', $4))
+            ",
+        )
+        .bind(id)
+        .bind(reason)
+        .bind(candidate_count)
+        .bind(snapshot_before)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(campaign)
+}
+
+/// Applies an allowed campaign state transition and appends an audit event.
+///
+/// # Errors
+///
+/// Returns a database error when the transition cannot be applied atomically.
+pub async fn transition_backfill_campaign(
+    pool: &PgPool,
+    id: Uuid,
+    target: BackfillState,
+    reason: Option<&str>,
+) -> Result<Option<BackfillCampaignRecord>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let current = sqlx::query_scalar::<_, BackfillState>(
+        "SELECT state FROM backfill_campaigns WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(current) = current else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let allowed = matches!(
+        (current, target),
+        (BackfillState::Paused, BackfillState::Running)
+            | (
+                BackfillState::Running,
+                BackfillState::Paused | BackfillState::Draining
+            )
+            | (
+                BackfillState::Paused | BackfillState::Running | BackfillState::Draining,
+                BackfillState::Cancelled | BackfillState::Failed
+            )
+            | (BackfillState::Draining, BackfillState::Completed)
+    );
+    if !allowed {
+        transaction.commit().await?;
+        return Ok(None);
+    }
+    let _campaign = sqlx::query_as::<_, BackfillCampaignRecord>(
+        r"
+        UPDATE backfill_campaigns
+        SET state = $2, updated_at = now(),
+            started_at = CASE WHEN $2 = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
+            paused_at = CASE WHEN $2 = 'paused' THEN now() ELSE paused_at END,
+            completed_at = CASE WHEN $2 IN ('completed', 'cancelled', 'failed') THEN now() ELSE completed_at END,
+            last_error = CASE WHEN $2 = 'failed' THEN $3 ELSE last_error END
+        WHERE id = $1
+        RETURNING *
+        ",
+    )
+    .bind(id)
+    .bind(target)
+    .bind(reason)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if target == BackfillState::Cancelled {
+        sqlx::query(
+            r"
+            UPDATE jobs
+            SET state = 'skipped', last_error = 'campaign cancelled',
+                completed_at = now(), updated_at = now()
+            WHERE campaign_id = $1 AND state = 'pending'
+            ",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    sqlx::query(
+        r"
+        INSERT INTO backfill_campaign_events
+            (campaign_id, old_state, new_state, event_type, reason)
+        VALUES ($1, $2, $3, 'state_changed', $4)
+        ",
+    )
+    .bind(id)
+    .bind(current)
+    .bind(target)
+    .bind(reason)
+    .execute(&mut *transaction)
+    .await?;
+    let campaign = sqlx::query_as::<_, BackfillCampaignRecord>(
+        "SELECT * FROM backfill_campaigns WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(Some(campaign))
+}
+
+/// Returns campaign events after an SSE cursor.
+///
+/// # Errors
+///
+/// Returns a database error when campaign events cannot be queried.
+pub async fn list_backfill_campaign_events_after(
+    pool: &PgPool,
+    campaign_id: Option<Uuid>,
+    after_id: i64,
+    limit: i64,
+) -> Result<Vec<BackfillCampaignEventRecord>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        SELECT * FROM backfill_campaign_events
+        WHERE id > $1 AND ($2::uuid IS NULL OR campaign_id = $2)
+        ORDER BY id
+        LIMIT $3
+        ",
+    )
+    .bind(after_id)
+    .bind(campaign_id)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(pool)
+    .await
+}
+
+/// Computes how many candidates a kind-specific scheduler may enqueue.
+///
+/// # Errors
+///
+/// Returns a database error when campaign queue depth cannot be queried.
+pub async fn get_backfill_refill_window(
+    pool: &PgPool,
+    campaign_id: Uuid,
+) -> Result<Option<BackfillRefillWindow>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        SELECT c.id AS campaign_id, c.batch_size,
+               count(j.id) FILTER (WHERE j.state IN ('pending', 'leased')) AS queued,
+               LEAST(
+                   c.batch_size::bigint,
+                   GREATEST(c.max_queued::bigint - count(j.id) FILTER (
+                       WHERE j.state IN ('pending', 'leased')
+                   ), 0)
+               ) AS allowance
+        FROM backfill_campaigns c
+        LEFT JOIN jobs j ON j.campaign_id = c.id
+        WHERE c.id = $1 AND c.state = 'running'
+        GROUP BY c.id
+        ",
+    )
+    .bind(campaign_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Persists a scheduler cursor and aggregate enqueue count after one batch.
+///
+/// # Errors
+///
+/// Returns a database error when campaign progress cannot be updated.
+pub async fn record_backfill_batch(
+    pool: &PgPool,
+    campaign_id: Uuid,
+    enqueued: i64,
+    cursor_created_at: Option<DateTime<Utc>>,
+    cursor_node_id: Option<Uuid>,
+) -> Result<Option<BackfillCampaignRecord>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        UPDATE backfill_campaigns
+        SET enqueued_count = enqueued_count + $2,
+            cursor_created_at = COALESCE($3, cursor_created_at),
+            cursor_node_id = COALESCE($4, cursor_node_id), updated_at = now()
+        WHERE id = $1 AND state = 'running' AND $2 >= 0
+        RETURNING *
+        ",
+    )
+    .bind(campaign_id)
+    .bind(enqueued)
+    .bind(cursor_created_at)
+    .bind(cursor_node_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Enqueues work unless the target already has a pending or leased job of this type.
@@ -250,10 +1183,44 @@ pub async fn enqueue_job(
     target_node_id: Uuid,
     priority: i32,
 ) -> Result<Option<JobRecord>, sqlx::Error> {
+    enqueue_job_with_context(
+        pool,
+        job_type,
+        target_node_id,
+        priority,
+        JobOrigin::Foreground,
+        None,
+        default_resource_class(job_type),
+    )
+    .await
+}
+
+/// Enqueues work with explicit provenance and capacity classification.
+///
+/// Backfill work must name its campaign; non-backfill work must not.
+///
+/// # Errors
+///
+/// Returns a database error when the contextual job cannot be inserted.
+pub async fn enqueue_job_with_context(
+    pool: &PgPool,
+    job_type: JobType,
+    target_node_id: Uuid,
+    priority: i32,
+    origin: JobOrigin,
+    campaign_id: Option<Uuid>,
+    resource_class: JobResourceClass,
+) -> Result<Option<JobRecord>, sqlx::Error> {
     sqlx::query_as::<_, JobRecord>(
         r"
-        INSERT INTO jobs (id, job_type, target_node_id, priority)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO jobs (
+            id, job_type, target_node_id, priority, max_attempts,
+            origin, campaign_id, resource_class
+        )
+        VALUES (
+            $1, $2, $3, $4, CASE WHEN $2 = 'ocr'::job_type THEN 5 ELSE 3 END,
+            $5, $6, $7
+        )
         ON CONFLICT DO NOTHING
         RETURNING *
         ",
@@ -262,8 +1229,115 @@ pub async fn enqueue_job(
     .bind(job_type)
     .bind(target_node_id)
     .bind(priority)
+    .bind(origin)
+    .bind(campaign_id)
+    .bind(resource_class)
     .fetch_optional(pool)
     .await
+}
+
+/// Default capacity pool for ordinary foreground jobs.
+#[must_use]
+pub const fn default_resource_class(job_type: JobType) -> JobResourceClass {
+    match job_type {
+        JobType::MetadataExtraction => JobResourceClass::Extractor,
+        JobType::PreviewGeneration => JobResourceClass::Preview,
+        JobType::Ocr => JobResourceClass::HeavyCpu,
+        JobType::ImportScan => JobResourceClass::HeavyIo,
+        JobType::TrashCleanup | JobType::PermanentDeletion => JobResourceClass::Light,
+    }
+}
+
+/// Marks a leased job skipped and records the reason it required no processing.
+///
+/// # Errors
+///
+/// Returns a database error when the job cannot be updated.
+pub async fn skip_job(
+    pool: &PgPool,
+    job_id: Uuid,
+    reason: &str,
+) -> Result<Option<JobRecord>, sqlx::Error> {
+    let job = sqlx::query_as::<_, JobRecord>(
+        r"
+        UPDATE jobs
+        SET state = 'skipped', lease_owner = NULL, lease_expires_at = NULL,
+            last_error = $2, completed_at = now(), updated_at = now()
+        WHERE id = $1 AND state = 'leased'
+        RETURNING *
+        ",
+    )
+    .bind(job_id)
+    .bind(reason)
+    .fetch_optional(pool)
+    .await?;
+    if job.is_some() {
+        release_resource_lease(pool, job_id).await?;
+    }
+    Ok(job)
+}
+
+/// Enqueues a durable scan for an enabled import source, or returns the scan
+/// that is already pending or leased for that source.
+///
+/// Locking the source row makes concurrent requests idempotent even when one
+/// request has to wait for another transaction to commit its job.
+///
+/// # Errors
+///
+/// Returns a database error when the source or queue cannot be queried.
+pub async fn enqueue_import_scan(
+    pool: &PgPool,
+    source_id: Uuid,
+) -> Result<Option<JobRecord>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let source = sqlx::query_as::<_, ImportSourceRecord>(
+        "SELECT * FROM import_sources WHERE id = $1 AND enabled FOR UPDATE",
+    )
+    .bind(source_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(source) = source else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+
+    let inserted = sqlx::query_as::<_, JobRecord>(
+        r"
+        INSERT INTO jobs (
+            id, job_type, target_node_id, import_source_id, priority, max_attempts, resource_class
+        )
+        VALUES ($1, 'import_scan', $2, $3, 20, 10, 'heavy_io')
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(source.destination_folder_id)
+    .bind(source.id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let job = match inserted {
+        Some(job) => job,
+        None => {
+            sqlx::query_as::<_, JobRecord>(
+                r"
+                SELECT * FROM jobs
+                WHERE job_type = 'import_scan'
+                  AND import_source_id = $1
+                  AND state IN ('pending', 'leased')
+                ORDER BY created_at, id
+                LIMIT 1
+                ",
+            )
+            .bind(source.id)
+            .fetch_one(&mut *transaction)
+            .await?
+        }
+    };
+    transaction.commit().await?;
+    Ok(Some(job))
 }
 
 /// Atomically leases the highest-priority pending job of the requested type.
@@ -284,7 +1358,23 @@ pub async fn claim_job(
             SELECT id
             FROM jobs
             WHERE job_type = $1 AND state = 'pending'
-            ORDER BY priority DESC, created_at, id
+              AND (
+                origin <> 'backfill'
+                OR EXISTS (
+                    SELECT 1
+                    FROM backfill_campaigns c
+                    WHERE c.id = jobs.campaign_id
+                      AND c.state = 'running'
+                      AND (SELECT count(*) FROM jobs active
+                           WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running
+                )
+              )
+            ORDER BY CASE origin
+                         WHEN 'foreground' THEN 0
+                         WHEN 'repair' THEN 1
+                         WHEN 'backfill' THEN 2
+                     END,
+                     priority DESC, created_at, id
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )
@@ -303,13 +1393,198 @@ pub async fn claim_job(
     .await
 }
 
+/// Claims a job and, for constrained resource classes, a shared capacity slot
+/// in the same transaction. No job is leased when its resource pool is full.
+///
+/// # Errors
+///
+/// Returns a database error when the queue, fairness state, or resource slot
+/// cannot be queried or updated atomically.
+#[allow(clippy::too_many_lines)]
+pub async fn claim_job_with_resource_lease(
+    pool: &PgPool,
+    job_type: JobType,
+    owner: &str,
+    lease_ttl: chrono::Duration,
+) -> Result<Option<JobRecord>, sqlx::Error> {
+    let lease_expires_at = Utc::now() + lease_ttl;
+    let mut transaction = pool.begin().await?;
+    sqlx::query(
+        r"
+        INSERT INTO job_claim_fairness (job_type)
+        VALUES ($1)
+        ON CONFLICT (job_type) DO NOTHING
+        ",
+    )
+    .bind(job_type)
+    .execute(&mut *transaction)
+    .await?;
+    let foreground_claims = sqlx::query_scalar::<_, i32>(
+        r"
+        SELECT foreground_claims_since_backfill
+        FROM job_claim_fairness
+        WHERE job_type = $1
+        FOR UPDATE
+        ",
+    )
+    .bind(job_type)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let candidate = sqlx::query_as::<_, JobRecord>(
+        r"
+        SELECT jobs.*
+        FROM jobs
+        WHERE job_type = $1 AND state = 'pending'
+          AND (
+            origin <> 'backfill'
+            OR EXISTS (
+                SELECT 1 FROM backfill_campaigns c
+                WHERE c.id = jobs.campaign_id AND c.state = 'running'
+                  AND (SELECT count(*) FROM jobs active
+                       WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running
+            )
+          )
+        ORDER BY CASE
+                     WHEN origin = 'backfill' AND $2 >= (
+                         SELECT c.foreground_fairness
+                         FROM backfill_campaigns c
+                         WHERE c.id = jobs.campaign_id
+                     ) THEN -1
+                     ELSE CASE origin
+                     WHEN 'foreground' THEN 0
+                     WHEN 'repair' THEN 1
+                     WHEN 'backfill' THEN 2
+                     END
+                 END,
+                 priority DESC, created_at, id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+        ",
+    )
+    .bind(job_type)
+    .bind(foreground_claims)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(candidate) = candidate else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+
+    if candidate.resource_class != JobResourceClass::Light {
+        let slot = sqlx::query_scalar::<_, i32>(
+            r"
+            WITH available AS (
+                SELECT slot_number
+                FROM worker_resource_leases
+                WHERE resource_class = $1
+                  AND (lease_expires_at IS NULL OR lease_expires_at < now())
+                ORDER BY slot_number
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE worker_resource_leases lease
+            SET lease_owner = $2, job_id = $3, lease_expires_at = $4, updated_at = now()
+            FROM available
+            WHERE lease.resource_class = $1
+              AND lease.slot_number = available.slot_number
+            RETURNING lease.slot_number
+            ",
+        )
+        .bind(candidate.resource_class)
+        .bind(owner)
+        .bind(candidate.id)
+        .bind(lease_expires_at)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if slot.is_none() {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+    }
+
+    let claimed = sqlx::query_as::<_, JobRecord>(
+        r"
+        UPDATE jobs
+        SET state = 'leased', lease_owner = $2, lease_expires_at = $3,
+            attempts = attempts + 1, updated_at = now()
+        WHERE id = $1 AND state = 'pending'
+        RETURNING *
+        ",
+    )
+    .bind(candidate.id)
+    .bind(owner)
+    .bind(lease_expires_at)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if let Some(job) = &claimed {
+        sqlx::query(
+            r"
+            UPDATE job_claim_fairness
+            SET foreground_claims_since_backfill = CASE
+                    WHEN $2 = 'foreground' THEN foreground_claims_since_backfill + 1
+                    WHEN $2 = 'backfill' THEN 0
+                    ELSE foreground_claims_since_backfill
+                END,
+                updated_at = now()
+            WHERE job_type = $1
+            ",
+        )
+        .bind(job_type)
+        .bind(job.origin)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(claimed)
+}
+
+/// Extends a job lease while its owner is still processing long-running work.
+///
+/// # Errors
+///
+/// Returns a database error when the lease cannot be updated.
+pub async fn renew_job_lease(
+    pool: &PgPool,
+    job_id: Uuid,
+    owner: &str,
+    lease_ttl: chrono::Duration,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r"
+        UPDATE jobs
+        SET lease_expires_at = $3, updated_at = now()
+        WHERE id = $1 AND state = 'leased' AND lease_owner = $2
+        ",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .bind(Utc::now() + lease_ttl)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 1 {
+        sqlx::query(
+            r"
+            UPDATE worker_resource_leases
+            SET lease_expires_at = $3, updated_at = now()
+            WHERE job_id = $1 AND lease_owner = $2
+            ",
+        )
+        .bind(job_id)
+        .bind(owner)
+        .bind(Utc::now() + lease_ttl)
+        .execute(pool)
+        .await?;
+    }
+    Ok(result.rows_affected() == 1)
+}
+
 /// Marks a leased job completed and clears its lease.
 ///
 /// # Errors
 ///
 /// Returns a database error when the job cannot be updated.
 pub async fn complete_job(pool: &PgPool, job_id: Uuid) -> Result<Option<JobRecord>, sqlx::Error> {
-    sqlx::query_as::<_, JobRecord>(
+    let job = sqlx::query_as::<_, JobRecord>(
         r"
         UPDATE jobs
         SET state = 'completed', lease_owner = NULL, lease_expires_at = NULL,
@@ -320,7 +1595,11 @@ pub async fn complete_job(pool: &PgPool, job_id: Uuid) -> Result<Option<JobRecor
     )
     .bind(job_id)
     .fetch_optional(pool)
-    .await
+    .await?;
+    if job.is_some() {
+        release_resource_lease(pool, job_id).await?;
+    }
+    Ok(job)
 }
 
 /// Records a failed attempt, retrying until the job reaches `max_attempts`.
@@ -333,7 +1612,7 @@ pub async fn fail_job(
     job_id: Uuid,
     error: &str,
 ) -> Result<Option<JobRecord>, sqlx::Error> {
-    sqlx::query_as::<_, JobRecord>(
+    let job = sqlx::query_as::<_, JobRecord>(
         r"
         UPDATE jobs
         SET state = CASE WHEN attempts >= max_attempts THEN 'failed'::job_state
@@ -347,7 +1626,55 @@ pub async fn fail_job(
     .bind(job_id)
     .bind(error)
     .fetch_optional(pool)
-    .await
+    .await?;
+    if job.is_some() {
+        release_resource_lease(pool, job_id).await?;
+    }
+    Ok(job)
+}
+
+/// Marks a leased job failed without consuming further retry attempts.
+///
+/// # Errors
+///
+/// Returns a database error when the terminal outcome cannot be recorded.
+pub async fn fail_job_terminal(
+    pool: &PgPool,
+    job_id: Uuid,
+    error: &str,
+) -> Result<Option<JobRecord>, sqlx::Error> {
+    let job = sqlx::query_as::<_, JobRecord>(
+        r"
+        UPDATE jobs
+        SET state = 'failed', attempts = max_attempts,
+            lease_owner = NULL, lease_expires_at = NULL, last_error = $2,
+            updated_at = now()
+        WHERE id = $1 AND state = 'leased'
+        RETURNING *
+        ",
+    )
+    .bind(job_id)
+    .bind(error)
+    .fetch_optional(pool)
+    .await?;
+    if job.is_some() {
+        release_resource_lease(pool, job_id).await?;
+    }
+    Ok(job)
+}
+
+async fn release_resource_lease(pool: &PgPool, job_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r"
+        UPDATE worker_resource_leases
+        SET lease_owner = NULL, job_id = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE job_id = $1
+        ",
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Returns expired leases to the pending queue.
@@ -356,6 +1683,15 @@ pub async fn fail_job(
 ///
 /// Returns a database error when expired leases cannot be updated.
 pub async fn release_expired_leases(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    sqlx::query(
+        r"
+        UPDATE worker_resource_leases
+        SET lease_owner = NULL, job_id = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE lease_expires_at < now()
+        ",
+    )
+    .execute(pool)
+    .await?;
     let result = sqlx::query(
         r"
         UPDATE jobs
@@ -395,9 +1731,119 @@ pub async fn enqueue_reprocessing(
     .await?;
     let mut enqueued = 0;
     for node_id in node_ids {
-        if enqueue_job(pool, JobType::MetadataExtraction, node_id, -100)
+        if enqueue_job_with_context(
+            pool,
+            JobType::MetadataExtraction,
+            node_id,
+            -100,
+            JobOrigin::Repair,
+            None,
+            JobResourceClass::Extractor,
+        )
+        .await?
+        .is_some()
+        {
+            enqueued += 1;
+        }
+    }
+    Ok(enqueued)
+}
+
+/// OCR candidate selection for bounded manual reprocessing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OcrReprocessScope {
+    Node(Uuid),
+    Failed,
+    VersionMismatch(String),
+}
+
+/// Enqueues a bounded set of manual OCR jobs, ignoring already-active work.
+///
+/// # Errors
+///
+/// Returns a database error when candidates or the queue cannot be accessed.
+pub async fn enqueue_ocr_reprocessing(
+    pool: &PgPool,
+    scope: &OcrReprocessScope,
+    limit: u32,
+) -> Result<u64, sqlx::Error> {
+    let limit = i64::from(limit.clamp(1, 100));
+    let node_ids = match scope {
+        OcrReprocessScope::Node(node_id) => {
+            sqlx::query_scalar::<_, Uuid>(
+                r"
+                SELECT n.id
+                FROM nodes n
+                JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+                WHERE n.id = $1 AND n.kind = 'file' AND n.lifecycle_state = 'active'
+                LIMIT 1
+                ",
+            )
+            .bind(node_id)
+            .fetch_all(pool)
             .await?
-            .is_some()
+        }
+        OcrReprocessScope::Failed => {
+            sqlx::query_scalar::<_, Uuid>(
+                r"
+                SELECT n.id
+                FROM nodes n
+                JOIN document_text d ON d.node_id = n.id
+                WHERE n.lifecycle_state = 'active' AND d.status = 'failed'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM jobs j
+                      WHERE j.target_node_id = n.id
+                        AND j.job_type = 'ocr'
+                        AND j.state IN ('pending', 'leased')
+                  )
+                ORDER BY d.updated_at, n.id
+                LIMIT $1
+                ",
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        OcrReprocessScope::VersionMismatch(version) => {
+            sqlx::query_scalar::<_, Uuid>(
+                r"
+                SELECT n.id
+                FROM nodes n
+                JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+                LEFT JOIN document_text d ON d.node_id = n.id
+                WHERE n.lifecycle_state = 'active'
+                  AND (d.node_id IS NULL OR d.engine_version <> $1)
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM jobs j
+                      WHERE j.target_node_id = n.id
+                        AND j.job_type = 'ocr'
+                        AND j.state IN ('pending', 'leased')
+                  )
+                ORDER BY d.updated_at NULLS FIRST, n.id
+                LIMIT $2
+                ",
+            )
+            .bind(version)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let mut enqueued = 0;
+    for node_id in node_ids {
+        if enqueue_job_with_context(
+            pool,
+            JobType::Ocr,
+            node_id,
+            -100,
+            JobOrigin::Repair,
+            None,
+            JobResourceClass::HeavyCpu,
+        )
+        .await?
+        .is_some()
         {
             enqueued += 1;
         }
@@ -581,6 +2027,37 @@ pub async fn list_import_entries(
     )
     .bind(source_id)
     .bind(state)
+    .fetch_all(pool)
+    .await
+}
+
+/// Lists import entries changed after a stable event-stream cursor.
+///
+/// The cursor uses both the update timestamp and identifier so entries that
+/// share a database timestamp are delivered exactly once.
+///
+/// # Errors
+///
+/// Returns the database error when entries cannot be queried.
+pub async fn list_import_entry_events_after(
+    pool: &PgPool,
+    source_id: Uuid,
+    updated_after: DateTime<Utc>,
+    id_after: Uuid,
+    limit: i64,
+) -> Result<Vec<ImportEntryRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ImportEntryRecord>(
+        r"
+        SELECT * FROM import_entries
+        WHERE source_id = $1 AND (updated_at, id) > ($2, $3)
+        ORDER BY updated_at, id
+        LIMIT $4
+        ",
+    )
+    .bind(source_id)
+    .bind(updated_after)
+    .bind(id_after)
+    .bind(limit)
     .fetch_all(pool)
     .await
 }
@@ -874,6 +2351,7 @@ pub async fn finalize_import(
     )
     .await?;
     enqueue_metadata_job(&mut transaction, node.id).await?;
+    enqueue_ocr_job_best_effort(&mut transaction, node.id).await;
     sqlx::query(
         r"
         UPDATE import_entries
@@ -1631,6 +3109,7 @@ pub async fn finalize_upload(
     )
     .await?;
     enqueue_metadata_job(&mut transaction, node.id).await?;
+    enqueue_ocr_job_best_effort(&mut transaction, node.id).await;
     complete_upload_session(&mut transaction, session_id, node.id, checksum_sha256).await?;
     transaction.commit().await?;
     Ok(node)
@@ -1751,6 +3230,38 @@ async fn enqueue_metadata_job(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+async fn enqueue_ocr_job_best_effort(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+) {
+    if sqlx::query("SAVEPOINT enqueue_ocr_job")
+        .execute(&mut **transaction)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let inserted = sqlx::query(
+        r"
+        INSERT INTO jobs (id, job_type, target_node_id, priority, max_attempts)
+        VALUES ($1, 'ocr', $2, -10, 5)
+        ON CONFLICT DO NOTHING
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(node_id)
+    .execute(&mut **transaction)
+    .await;
+    if inserted.is_err() {
+        let _ = sqlx::query("ROLLBACK TO SAVEPOINT enqueue_ocr_job")
+            .execute(&mut **transaction)
+            .await;
+    }
+    let _ = sqlx::query("RELEASE SAVEPOINT enqueue_ocr_job")
+        .execute(&mut **transaction)
+        .await;
 }
 
 async fn complete_upload_session(

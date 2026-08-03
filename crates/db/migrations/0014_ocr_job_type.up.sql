@@ -1,0 +1,2 @@
+ALTER TYPE job_type ADD VALUE IF NOT EXISTS 'ocr';
+ALTER TYPE job_state ADD VALUE IF NOT EXISTS 'skipped';
