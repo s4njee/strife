@@ -16,6 +16,8 @@ export const EMPTY_CRITERIA: EmailSearchCriteria = {
   hasAttachment: null,
   includeTrashed: false,
   includeDuplicates: false,
+  threadId: '',
+  duplicateGroup: '',
 }
 
 export function criteriaFromSearch(search: string): EmailSearchCriteria {
@@ -31,6 +33,8 @@ export function criteriaFromSearch(search: string): EmailSearchCriteria {
     hasAttachment: attachment === null ? null : attachment === 'true',
     includeTrashed: params.get('include_trashed') === 'true',
     includeDuplicates: params.get('include_duplicates') === 'true',
+    threadId: params.get('thread_id') ?? '',
+    duplicateGroup: params.get('duplicate_group') ?? '',
   }
 }
 
@@ -55,6 +59,9 @@ export function criteriaToSearch(
     params.set('has_attachment', String(criteria.hasAttachment))
   if (criteria.includeTrashed) params.set('include_trashed', 'true')
   if (criteria.includeDuplicates) params.set('include_duplicates', 'true')
+  if (criteria.threadId) params.set('thread_id', criteria.threadId)
+  if (criteria.duplicateGroup)
+    params.set('duplicate_group', criteria.duplicateGroup)
   if (openMessage) params.set('message', openMessage)
   const query = params.toString()
   return query ? `?${query}` : ''
@@ -75,7 +82,9 @@ export function isSearchable(criteria: EmailSearchCriteria): boolean {
     criteria.label.length > 0 ||
     criteria.after !== '' ||
     criteria.before !== '' ||
-    criteria.hasAttachment !== null
+    criteria.hasAttachment !== null ||
+    criteria.threadId !== '' ||
+    criteria.duplicateGroup !== ''
   )
 }
 

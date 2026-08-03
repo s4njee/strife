@@ -32,6 +32,8 @@ describe('criteria URL round trip', () => {
       hasAttachment: true,
       includeTrashed: true,
       includeDuplicates: true,
+      threadId: '00000000-0000-0000-0000-0000000000a1',
+      duplicateGroup: '00000000-0000-0000-0000-0000000000b2',
     }
     expect(criteriaFromSearch(criteriaToSearch(original))).toEqual(original)
   })
@@ -54,6 +56,15 @@ describe('criteria URL round trip', () => {
     expect(new URLSearchParams(search).get('message')).toBe('abc')
     // The message is reader state, not a search criterion.
     expect(criteriaFromSearch(search).q).toBe('invoice')
+  })
+
+  it('treats a thread or duplicate group as a searchable criterion', () => {
+    // Exploring a conversation is a search with no text; without this the view
+    // would show its idle prompt instead of the conversation.
+    expect(isSearchable({ ...EMPTY_CRITERIA, threadId: 'abc' })).toBe(true)
+    expect(isSearchable({ ...EMPTY_CRITERIA, duplicateGroup: 'abc' })).toBe(
+      true,
+    )
   })
 
   it('refuses to call an unconstrained request searchable', () => {

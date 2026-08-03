@@ -2,6 +2,7 @@ pub mod admin;
 pub mod backfills;
 pub mod config;
 pub mod email;
+pub mod email_parts;
 pub mod files;
 pub mod folders;
 pub mod health;
@@ -128,6 +129,7 @@ pub async fn run(config: Config) -> Result<()> {
         .merge(folders::router(pool.clone()))
         .merge(nodes::router(pool.clone()))
         .merge(email::router(pool.clone()))
+        .merge(email_parts::router(pool.clone(), storage.clone()))
         .merge(ocr::router(pool.clone()))
         .merge(search::router(pool.clone()))
         .merge(storage_usage::router(pool.clone(), storage.clone()))

@@ -92,6 +92,9 @@ export function emailSearchParams(
     params.set('has_attachment', String(criteria.hasAttachment))
   if (criteria.includeTrashed) params.set('include_trashed', 'true')
   if (criteria.includeDuplicates) params.set('include_duplicates', 'true')
+  if (criteria.threadId) params.set('thread_id', criteria.threadId)
+  if (criteria.duplicateGroup)
+    params.set('duplicate_group', criteria.duplicateGroup)
   if (cursor) params.set('cursor', cursor)
   return params
 }
@@ -109,6 +112,16 @@ export async function searchEmail(
   if (!response.ok)
     throw new ApiClientError(`Email search failed (${response.status}).`)
   return (await response.json()) as EmailSearchResponse
+}
+
+/** Authenticated URL for one attachment of one message. */
+export function emailAttachmentUrl(
+  nodeId: string,
+  partPath: string,
+  inline = false,
+): string {
+  const query = inline ? '?inline=true' : ''
+  return `/api/email/messages/${nodeId}/parts/${encodeURIComponent(partPath)}${query}`
 }
 
 export async function getEmailFacets(

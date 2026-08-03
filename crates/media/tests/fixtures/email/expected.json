@@ -9,39 +9,75 @@
   ],
   "fixtures": {
     "plain-text.eml": {
-      "covers": ["text/plain body"],
+      "covers": [
+        "text/plain body"
+      ],
       "subject": "Plain text message",
       "message_id": "plain-001@example.test",
       "sent_at": "2018-04-02T09:30:00Z",
-      "from": ["ada@example.test"],
-      "to": ["bob@example.test"],
-      "body_contains": ["This is a plain text body.", "two paragraphs"],
+      "from": [
+        "ada@example.test"
+      ],
+      "to": [
+        "bob@example.test"
+      ],
+      "body_contains": [
+        "This is a plain text body.",
+        "two paragraphs"
+      ],
       "attachment_count": 0
     },
     "html-only.eml": {
-      "covers": ["HTML-only body", "HTML to text conversion"],
+      "covers": [
+        "HTML-only body",
+        "HTML to text conversion"
+      ],
       "subject": "HTML only message",
       "message_id": "html-002@example.test",
-      "body_contains": ["First paragraph.", "Alpha", "Beta", "Second"],
-      "body_excludes": ["<p>", "<li>", "&nbsp;"],
+      "body_contains": [
+        "First paragraph.",
+        "Alpha",
+        "Beta",
+        "Second"
+      ],
+      "body_excludes": [
+        "<p>",
+        "<li>",
+        "&nbsp;"
+      ],
       "has_html_alternative": true,
       "attachment_count": 0
     },
     "multipart-alternative.eml": {
-      "covers": ["multipart/alternative", "plain preferred for search"],
+      "covers": [
+        "multipart/alternative",
+        "plain preferred for search"
+      ],
       "subject": "Alternative parts",
       "message_id": "alt-003@example.test",
-      "body_contains": ["Plain alternative preferred for search."],
-      "body_excludes": ["HTML alternative retained"],
+      "body_contains": [
+        "Plain alternative preferred for search."
+      ],
+      "body_excludes": [
+        "HTML alternative retained"
+      ],
       "has_html_alternative": true,
       "attachment_count": 0
     },
     "mixed-with-attachment.eml": {
-      "covers": ["multipart/mixed", "base64 attachment", "cc recipients"],
+      "covers": [
+        "multipart/mixed",
+        "base64 attachment",
+        "cc recipients"
+      ],
       "subject": "Report attached",
       "message_id": "mixed-004@example.test",
-      "cc": ["cleo@example.test"],
-      "body_contains": ["quarterly report is attached"],
+      "cc": [
+        "cleo@example.test"
+      ],
+      "body_contains": [
+        "quarterly report is attached"
+      ],
       "attachment_count": 1,
       "attachments": [
         {
@@ -54,7 +90,10 @@
       ]
     },
     "inline-cid-image.eml": {
-      "covers": ["multipart/related", "inline cid: reference"],
+      "covers": [
+        "multipart/related",
+        "inline cid: reference"
+      ],
       "subject": "Inline logo",
       "message_id": "inline-005@example.test",
       "attachment_count": 1,
@@ -69,7 +108,9 @@
       ]
     },
     "nested-rfc822.eml": {
-      "covers": ["nested message/rfc822"],
+      "covers": [
+        "nested message/rfc822"
+      ],
       "subject": "Fwd: original message",
       "message_id": "nested-006@example.test",
       "attachment_count": 1,
@@ -82,32 +123,56 @@
       ]
     },
     "quoted-printable.eml": {
-      "covers": ["quoted-printable decoding", "soft line breaks"],
+      "covers": [
+        "quoted-printable decoding",
+        "soft line breaks"
+      ],
       "subject": "Quoted printable body",
       "message_id": "qp-007@example.test",
-      "body_contains": ["Café receipts", "following message"],
-      "body_excludes": ["=C3=A9", "=20", "="],
+      "body_contains": [
+        "Caf\u00e9 receipts",
+        "following message"
+      ],
+      "body_excludes": [
+        "=C3=A9",
+        "=20",
+        "="
+      ],
       "attachment_count": 0
     },
     "base64-body.eml": {
-      "covers": ["base64 body decoding"],
+      "covers": [
+        "base64 body decoding"
+      ],
       "subject": "Base64 body",
       "message_id": "b64-008@example.test",
-      "body_contains": ["This body was base64 encoded."],
+      "body_contains": [
+        "This body was base64 encoded."
+      ],
       "attachment_count": 0
     },
     "utf8-subject-and-body.eml": {
-      "covers": ["UTF-8 subject", "non-Latin body"],
-      "subject": "Über naïve café — résumé",
+      "covers": [
+        "UTF-8 subject",
+        "non-Latin body"
+      ],
+      "subject": "\u00dcber na\u00efve caf\u00e9 \u2014 r\u00e9sum\u00e9",
       "message_id": "utf8-009@example.test",
-      "body_contains": ["Grüße aus München", "日本語のテキスト"],
+      "body_contains": [
+        "Gr\u00fc\u00dfe aus M\u00fcnchen",
+        "\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8"
+      ],
       "attachment_count": 0
     },
     "legacy-charset.eml": {
-      "covers": ["ISO-8859-1 decoding"],
+      "covers": [
+        "ISO-8859-1 decoding"
+      ],
       "subject": "Legacy charset",
       "message_id": "latin-010@example.test",
-      "body_contains": ["Café naïve résumé"],
+      "body_contains": [
+        "Caf\u00e9 na\u00efve r\u00e9sum\u00e9"
+      ],
       "attachment_count": 0
     },
     "encoded-and-folded-headers.eml": {
@@ -116,10 +181,14 @@
         "base64 and quoted-printable headers",
         "folded header continuation"
       ],
-      "subject": "Encoded ümlaut subject",
+      "subject": "Encoded \u00fcmlaut subject",
       "message_id": "enc-011@example.test",
-      "from": ["apfel@example.test"],
-      "from_display_names": ["Äpfel Fixture"],
+      "from": [
+        "apfel@example.test"
+      ],
+      "from_display_names": [
+        "\u00c4pfel Fixture"
+      ],
       "to": [
         "bob@example.test",
         "cleo@example.test",
@@ -128,22 +197,34 @@
       "attachment_count": 0
     },
     "repeated-recipients.eml": {
-      "covers": ["repeated To header", "same address across roles"],
+      "covers": [
+        "repeated To header",
+        "same address across roles"
+      ],
       "subject": "Repeated recipient headers",
       "message_id": "rep-012@example.test",
-      "to": ["bob@example.test", "cleo@example.test"],
-      "cc": ["bob@example.test"],
+      "to": [
+        "bob@example.test",
+        "cleo@example.test"
+      ],
+      "cc": [
+        "bob@example.test"
+      ],
       "attachment_count": 0
     },
     "missing-message-id.eml": {
-      "covers": ["absent Message-ID"],
+      "covers": [
+        "absent Message-ID"
+      ],
       "subject": "No message id",
       "message_id": null,
       "normalized_message_id": null,
       "attachment_count": 0
     },
     "malformed-date.eml": {
-      "covers": ["unparseable Date header"],
+      "covers": [
+        "unparseable Date header"
+      ],
       "subject": "Broken date header",
       "message_id": "baddate-013@example.test",
       "sent_at": null,
@@ -152,23 +233,36 @@
       "attachment_count": 0
     },
     "malformed-boundary.eml": {
-      "covers": ["missing closing MIME boundary"],
+      "covers": [
+        "missing closing MIME boundary"
+      ],
       "subject": "Broken MIME boundary",
       "message_id": "badmime-014@example.test",
-      "body_contains": ["closing boundary is missing"],
+      "body_contains": [
+        "closing boundary is missing"
+      ],
       "expect_warning": true,
       "status": "completed"
     },
     "gmail-labels.eml": {
-      "covers": ["X-Gmail-Labels", "X-GM-THRID"],
+      "covers": [
+        "X-Gmail-Labels",
+        "X-GM-THRID"
+      ],
       "subject": "Message with Gmail context",
       "message_id": "gmail-015@example.test",
-      "labels": ["Important", "Inbox", "Work/Reports"],
+      "labels": [
+        "Important",
+        "Inbox",
+        "Work/Reports"
+      ],
       "provider_thread_id": "1598765432109876543",
       "attachment_count": 0
     },
     "no-gmail-labels.eml": {
-      "covers": ["ordinary RFC message without Gmail headers"],
+      "covers": [
+        "ordinary RFC message without Gmail headers"
+      ],
       "subject": "Ordinary RFC message",
       "message_id": "nogmail-016@example.test",
       "labels": [],
@@ -176,28 +270,93 @@
       "attachment_count": 0
     },
     "duplicate-message-id-a.eml": {
-      "covers": ["duplicate pair by Message-ID"],
+      "covers": [
+        "duplicate pair by Message-ID"
+      ],
       "message_id": "dup-017@example.test",
       "duplicate_pair": "duplicate-message-id-b.eml",
       "duplicate_reason": "message_id"
     },
     "duplicate-message-id-b.eml": {
-      "covers": ["duplicate pair by Message-ID"],
+      "covers": [
+        "duplicate pair by Message-ID"
+      ],
       "message_id": "dup-017@example.test",
       "duplicate_pair": "duplicate-message-id-a.eml",
       "duplicate_reason": "message_id"
     },
     "duplicate-content-a.eml": {
-      "covers": ["duplicate pair by canonical content, no Message-ID"],
+      "covers": [
+        "duplicate pair by canonical content, no Message-ID"
+      ],
       "message_id": null,
       "duplicate_pair": "duplicate-content-b.eml",
       "duplicate_reason": "content_hash"
     },
     "duplicate-content-b.eml": {
-      "covers": ["duplicate pair by canonical content, no Message-ID"],
+      "covers": [
+        "duplicate pair by canonical content, no Message-ID"
+      ],
       "message_id": null,
       "duplicate_pair": "duplicate-content-a.eml",
       "duplicate_reason": "content_hash"
+    },
+    "duplicate-attachment-names.eml": {
+      "covers": [
+        "two attachments sharing one filename",
+        "storage keys derived from MIME part path rather than filename"
+      ],
+      "subject": "Two files, one name",
+      "message_id": "dupnames-023@example.test",
+      "sent_at": "2018-04-09T09:00:00Z",
+      "from": [
+        "ada@example.test"
+      ],
+      "to": [
+        "bob@example.test"
+      ],
+      "body_contains": [
+        "Both attachments are called invoice.pdf."
+      ],
+      "attachment_count": 2
+    },
+    "malformed-transfer-encoding.eml": {
+      "covers": [
+        "attachment declaring base64 whose body is not valid base64",
+        "one bad part must not fail the containing message"
+      ],
+      "subject": "Broken base64 attachment",
+      "message_id": "badtransfer-024@example.test",
+      "sent_at": "2018-04-10T09:00:00Z",
+      "from": [
+        "ada@example.test"
+      ],
+      "to": [
+        "bob@example.test"
+      ],
+      "body_contains": [
+        "declares base64"
+      ],
+      "attachment_count": 1
+    },
+    "text-and-binary-attachments.eml": {
+      "covers": [
+        "one extractable and one unsupported attachment in the same message",
+        "a mixed-success message must still complete"
+      ],
+      "subject": "One readable and one opaque attachment",
+      "message_id": "mixedsuccess-025@example.test",
+      "sent_at": "2018-04-11T09:00:00Z",
+      "from": [
+        "ada@example.test"
+      ],
+      "to": [
+        "bob@example.test"
+      ],
+      "body_contains": [
+        "One attachment can be read"
+      ],
+      "attachment_count": 2
     }
   }
 }

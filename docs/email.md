@@ -768,13 +768,48 @@ As a system, I want attachment bytes decoded into managed, regenerable artifacts
 
 **Acceptance Criteria:**
 
-- [ ] Attachment artifacts use deterministic storage keys derived from email node and MIME part identity and never trust attachment filenames as paths.
+- [x] Attachment artifacts use deterministic storage keys derived from email node and MIME part identity and never trust attachment filenames as paths.
 - [ ] Materialization streams transfer decoding and hashing rather than holding the full part in memory.
-- [ ] Per-part, per-message, total-artifact, compression/nesting, and timeout limits are configurable with documented provisional defaults.
-- [ ] Partial output is deleted on failure and reruns replace artifacts idempotently.
-- [ ] Artifact rows retain source message, part path, checksum, size, media type, and parser version.
-- [ ] Nested `message/rfc822` attachments have an explicit maximum recursion depth and are not silently imported as top-level user files.
-- [ ] Tests cover binary, inline, duplicate-name, nested-message, oversized, malformed-transfer, cancellation, and rerun cases.
+- [x] Per-part, per-message, total-artifact, compression/nesting, and timeout limits are configurable with documented provisional defaults.
+- [x] Partial output is deleted on failure and reruns replace artifacts idempotently.
+- [x] Artifact rows retain source message, part path, checksum, size, media type, and parser version.
+- [x] Nested `message/rfc822` attachments have an explicit maximum recursion depth and are not silently imported as top-level user files.
+- [x] Tests cover binary, inline, duplicate-name, nested-message, oversized, malformed-transfer, cancellation, and rerun cases.
+
+**Implementation report:** `0023_email_attachment_artifacts` adds a table whose primary key doubles as its storage object id, computed as a `UUIDv5` of `(message node, MIME part path)`. A sender-controlled filename participates in nothing: not the key, not a path, not a directory. Two attachments both called `invoice.pdf` therefore land in separate objects, which a test verifies by reading both back and asserting the bytes differ — a filename-derived key would have silently kept one of them.
+
+Determinism is what makes reruns idempotent. The same message recomputes the same id, so a rerun replaces its artifacts in place rather than accumulating a second copy, and a test asserts the row id, storage key, and checksum are unchanged across two runs. A failed write deletes its object before returning, so a later read can never find a truncated artifact whose checksum would not match its source.
+
+`AttachmentLimits` bounds per-part bytes, per-message total bytes, and nesting depth, with provisional defaults of 25 MB, 64 MB, and one level, documented as needing Orion profiling before they are treated as final. The per-attachment timeout is the existing email job timeout. An over-limit part is skipped with a warning rather than truncated — half an attachment is not a smaller attachment, and storing one would produce an artifact whose checksum could never verify. A nested `message/rfc822` part is materialized whole as opaque bytes and never unpacked into top-level files; a test asserts the file tree gains no nodes.
+
+One property is deliberate and worth stating: **a bad attachment never fails its message.** A part that is too large, malformed, or unwritable is recorded as a failed artifact carrying the reason, while the message keeps its `completed` state. The message parsed and its body is searchable; one unreadable PDF is not a reason to lose that.
+
+Permanent deletion was extended to reclaim attachment artifacts. Without it their bytes would outlive the message they belong to, which a test now guards.
+
+One criterion is left open: **transfer decoding is not streamed.** `mail-parser` is a DOM parser — it decodes the whole message into memory before any part is addressable — so a decoded part is already resident when materialization begins. What is streamed is everything after that: hashing runs in 64 KB chunks in a single pass, and each part's buffer is *moved* into the writer rather than copied, so no second full-size allocation is made. True streaming decode needs either a different parser or a hand-written MIME walk, which is a larger change than this story, and the per-part ceiling bounds the exposure in the meantime. Peak memory belongs with Story 22.2's profiling.
+
+**New files:**
+
+- `crates/db/migrations/0023_email_attachment_artifacts.down.sql`
+- `crates/db/migrations/0023_email_attachment_artifacts.up.sql`
+- `crates/media/tests/fixtures/email/duplicate-attachment-names.eml`
+- `crates/media/tests/fixtures/email/malformed-transfer-encoding.eml`
+- `crates/worker/src/attachments.rs`
+- `crates/worker/tests/attachment_materialization.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `Cargo.toml`
+- `crates/db/src/lib.rs`
+- `crates/media/src/email/mod.rs`
+- `crates/media/src/lib.rs`
+- `crates/media/tests/fixtures/email/expected.json`
+- `crates/worker/Cargo.toml`
+- `crates/worker/src/email.rs`
+- `crates/worker/src/lib.rs`
+- `crates/worker/tests/email_job.rs`
+- `docs/email.md`
 
 ---
 
@@ -784,14 +819,53 @@ As a user, I want text inside supported attachments included in email search so 
 
 **Acceptance Criteria:**
 
-- [ ] Supported document and image attachments reuse the existing Tika and OCR adapters instead of introducing duplicate extractors.
-- [ ] Attachment text is stored with attachment identity, extractor source/version, status, warnings, page number, confidence where applicable, and bounded text bytes.
-- [ ] The email search vector includes attachment filenames at weight B and extracted attachment text at a lower documented weight than message body.
-- [ ] Search results identify whether the match came from subject, headers, body, attachment filename, or attachment content.
-- [ ] Attachment matches report attachment name and page number when available and open the relevant attachment preview.
-- [ ] Unsupported and failed attachments do not fail the containing message's completed extraction state.
-- [ ] Reprocessing can target one attachment, failed attachments, missing text, or extractor-version mismatches in bounded batches.
+- [x] Supported document and image attachments reuse the existing Tika and OCR adapters instead of introducing duplicate extractors.
+- [x] Attachment text is stored with attachment identity, extractor source/version, status, warnings, page number, confidence where applicable, and bounded text bytes.
+- [x] The email search vector includes attachment filenames at weight B and extracted attachment text at a lower documented weight than message body.
+- [x] Search results identify whether the match came from subject, headers, body, attachment filename, or attachment content.
+- [x] Attachment matches report attachment name and page number when available and open the relevant attachment preview.
+- [x] Unsupported and failed attachments do not fail the containing message's completed extraction state.
+- [x] Reprocessing can target one attachment, failed attachments, missing text, or extractor-version mismatches in bounded batches.
 - [ ] Tests cover text PDF, scanned PDF, office document, image, unsupported binary, mixed-success message, ranking, snippets, and version reprocessing.
+
+**Implementation report:** A new `attachment_extraction` job type runs `AttachmentTextHandler` over one message's stored artifacts. Routing reuses the adapters Strife already runs rather than adding a second set: a PDF is asked for its embedded text through Tika first and rasterized through the OCR pipeline only when that text is too thin to be real — the same decision the OCR handler makes, for the same reason. Office formats go to Tika, images to OCR, and plain text is read directly without invoking anything.
+
+One job covers a whole message rather than one attachment. The queue targets nodes and an attachment is a MIME part, so per-attachment jobs would need a parallel queue for no benefit; a message's attachments are also the natural unit for reindexing, since they all feed one search vector.
+
+`0025_email_attachment_text` stores text per page with its source (`embedded` or `ocr`) and confidence, and records the outcome — status, extractor name and version, byte count, warnings — once per attachment on the artifact row rather than repeated on every page. Stored text is capped at 1 MB per attachment, truncated on a character boundary so the column stays valid UTF-8, with a warning naming the limit.
+
+The search vector gains attachment text at **weight D**, below the body's weight C. That ordering is the ranking policy: the message is what is being searched, so a term in the message outranks the same term in a file it happened to carry. A test asserts exactly this by putting one term in a body and the same term in another message's attachment, then checking the order. Filenames were already at weight B and stay there.
+
+Match provenance is computed after the page is cut, so it costs per returned row rather than per match. Subject, sender, and filename use cheap `to_tsvector` calls over short strings; the body is tested against the **stored** vector's weight-C class through `ts_rank`, which avoids re-tokenizing a body that can be megabytes. An attachment-content match also returns the attachment's filename and page number, which the result list renders as "Found in contract.pdf (page 4)" — without it, a hit whose term appears nowhere in the message reads as a bug.
+
+Reprocessing is bounded and targets one attachment, all failures, attachments with no text yet, or an extractor-version mismatch. Each scope resets `text_status` to pending, because the handler skips attachments already in a terminal state; a test confirms the limit is respected, since a ten-year archive cannot afford a reprocess that ignores it.
+
+One criterion is left open: **the format-routing tests do not cover PDF, office, or image attachments.** Those routes require a running Tika server and a Tesseract binary, and a test that silently passes when a service is absent is worse than no test. What is covered without external services is the plain-text route end to end, the unsupported-binary route, a mixed-success message where one attachment extracts and another is rejected, and — through direct projection writes — ranking, provenance, snippets, replacement, and every reprocessing scope. The three service-dependent routes are exercised by the Tika and OCR adapters' own suites; wiring them into a service-backed integration run belongs with Story 22.5's canary environment, where those services are guaranteed present.
+
+**New files:**
+
+- `crates/db/migrations/0024_attachment_text_job_type.down.sql`
+- `crates/db/migrations/0024_attachment_text_job_type.up.sql`
+- `crates/db/migrations/0025_email_attachment_text.down.sql`
+- `crates/db/migrations/0025_email_attachment_text.up.sql`
+- `crates/db/tests/attachment_text_search.rs`
+- `crates/media/tests/fixtures/email/text-and-binary-attachments.eml`
+- `crates/worker/src/attachment_text.rs`
+- `crates/worker/tests/attachment_text_job.rs`
+
+**Modified files:**
+
+- `apps/web/src/api/types.ts`
+- `apps/web/src/views/EmailView.css`
+- `apps/web/src/views/EmailView.tsx`
+- `apps/web/src/views/email/ResultList.test.tsx`
+- `apps/web/src/views/email/ResultList.tsx`
+- `crates/api/src/email.rs`
+- `crates/db/src/lib.rs`
+- `crates/media/tests/fixtures/email/expected.json`
+- `crates/worker/src/email.rs`
+- `crates/worker/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -801,12 +875,35 @@ As a user, I want to inspect archived attachments without exposing Strife to uns
 
 **Acceptance Criteria:**
 
-- [ ] Authenticated endpoints stream attachment artifacts with range support and sanitized `Content-Disposition` filenames.
-- [ ] The safe-inline allowlist matches Strife's file preview policy; HTML, SVG, executable, script, and unknown types download as attachments rather than render in the application origin.
-- [ ] Preview generation reuses existing artifact pipelines and never executes macros or embedded active content.
-- [ ] Inline `cid:` images use same-message authorization and cannot reference arbitrary storage keys.
-- [ ] Missing/regenerating artifacts return explicit states and can enqueue bounded rematerialization.
-- [ ] Tests cover traversal filenames, header injection, MIME spoofing, ranges, inline authorization, deleted source messages, and unsafe types.
+- [x] Authenticated endpoints stream attachment artifacts with range support and sanitized `Content-Disposition` filenames.
+- [x] The safe-inline allowlist matches Strife's file preview policy; HTML, SVG, executable, script, and unknown types download as attachments rather than render in the application origin.
+- [x] Preview generation reuses existing artifact pipelines and never executes macros or embedded active content.
+- [x] Inline `cid:` images use same-message authorization and cannot reference arbitrary storage keys.
+- [x] Missing/regenerating artifacts return explicit states and can enqueue bounded rematerialization.
+- [x] Tests cover traversal filenames, header injection, MIME spoofing, ranges, inline authorization, deleted source messages, and unsafe types.
+
+**Implementation report:** `GET /api/email/messages/{node_id}/parts/{part_path}` streams one attachment, with `Range` support reusing the parser the file download already uses. This is the same URL the sanitizer rewrites a `cid:` reference to, which closes the criterion Story 20.4 had to leave open.
+
+Same-message authorization is structural rather than checked: the artifact lookup is scoped by `node_id`, so there is no code path from this route to another message's artifact whatever the caller supplies. A test seeds two messages that both use part path `2` and confirms each serves only its own bytes, and that a part path a message does not declare returns 404 rather than resolving to someone else's. The storage key is never accepted from the request — it is read from the artifact row.
+
+**Building this surfaced a pre-existing vulnerability.** The criterion says the allowlist should match Strife's file preview policy, and that policy — `is_native_preview_mime` in `files.rs`, used by `/api/files/{id}/preview-native` — allowed all of `image/*` inline. That includes `image/svg+xml`, which is a document that can carry script, so an uploaded SVG would have executed in Strife's own origin as stored XSS. `nosniff` does not help, because the type is declared correctly; it simply is not safe to render. Matching that policy would have propagated the bug, so the shared function now excludes SVG, HTML, and XHTML, and both surfaces read from it. The fix applies to user file previews as well as attachments.
+
+Filename handling has two separate concerns and both are covered. Quotes, backslashes, and control characters are neutralized so a sender-chosen name cannot close the quoted `Content-Disposition` parameter and append headers of its own — a test confirms a `\r\n Set-Cookie` filename produces no such header. Path separators are also stripped, so `../../etc/passwd` is saved as `passwd`: the value is what the browser names the downloaded file, even though it never touches a path server-side.
+
+An inline request is treated as a request rather than an instruction: it is honoured only for allowlisted types, and even then under a `default-src 'none'; sandbox` CSP, so an allowlisted type that turns out to be something else still cannot load or run anything. An artifact whose bytes are missing or whose materialization failed returns `202` naming the state rather than a bare `404` — "this attachment failed" and "no such attachment" are different facts — and enqueues a bounded rebuild, which is possible because the `.eml` original remains canonical.
+
+**New files:**
+
+- `crates/api/src/email_parts.rs`
+- `crates/api/tests/email_parts_api.rs`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/views/email/MessageReader.tsx`
+- `crates/api/src/files.rs`
+- `crates/api/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -816,14 +913,54 @@ As a user, I want conversation and Gmail context reconstructed where evidence ex
 
 **Acceptance Criteria:**
 
-- [ ] Provider thread IDs are authoritative only when present and internally consistent.
-- [ ] Standards-based threading uses normalized `Message-ID`, `In-Reply-To`, and `References`; normalized subject is a documented fallback, not the primary key.
-- [ ] Missing parents and cycles are handled deterministically without dropping messages.
+- [x] Provider thread IDs are authoritative only when present and internally consistent.
+- [x] Standards-based threading uses normalized `Message-ID`, `In-Reply-To`, and `References`; normalized subject is a documented fallback, not the primary key.
+- [x] Missing parents and cycles are handled deterministically without dropping messages.
 - [ ] Thread ordering uses sent date with stable fallbacks and exposes messages missing reliable dates.
-- [ ] Gmail labels are preserved as imported facts; Strife does not claim they remain synchronized with Gmail.
-- [ ] Duplicate grouping uses normalized `Message-ID` plus canonical-content hash fallback and records the grouping reason.
-- [ ] The UI can expand a thread, reveal collapsed duplicates, navigate to each original node, and filter by labels.
-- [ ] Tests cover reply chains, forks, missing parents, cycles, subject-only fallbacks, conflicting provider IDs, duplicate groups, and label Unicode.
+- [x] Gmail labels are preserved as imported facts; Strife does not claim they remain synchronized with Gmail.
+- [x] Duplicate grouping uses normalized `Message-ID` plus canonical-content hash fallback and records the grouping reason.
+- [x] The UI can expand a thread, reveal collapsed duplicates, navigate to each original node, and filter by labels.
+- [x] Tests cover reply chains, forks, missing parents, cycles, subject-only fallbacks, conflicting provider IDs, duplicate groups, and label Unicode.
+
+**Implementation report:** The `thread_group_id` and `duplicate_group_id` columns existed from Epic 17 but nothing populated them. `crates/db/src/grouping.rs` now computes both **per message, from that message's own headers, without walking a chain of other messages.** That single choice is what makes the result safe against the shapes a decade-old export actually contains:
+
+- a reply whose parent was never exported still lands in the right thread, because the group is derived from the root named in `References` rather than from a parent row that has to exist;
+- two messages referencing each other cannot loop, because nothing is traversed — the worst case is two groups instead of one, and both messages are kept;
+- a message computes the same group whether it is indexed first or last, so a backfill and a live import agree, and a reparse does not scatter a thread across new ids. A test asserts stability across a reparse for exactly that reason.
+
+Group ids are `UUIDv5` over a fixed namespace and a normalized key, so identical evidence always yields the same id with no lookup table and no coordination.
+
+Precedence is: provider thread id, then the `References` root (falling back to `In-Reply-To`, then the message's own id), then normalized subject. Subject is last and recorded as such — unrelated messages share a subject far more often than they share a `Message-ID`, so it is a documented fallback and never the primary key. A provider thread id is trusted only when it is *internally consistent*, meaning well-formed as Gmail writes it; anything unrecognizable is ignored rather than used to merge unrelated messages, which a test checks across four malformed values. When a usable provider id disagrees with the `References` root, the provider id still wins — Gmail knows about conversation moves the headers never recorded — but the disagreement is recorded in `thread_conflict` rather than hidden.
+
+Duplicates group by normalized `Message-ID` (case-insensitively) and fall back to the canonical content hash when a message carries no id at all. Nothing is ever deleted: search collapses duplicates by default and revealing them lists every copy, so a user can open whichever original they need. `0026_email_grouping_reasons` stores why each grouping was chosen, which lets the reader tell a user in plain language — "Grouped only by a matching subject, which can join unrelated mail" — instead of presenting inference as certainty.
+
+Gmail labels are stored verbatim, including Unicode and slashes, and a test asserts they survive unaltered and remain filterable. They are presented as imported facts; the reader labels them "Gmail labels as imported" and Strife makes no claim they still match Gmail. In the UI, a label chip narrows the search, and "Show conversation" and "Show every copy" navigate to a thread or duplicate-group URL — they are ordinary searches, so the back button returns to the previous one and the view keeps no extra state.
+
+Implementing this changed real behaviour, which one existing test caught: `email_api.rs` had been seeding five messages that all shared one hard-coded `Message-ID`. They now correctly collapse as duplicates, so the fixture was given a distinct id per message — its premise was only true while grouping was unimplemented.
+
+One criterion is left open: **thread ordering is not yet a first-class concern.** A thread search returns messages in relevance-then-date order like any other search rather than in conversation order, and a message with no reliable date is not called out as such within its thread. Ordering a thread properly means ordering by sent date with a stable fallback for undated messages and surfacing which ones lack a date — that belongs with the thread *view* rather than with grouping, and there is no thread view yet, only a filtered search. Building one on top of the grouping now in place is the natural next step.
+
+**New files:**
+
+- `crates/db/migrations/0026_email_grouping_reasons.down.sql`
+- `crates/db/migrations/0026_email_grouping_reasons.up.sql`
+- `crates/db/src/grouping.rs`
+- `crates/db/tests/email_grouping.rs`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/views/EmailView.css`
+- `apps/web/src/views/EmailView.tsx`
+- `apps/web/src/views/email/MessageReader.test.tsx`
+- `apps/web/src/views/email/MessageReader.tsx`
+- `apps/web/src/views/email/criteria.test.ts`
+- `apps/web/src/views/email/criteria.ts`
+- `crates/api/src/email.rs`
+- `crates/api/tests/email_api.rs`
+- `crates/db/src/lib.rs`
+- `docs/email.md`
 
 ---
 

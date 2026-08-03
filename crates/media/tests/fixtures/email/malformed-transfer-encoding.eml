@@ -1,0 +1,22 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Broken base64 attachment
+Date: Tue, 10 Apr 2018 09:00:00 +0000
+Message-ID: <badtransfer-024@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="bad-boundary"
+
+--bad-boundary
+Content-Type: text/plain; charset="utf-8"
+
+The attachment below declares base64 but is not valid base64.
+
+--bad-boundary
+Content-Type: application/octet-stream; name="broken.bin"
+Content-Disposition: attachment; filename="broken.bin"
+Content-Transfer-Encoding: base64
+
+!!!! not base64 at all ****
+%%%%%%
+
+--bad-boundary--

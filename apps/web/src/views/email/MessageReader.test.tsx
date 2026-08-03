@@ -23,7 +23,10 @@ function message(overrides: Partial<EmailMessage> = {}): EmailMessage {
     blocked_hosts: [],
     preview_text: 'Line one.',
     thread_group_id: null,
+    thread_reason: 'message_id',
+    thread_conflict: false,
     duplicate_group_id: null,
+    duplicate_reason: 'message_id',
     provider_thread_id: null,
     labels: [],
     addresses: [

@@ -369,6 +369,10 @@ export interface EmailSearchHit {
   from_address: string | null
   from_display_name: string | null
   labels: string[]
+  /** Which parts of the message matched: subject, headers, body, attachment_filename, attachment_content. */
+  match_sources: string[]
+  matched_attachment: string | null
+  matched_attachment_page: number | null
 }
 
 export interface EmailSearchResponse {
@@ -430,7 +434,12 @@ export interface EmailMessage {
   blocked_hosts: string[]
   preview_text: string
   thread_group_id: string | null
+  /** Why this thread grouping was chosen; `subject` is the weakest basis. */
+  thread_reason: 'provider' | 'references' | 'message_id' | 'subject' | 'none'
+  /** A provider thread id was used but the RFC headers disagree with it. */
+  thread_conflict: boolean
   duplicate_group_id: string | null
+  duplicate_reason: 'message_id' | 'content_hash' | 'none'
   provider_thread_id: string | null
   labels: string[]
   addresses: EmailAddress[]
@@ -450,4 +459,7 @@ export interface EmailSearchCriteria {
   hasAttachment: boolean | null
   includeTrashed: boolean
   includeDuplicates: boolean
+  /** Set when exploring one conversation or one duplicate group. */
+  threadId: string
+  duplicateGroup: string
 }

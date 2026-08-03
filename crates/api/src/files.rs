@@ -552,11 +552,33 @@ async fn try_serve_original(
         .unwrap_or_else(|_| status_response(StatusCode::INTERNAL_SERVER_ERROR)))
 }
 
-fn is_native_preview_mime(mime: &str) -> bool {
-    mime.starts_with("image/")
-        || mime.starts_with("video/")
-        || mime.starts_with("audio/")
-        || mime == "application/pdf"
+/// Types the browser may render inline in Strife's own origin.
+///
+/// SVG is excluded even though it is an image type: it is a document that can
+/// carry script, so serving one inline would execute attacker-supplied code in
+/// the application origin. `nosniff` does not help here, because the type is
+/// declared correctly — the type is simply not safe to render. The same applies
+/// to the XML-ish image types below.
+///
+/// Shared with the attachment endpoint so the archive and the file browser
+/// cannot drift into two different answers about what is safe to render.
+pub(crate) fn is_native_preview_mime(mime: &str) -> bool {
+    let base = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        base.as_str(),
+        "image/svg+xml" | "image/svg" | "image/x-svg" | "text/html" | "application/xhtml+xml"
+    ) {
+        return false;
+    }
+    base.starts_with("image/")
+        || base.starts_with("video/")
+        || base.starts_with("audio/")
+        || base == "application/pdf"
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -577,18 +599,18 @@ impl DownloadError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ByteRange {
-    start: u64,
-    end: u64,
+pub(crate) struct ByteRange {
+    pub(crate) start: u64,
+    pub(crate) end: u64,
 }
 
 impl ByteRange {
-    const fn length(self) -> u64 {
+    pub(crate) const fn length(self) -> u64 {
         self.end - self.start + 1
     }
 }
 
-fn parse_range(value: &HeaderValue, total: u64) -> Result<ByteRange, ()> {
+pub(crate) fn parse_range(value: &HeaderValue, total: u64) -> Result<ByteRange, ()> {
     let value = value
         .to_str()
         .ok()
@@ -623,16 +645,32 @@ fn parse_range(value: &HeaderValue, total: u64) -> Result<ByteRange, ()> {
     Ok(range)
 }
 
-fn safe_filename(name: &str) -> String {
-    name.chars()
+/// Renders a name safe to place in a `Content-Disposition` header.
+///
+/// Two separate concerns. Quotes, backslashes, and control characters would let
+/// a sender-chosen name close the quoted parameter and append headers of their
+/// own. Path separators are stripped because the browser uses this value to name
+/// the saved file, and a name like `../../etc/passwd` should arrive as
+/// `passwd` rather than as something a download manager might interpret.
+pub(crate) fn safe_filename(name: &str) -> String {
+    let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = leaf
+        .chars()
         .map(|character| match character {
-            '\r' | '\n' | '\0' | '"' | '\\' => '_',
+            '"' | '\\' | '/' => '_',
+            control if control.is_control() => '_',
             other => other,
         })
-        .collect()
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "attachment".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
-fn range_not_satisfiable(total: u64) -> Response {
+pub(crate) fn range_not_satisfiable(total: u64) -> Response {
     Response::builder()
         .status(StatusCode::RANGE_NOT_SATISFIABLE)
         .header(header::CONTENT_RANGE, format!("bytes */{total}"))
@@ -640,7 +678,7 @@ fn range_not_satisfiable(total: u64) -> Response {
         .unwrap_or_else(|_| status_response(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
-fn status_response(status: StatusCode) -> Response {
+pub(crate) fn status_response(status: StatusCode) -> Response {
     Response::builder()
         .status(status)
         .body(Body::empty())

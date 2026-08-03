@@ -59,7 +59,10 @@ tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 thiserror = "2.0.19"
-uuid = { version = "1.24.0", features = ["serde", "v4"] }
+# `v5` derives attachment artifact ids deterministically from message and MIME
+# part identity, so an artifact's storage location is a pure function of what it
+# is rather than of when it was written.
+uuid = { version = "1.24.0", features = ["serde", "v4", "v5"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

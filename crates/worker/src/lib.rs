@@ -15,6 +15,8 @@ use tokio::{sync::watch, task::JoinSet, time::MissedTickBehavior};
 use tracing::{Instrument, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
+mod attachment_text;
+mod attachments;
 mod backfill;
 mod deletion;
 mod email;
@@ -22,6 +24,9 @@ mod imports;
 mod metadata;
 mod ocr;
 
+pub use attachment_text::{
+    ATTACHMENT_EXTRACTOR_VERSION, AttachmentTextHandler, AttachmentTextSettings,
+};
 pub use backfill::{
     BackfillCandidateProvider, BackfillCoordinator, EmailBackfillProvider, OcrBackfillProvider,
 };
@@ -158,6 +163,7 @@ pub struct WorkerHandler {
     imports: Option<ImportHandler>,
     ocr: OcrHandler,
     email: EmailHandler,
+    attachment_text: AttachmentTextHandler,
 }
 
 impl WorkerHandler {
@@ -179,6 +185,11 @@ impl WorkerHandler {
             ),
             deletion: DeletionService::new(pool.clone(), storage.clone()),
             email: EmailHandler::new(pool.clone(), storage.clone()),
+            attachment_text: AttachmentTextHandler::new(
+                pool.clone(),
+                storage.clone(),
+                tika_url.clone(),
+            ),
             ocr: OcrHandler::new(pool, storage, tika_url, 20),
             imports: None,
         }
@@ -243,6 +254,7 @@ impl JobHandler for WorkerHandler {
             }
             JobType::Ocr => self.ocr.handle(job).await,
             JobType::EmailExtraction => self.email.handle(job).await,
+            JobType::AttachmentExtraction => self.attachment_text.handle(job).await,
         }
     }
 }
@@ -418,19 +430,24 @@ async fn claim_next_job(
 // Email parsing is claimed after metadata and preview work but before OCR:
 // parsing MIME is cheaper than OCR and unlocks the Email tab sooner. Origin
 // still dominates this ordering — foreground work outranks every job family.
-const PROCESSOR_CLAIM_ORDER: [JobType; 6] = [
+const PROCESSOR_CLAIM_ORDER: [JobType; 7] = [
     JobType::PermanentDeletion,
     JobType::TrashCleanup,
     JobType::MetadataExtraction,
     JobType::PreviewGeneration,
     JobType::EmailExtraction,
+    // After the messages themselves: a searchable message is worth more than a
+    // searchable attachment, and extracting attachment text costs far more.
+    JobType::AttachmentExtraction,
     JobType::Ocr,
 ];
 
 fn lease_ttl_for(job_type: JobType, base_ttl: ChronoDuration) -> ChronoDuration {
     match job_type {
-        // OCR rasterizes and recognizes whole documents.
-        JobType::Ocr => base_ttl * 3,
+        // OCR rasterizes and recognizes whole documents, and attachment
+        // extraction runs the same pipeline over every attachment of a message,
+        // so both need the same headroom over the base lease.
+        JobType::Ocr | JobType::AttachmentExtraction => base_ttl * 3,
         // MIME parsing is bounded but a pathological message can still take
         // well beyond the base lease, so it gets headroom short of OCR's.
         JobType::EmailExtraction => base_ttl * 2,

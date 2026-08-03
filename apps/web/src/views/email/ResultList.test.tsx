@@ -18,6 +18,9 @@ function hit(overrides: Partial<EmailSearchHit> = {}): EmailSearchHit {
     from_address: 'ada@example.test',
     from_display_name: 'Ada Lovelace',
     labels: [],
+    match_sources: [],
+    matched_attachment: null,
+    matched_attachment_page: null,
     ...overrides,
   }
 }

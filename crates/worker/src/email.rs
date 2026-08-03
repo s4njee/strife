@@ -9,13 +9,13 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use strife_db::{
     EmailAddressInput, EmailAddressRole, EmailAttachmentInput, EmailExtractionStatus,
-    EmailHeaderInput, EmailProjection, JobRecord, LifecycleState, UpsertEmailMessage,
-    fail_job_terminal, get_file_object_by_node_id, get_node_by_id, replace_email_projection,
-    skip_job,
+    EmailHeaderInput, EmailProjection, JobRecord, JobType, LifecycleState, UpsertEmailMessage,
+    default_resource_class, enqueue_job_with_context, fail_job_terminal,
+    get_file_object_by_node_id, get_node_by_id, replace_email_projection, skip_job,
 };
 use strife_media::{
-    EMAIL_PARSER_NAME, EMAIL_PARSER_VERSION, EmailAddressKind, EmailParseLimits, ParsedEmail,
-    detect_mime, is_rfc822_mime, looks_like_rfc822, parse_email,
+    AttachmentLimits, EMAIL_PARSER_NAME, EMAIL_PARSER_VERSION, EmailAddressKind, EmailParseLimits,
+    ParsedEmail, detect_mime, is_rfc822_mime, looks_like_rfc822, parse_email_with_parts,
 };
 use strife_storage::{StorageBackend, StorageKey};
 use tokio::{io::AsyncWriteExt, time::timeout};
@@ -28,6 +28,7 @@ use crate::JobHandler;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EmailSettings {
     pub limits: EmailParseLimits,
+    pub attachments: AttachmentLimits,
     pub file_timeout: Duration,
 }
 
@@ -35,6 +36,7 @@ impl Default for EmailSettings {
     fn default() -> Self {
         Self {
             limits: EmailParseLimits::default(),
+            attachments: AttachmentLimits::default(),
             file_timeout: Duration::from_secs(120),
         }
     }
@@ -163,11 +165,42 @@ impl EmailHandler {
             return Ok(());
         }
 
-        let parsed = parse_email(&bytes, self.settings.limits)?;
+        let outcome =
+            parse_email_with_parts(&bytes, self.settings.limits, self.settings.attachments)?;
+        let parsed = outcome.email;
         let duration_ms = i64::try_from(started.elapsed().as_millis())
             .context("email parse duration exceeds i64")?;
         self.persist(job.target_node_id, &parsed, duration_ms)
             .await?;
+
+        // Artifacts are written after the projection so the rows they reference
+        // exist. A part that cannot be stored is recorded as a failed artifact
+        // and does not disturb the message's own completed state: the message
+        // parsed, and its text is searchable whether or not a PDF was written.
+        let materialized = crate::attachments::materialize(
+            &self.pool,
+            &self.storage,
+            job.target_node_id,
+            outcome.parts,
+        )
+        .await?;
+
+        // Text extraction is a separate job rather than more work in this one:
+        // it runs Tika and possibly OCR per attachment, which is a different
+        // order of cost from MIME parsing and belongs under its own lease.
+        if materialized.written > 0 {
+            enqueue_job_with_context(
+                &self.pool,
+                JobType::AttachmentExtraction,
+                job.target_node_id,
+                job.priority,
+                job.origin,
+                job.campaign_id,
+                default_resource_class(JobType::AttachmentExtraction),
+            )
+            .await
+            .context("enqueue attachment text extraction")?;
+        }
 
         info!(
             node_id = %job.target_node_id,
@@ -175,6 +208,9 @@ impl EmailHandler {
             source_bytes,
             body_bytes = parsed.body_text.len(),
             attachment_count = parsed.attachments.len(),
+            attachments_written = materialized.written,
+            attachments_failed = materialized.failed,
+            attachment_bytes = materialized.total_bytes,
             warning_count = parsed.warnings.len(),
             duration_ms,
             parser_version = EMAIL_PARSER_VERSION,

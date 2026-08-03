@@ -37,6 +37,10 @@ async fn seed(pool: &PgPool, subject: &str, body: &str, from: &str, label: Optio
     let labels: Vec<String> = label
         .map(|value| vec![value.to_owned()])
         .unwrap_or_default();
+    // Distinct per message: messages sharing a Message-ID are duplicates by
+    // definition, and search collapses them by default.
+    let message_id = format!("<{node_id}@example.test>");
+    let normalized_message_id = format!("{node_id}@example.test");
     replace_email_projection(
         pool,
         &EmailProjection {
@@ -45,8 +49,8 @@ async fn seed(pool: &PgPool, subject: &str, body: &str, from: &str, label: Optio
                 status: EmailExtractionStatus::Completed,
                 parser_name: "mail-parser",
                 parser_version: "0.11.5",
-                message_id: Some("<api@example.test>"),
-                normalized_message_id: Some("api@example.test"),
+                message_id: Some(&message_id),
+                normalized_message_id: Some(&normalized_message_id),
                 in_reply_to: None,
                 reference_ids: &[],
                 subject: Some(subject),

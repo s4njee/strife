@@ -206,14 +206,95 @@ fn find_header_block(window: &[u8]) -> &[u8] {
     }
 }
 
+/// Bounds on turning attachment parts into stored artifacts.
+///
+/// Separate from [`EmailParseLimits`] because the two answer different
+/// questions: parse limits protect the parser, these protect the disk. A
+/// message can be entirely reasonable to parse and still carry a gigabyte of
+/// attachments that should not be written.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AttachmentLimits {
+    /// Largest single decoded part that will be written.
+    pub max_part_bytes: usize,
+    /// Largest total decoded bytes written for one message.
+    pub max_message_bytes: usize,
+    /// How deep into nested `message/rfc822` parts materialization descends.
+    pub max_depth: usize,
+}
+
+impl Default for AttachmentLimits {
+    /// Provisional defaults, to be profiled on Orion before they are treated as
+    /// final. They are sized for an ordinary correspondence archive rather than
+    /// for the largest message anyone could construct: 25 MB is above what most
+    /// mail servers accept for a single attachment, and 64 MB bounds a message
+    /// carrying several of them.
+    fn default() -> Self {
+        Self {
+            max_part_bytes: 25 * 1024 * 1024,
+            max_message_bytes: 64 * 1024 * 1024,
+            // One level: an attachment that is itself an email is materialized
+            // whole, but its own attachments are not unpacked. Deeper nesting
+            // is a decompression-bomb shape, not an archive shape.
+            max_depth: 1,
+        }
+    }
+}
+
+/// One attachment part's decoded bytes alongside the identity used to key it.
+///
+/// Carries no filename by design. A storage key is derived from the message and
+/// MIME part path only, so a sender-controlled filename can never influence
+/// where bytes land.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttachmentPart {
+    pub part_path: String,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+    /// Nesting depth, where a top-level attachment is 0.
+    pub depth: usize,
+    pub is_message: bool,
+}
+
+/// A parse together with the attachment bytes it yielded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParsedEmailWithParts {
+    pub email: ParsedEmail,
+    pub parts: Vec<AttachmentPart>,
+}
+
 /// Parses one message into its normalized projection.
 ///
 /// # Errors
 ///
 /// Returns an error when the input exceeds `max_source_bytes`, is not an RFC
 /// 5322 message, or cannot be parsed at all.
-#[allow(clippy::too_many_lines)]
 pub fn parse_email(bytes: &[u8], limits: EmailParseLimits) -> Result<ParsedEmail> {
+    parse_email_inner(bytes, limits, None).map(|parsed| parsed.email)
+}
+
+/// Parses one message and decodes its attachment parts in the same pass.
+///
+/// Materializing is deliberately not a second `parse_email` call: the parser
+/// builds the whole message in memory, so parsing twice would double the cost
+/// of every message in a backfill to obtain bytes that were already decoded.
+///
+/// # Errors
+///
+/// Same conditions as [`parse_email`].
+pub fn parse_email_with_parts(
+    bytes: &[u8],
+    limits: EmailParseLimits,
+    attachments: AttachmentLimits,
+) -> Result<ParsedEmailWithParts> {
+    parse_email_inner(bytes, limits, Some(attachments))
+}
+
+#[allow(clippy::too_many_lines)]
+fn parse_email_inner(
+    bytes: &[u8],
+    limits: EmailParseLimits,
+    attachment_limits: Option<AttachmentLimits>,
+) -> Result<ParsedEmailWithParts> {
     if bytes.len() > limits.max_source_bytes {
         bail!(
             "email source size limit exceeded: {} bytes is greater than {}",
@@ -258,9 +339,12 @@ pub fn parse_email(bytes: &[u8], limits: EmailParseLimits) -> Result<ParsedEmail
         .find_map(|date| to_utc(&date));
 
     let content_hash = canonical_hash(&addresses, normalized_subject.as_deref(), &body_text);
+    let parts = attachment_limits.map_or_else(Vec::new, |bounds| {
+        collect_attachment_parts(&message, &paths, bounds, &mut warnings)
+    });
     warnings.truncate(limits.max_warnings);
 
-    Ok(ParsedEmail {
+    let email = ParsedEmail {
         message_id,
         normalized_message_id,
         in_reply_to: first_id(message.in_reply_to()),
@@ -281,7 +365,85 @@ pub fn parse_email(bytes: &[u8], limits: EmailParseLimits) -> Result<ParsedEmail
         warnings,
         parser_name: EMAIL_PARSER_NAME,
         parser_version: EMAIL_PARSER_VERSION,
-    })
+    };
+    Ok(ParsedEmailWithParts { email, parts })
+}
+
+/// Decodes attachment parts into owned bytes, within the configured bounds.
+///
+/// Over-limit parts are skipped with a warning rather than truncated: half an
+/// attachment is not a smaller attachment, and storing one would produce an
+/// artifact whose checksum can never match its source.
+fn collect_attachment_parts(
+    message: &Message<'_>,
+    paths: &HashMap<usize, String>,
+    limits: AttachmentLimits,
+    warnings: &mut Vec<String>,
+) -> Vec<AttachmentPart> {
+    let mut parts = Vec::new();
+    let mut total = 0usize;
+    for id in &message.attachments {
+        let index = *id as usize;
+        let Some(part) = message.parts.get(index) else {
+            continue;
+        };
+        let Some(part_path) = paths.get(&index) else {
+            warnings.push("attachment part had no addressable MIME path".to_owned());
+            continue;
+        };
+        // Depth is read from the MIME path rather than tracked separately, so
+        // it cannot drift from the identity the storage key is derived from.
+        let depth = part_path.matches('.').count().saturating_sub(1);
+        if depth > limits.max_depth {
+            warnings.push(format!(
+                "attachment at depth {depth} exceeds the maximum nesting depth of {}",
+                limits.max_depth
+            ));
+            continue;
+        }
+
+        let bytes: Vec<u8> = match &part.body {
+            PartType::Text(text) | PartType::Html(text) => text.as_bytes().to_vec(),
+            PartType::Binary(data) | PartType::InlineBinary(data) => data.to_vec(),
+            // A nested message is materialized as the opaque bytes it is, never
+            // unpacked into top-level files. Its own attachments stay inside it.
+            PartType::Message(nested) => nested.raw_message().to_vec(),
+            PartType::Multipart(_) => continue,
+        };
+
+        if bytes.len() > limits.max_part_bytes {
+            warnings.push(format!(
+                "attachment part {part_path} is {} bytes, over the {} byte limit, and was not stored",
+                bytes.len(),
+                limits.max_part_bytes
+            ));
+            continue;
+        }
+        if total.saturating_add(bytes.len()) > limits.max_message_bytes {
+            warnings.push(format!(
+                "message attachment total exceeded {} bytes; remaining parts were not stored",
+                limits.max_message_bytes
+            ));
+            break;
+        }
+        total += bytes.len();
+
+        let media_type = part.content_type().map_or_else(
+            || "application/octet-stream".to_owned(),
+            |content| match content.c_subtype.as_deref() {
+                Some(subtype) => format!("{}/{subtype}", content.c_type).to_ascii_lowercase(),
+                None => content.c_type.to_ascii_lowercase(),
+            },
+        );
+        parts.push(AttachmentPart {
+            part_path: part_path.clone(),
+            media_type,
+            bytes,
+            depth,
+            is_message: part.is_message(),
+        });
+    }
+    parts
 }
 
 /// Maps every part id to a dotted MIME path such as `1.2`.

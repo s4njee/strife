@@ -103,6 +103,20 @@ export function ResultList(props: {
               <p class="email-result__subject">{subjectOf(hit.subject)}</p>
               <Snippet snippet={hit.snippet} />
 
+              {/* An attachment-only hit looks like a mistake without this: the
+                  search term appears nowhere in the message itself. */}
+              <Show when={hit.matched_attachment}>
+                {(name) => (
+                  <p class="email-result__provenance">
+                    Found in {name()}
+                    <Show when={hit.matched_attachment_page !== null}>
+                      {' '}
+                      (page {hit.matched_attachment_page})
+                    </Show>
+                  </p>
+                )}
+              </Show>
+
               <div class="email-result__meta">
                 <Show when={hit.attachment_count > 0}>
                   <span class="email-chip">

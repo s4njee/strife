@@ -14,10 +14,11 @@ mod thumbnail;
 mod tika;
 
 pub use email::{
-    EMAIL_PARSER_NAME, EMAIL_PARSER_VERSION, EmailAddressKind, EmailParseLimits, InlinePart,
-    ParsedAddress, ParsedAttachment, ParsedEmail, ParsedHeader, SanitizeOptions, SanitizedHtml,
-    html_to_text, is_rfc822_mime, looks_like_rfc822, normalize_address, normalize_message_id,
-    normalize_subject, parse_email, sanitize_email_html,
+    AttachmentLimits, AttachmentPart, EMAIL_PARSER_NAME, EMAIL_PARSER_VERSION, EmailAddressKind,
+    EmailParseLimits, InlinePart, ParsedAddress, ParsedAttachment, ParsedEmail,
+    ParsedEmailWithParts, ParsedHeader, SanitizeOptions, SanitizedHtml, html_to_text,
+    is_rfc822_mime, looks_like_rfc822, normalize_address, normalize_message_id, normalize_subject,
+    parse_email, parse_email_with_parts, sanitize_email_html,
 };
 pub use exif::{ExifResult, extract_exif, extract_exif_with_limits};
 pub use ffprobe::{

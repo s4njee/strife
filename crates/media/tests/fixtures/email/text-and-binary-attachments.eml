@@ -1,0 +1,27 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: One readable and one opaque attachment
+Date: Wed, 11 Apr 2018 09:00:00 +0000
+Message-ID: <mixedsuccess-025@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="ms-boundary"
+
+--ms-boundary
+Content-Type: text/plain; charset="utf-8"
+
+One attachment can be read, the other cannot.
+
+--ms-boundary
+Content-Type: text/plain; name="notes.txt"
+Content-Disposition: attachment; filename="notes.txt"
+
+The perihelion measurement is recorded here.
+
+--ms-boundary
+Content-Type: application/x-strife-unknown; name="opaque.bin"
+Content-Disposition: attachment; filename="opaque.bin"
+Content-Transfer-Encoding: base64
+
+3q2+7w==
+
+--ms-boundary--

@@ -1,0 +1,28 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Two files, one name
+Date: Mon, 9 Apr 2018 09:00:00 +0000
+Message-ID: <dupnames-023@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="dup-boundary"
+
+--dup-boundary
+Content-Type: text/plain; charset="utf-8"
+
+Both attachments are called invoice.pdf.
+
+--dup-boundary
+Content-Type: application/pdf; name="invoice.pdf"
+Content-Disposition: attachment; filename="invoice.pdf"
+Content-Transfer-Encoding: base64
+
+Rmlyc3QgaW52b2ljZSBib2R5
+
+--dup-boundary
+Content-Type: application/pdf; name="invoice.pdf"
+Content-Disposition: attachment; filename="invoice.pdf"
+Content-Transfer-Encoding: base64
+
+U2Vjb25kIGludm9pY2UgYm9keQ==
+
+--dup-boundary--

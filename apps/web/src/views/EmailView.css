@@ -283,6 +283,13 @@
   border-radius: var(--radius-xs);
 }
 
+.email-result__provenance {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-style: italic;
+}
+
 .email-result__meta {
   display: flex;
   flex-wrap: wrap;
@@ -372,6 +379,23 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.email-reader__grouping {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.email-reader__grouping-basis {
+  flex-basis: 100%;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.email-reader__labels li {
+  display: contents;
 }
 
 .email-reader__warnings {

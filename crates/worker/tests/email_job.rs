@@ -292,6 +292,7 @@ async fn an_oversized_message_fails_terminally_without_burning_retries(pool: PgP
                 max_source_bytes: 16,
                 ..EmailParseLimits::default()
             },
+            attachments: strife_media::AttachmentLimits::default(),
             file_timeout: StdDuration::from_secs(30),
         });
     let node_id = seed_message(&pool, &harness, "oversized", &fixture("plain-text.eml")).await;

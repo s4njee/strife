@@ -215,6 +215,12 @@ pub struct MetadataStatusCounts {
     pub completed_per_hour: i64,
 }
 
+mod grouping;
+
+pub use grouping::{
+    EmailDuplicateReason, EmailGrouping, EmailThreadReason, GroupingEvidence, group_email,
+};
+
 /// Kind of durable background work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "job_type", rename_all = "snake_case")]
@@ -226,6 +232,7 @@ pub enum JobType {
     ImportScan,
     Ocr,
     EmailExtraction,
+    AttachmentExtraction,
 }
 
 /// Lifecycle state of a durable background job.
@@ -941,7 +948,10 @@ pub struct EmailMessageRecord {
     pub preview_text: String,
     pub content_hash: Option<String>,
     pub thread_group_id: Option<Uuid>,
+    pub thread_reason: EmailThreadReason,
+    pub thread_conflict: bool,
     pub duplicate_group_id: Option<Uuid>,
+    pub duplicate_reason: EmailDuplicateReason,
     pub provider_thread_id: Option<String>,
     pub attachment_count: i32,
     pub warnings: Vec<String>,
@@ -1060,6 +1070,17 @@ pub async fn replace_email_projection(
     projection: &EmailProjection<'_>,
 ) -> Result<EmailMessageRecord, sqlx::Error> {
     let input = &projection.message;
+    // Grouping is derived here rather than supplied by the caller, so a thread
+    // or duplicate assignment cannot drift out of step with the headers it is
+    // computed from.
+    let grouping = group_email(&GroupingEvidence {
+        provider_thread_id: input.provider_thread_id,
+        normalized_message_id: input.normalized_message_id,
+        in_reply_to: input.in_reply_to,
+        reference_ids: input.reference_ids,
+        normalized_subject: input.normalized_subject,
+        content_hash: input.content_hash,
+    });
     let mut transaction = pool.begin().await?;
     let message = sqlx::query_as::<_, EmailMessageRecord>(
         r"
@@ -1068,10 +1089,11 @@ pub async fn replace_email_projection(
             normalized_message_id, in_reply_to, reference_ids, subject,
             normalized_subject, sent_at, received_at, body_text, body_html,
             preview_text, content_hash, provider_thread_id, attachment_count,
-            warnings, duration_ms
+            warnings, duration_ms, thread_group_id, thread_reason,
+            thread_conflict, duplicate_group_id, duplicate_reason
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                $15, $16, $17, $18, $19, $20)
+                $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
         ON CONFLICT (node_id) DO UPDATE SET
             status = EXCLUDED.status,
             parser_name = EXCLUDED.parser_name,
@@ -1092,6 +1114,11 @@ pub async fn replace_email_projection(
             attachment_count = EXCLUDED.attachment_count,
             warnings = EXCLUDED.warnings,
             duration_ms = EXCLUDED.duration_ms,
+            thread_group_id = EXCLUDED.thread_group_id,
+            thread_reason = EXCLUDED.thread_reason,
+            thread_conflict = EXCLUDED.thread_conflict,
+            duplicate_group_id = EXCLUDED.duplicate_group_id,
+            duplicate_reason = EXCLUDED.duplicate_reason,
             updated_at = now()
         RETURNING *
         ",
@@ -1116,6 +1143,11 @@ pub async fn replace_email_projection(
     .bind(i32::try_from(projection.attachments.len()).unwrap_or(i32::MAX))
     .bind(input.warnings)
     .bind(input.duration_ms)
+    .bind(grouping.thread_group_id)
+    .bind(grouping.thread_reason)
+    .bind(grouping.thread_conflict)
+    .bind(grouping.duplicate_group_id)
+    .bind(grouping.duplicate_reason)
     .fetch_one(&mut *transaction)
     .await?;
 
@@ -1340,6 +1372,411 @@ pub async fn list_email_attachments(
         .await
 }
 
+/// Lifecycle of one materialized attachment artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "email_artifact_state", rename_all = "snake_case")]
+pub enum EmailArtifactState {
+    Pending,
+    Ready,
+    Failed,
+    Skipped,
+}
+
+/// Namespace for deterministic attachment artifact ids.
+///
+/// Fixed forever: changing it would orphan every artifact already written, and
+/// the identity it produces is what makes a rerun replace an artifact in place
+/// rather than accumulate a second copy.
+const EMAIL_ATTACHMENT_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x9d, 0x1a, 0x4c, 0x77, 0x2e, 0x63, 0x54, 0x8f, 0xa1, 0x0b, 0x6c, 0x39, 0x5e, 0x87, 0x12, 0xd4,
+]);
+
+/// Derives an attachment artifact's stable id from its message and MIME path.
+///
+/// Deliberately excludes the filename. A sender controls the filename and could
+/// otherwise steer two different attachments — or two different messages — onto
+/// one storage object, or influence where bytes are written at all.
+#[must_use]
+pub fn email_attachment_artifact_id(node_id: Uuid, part_path: &str) -> Uuid {
+    let name = format!("{node_id}:{part_path}");
+    Uuid::new_v5(&EMAIL_ATTACHMENT_NAMESPACE, name.as_bytes())
+}
+
+/// A materialized attachment artifact.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct EmailAttachmentArtifact {
+    pub id: Uuid,
+    pub node_id: Uuid,
+    pub part_path: String,
+    pub state: EmailArtifactState,
+    pub storage_key: Option<String>,
+    pub media_type: String,
+    pub byte_size: i64,
+    pub checksum_sha256: Option<String>,
+    pub depth: i32,
+    pub is_message: bool,
+    pub materializer_version: String,
+    pub warnings: Vec<String>,
+    /// Text-extraction outcome for this attachment, tracked separately from the
+    /// materialization state: bytes can be stored long before, or without ever,
+    /// yielding searchable text.
+    pub text_status: EmailExtractionStatus,
+    pub text_extractor_name: Option<String>,
+    pub text_extractor_version: Option<String>,
+    pub text_bytes: i64,
+    pub text_warnings: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Values written when an artifact reaches a terminal state.
+#[derive(Clone, Copy, Debug)]
+pub struct UpsertEmailAttachmentArtifact<'a> {
+    pub node_id: Uuid,
+    pub part_path: &'a str,
+    pub state: EmailArtifactState,
+    pub storage_key: Option<&'a str>,
+    pub media_type: &'a str,
+    pub byte_size: i64,
+    pub checksum_sha256: Option<&'a str>,
+    pub depth: i32,
+    pub is_message: bool,
+    pub materializer_version: &'a str,
+    pub warnings: &'a [String],
+}
+
+/// Records one attachment artifact, replacing any previous row for that part.
+///
+/// # Errors
+///
+/// Returns a database error when the artifact cannot be written.
+pub async fn upsert_email_attachment_artifact(
+    pool: &PgPool,
+    artifact: &UpsertEmailAttachmentArtifact<'_>,
+) -> Result<EmailAttachmentArtifact, sqlx::Error> {
+    sqlx::query_as::<_, EmailAttachmentArtifact>(
+        r"
+        INSERT INTO email_attachment_artifacts (
+            id, node_id, part_path, state, storage_key, media_type, byte_size,
+            checksum_sha256, depth, is_message, materializer_version, warnings
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (node_id, part_path) DO UPDATE SET
+            state = EXCLUDED.state,
+            storage_key = EXCLUDED.storage_key,
+            media_type = EXCLUDED.media_type,
+            byte_size = EXCLUDED.byte_size,
+            checksum_sha256 = EXCLUDED.checksum_sha256,
+            depth = EXCLUDED.depth,
+            is_message = EXCLUDED.is_message,
+            materializer_version = EXCLUDED.materializer_version,
+            warnings = EXCLUDED.warnings,
+            updated_at = now()
+        RETURNING *
+        ",
+    )
+    .bind(email_attachment_artifact_id(
+        artifact.node_id,
+        artifact.part_path,
+    ))
+    .bind(artifact.node_id)
+    .bind(artifact.part_path)
+    .bind(artifact.state)
+    .bind(artifact.storage_key)
+    .bind(artifact.media_type)
+    .bind(artifact.byte_size)
+    .bind(artifact.checksum_sha256)
+    .bind(artifact.depth)
+    .bind(artifact.is_message)
+    .bind(artifact.materializer_version)
+    .bind(artifact.warnings)
+    .fetch_one(pool)
+    .await
+}
+
+/// Fetches one artifact by message and MIME part path.
+///
+/// # Errors
+///
+/// Returns a database error when the artifact cannot be queried.
+pub async fn get_email_attachment_artifact(
+    pool: &PgPool,
+    node_id: Uuid,
+    part_path: &str,
+) -> Result<Option<EmailAttachmentArtifact>, sqlx::Error> {
+    sqlx::query_as::<_, EmailAttachmentArtifact>(
+        "SELECT * FROM email_attachment_artifacts WHERE node_id = $1 AND part_path = $2",
+    )
+    .bind(node_id)
+    .bind(part_path)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Lists a message's artifacts in part order.
+///
+/// # Errors
+///
+/// Returns a database error when artifacts cannot be queried.
+pub async fn list_email_attachment_artifacts(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Vec<EmailAttachmentArtifact>, sqlx::Error> {
+    sqlx::query_as::<_, EmailAttachmentArtifact>(
+        "SELECT * FROM email_attachment_artifacts WHERE node_id = $1 ORDER BY part_path",
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Lists artifact storage keys for a message so they can be reclaimed.
+///
+/// # Errors
+///
+/// Returns a database error when keys cannot be queried.
+pub async fn email_attachment_storage_keys(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT storage_key FROM email_attachment_artifacts
+         WHERE node_id = $1 AND storage_key IS NOT NULL",
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Where an attachment's text came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "email_attachment_text_source", rename_all = "snake_case")]
+pub enum EmailAttachmentTextSource {
+    Embedded,
+    Ocr,
+}
+
+/// One page of text extracted from one attachment.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct EmailAttachmentTextPage {
+    pub node_id: Uuid,
+    pub part_path: String,
+    pub page_number: i32,
+    pub content: String,
+    pub source: EmailAttachmentTextSource,
+    pub confidence: Option<f32>,
+}
+
+/// One page of text to store.
+#[derive(Clone, Copy, Debug)]
+pub struct EmailAttachmentTextInput<'a> {
+    pub page_number: i32,
+    pub content: &'a str,
+    pub source: EmailAttachmentTextSource,
+    pub confidence: Option<f32>,
+}
+
+/// The extraction outcome recorded against an attachment.
+#[derive(Clone, Copy, Debug)]
+pub struct EmailAttachmentTextOutcome<'a> {
+    pub status: EmailExtractionStatus,
+    pub extractor_name: Option<&'a str>,
+    pub extractor_version: Option<&'a str>,
+    pub warnings: &'a [String],
+}
+
+/// Replaces one attachment's extracted text and records the outcome.
+///
+/// Text and outcome move together in one transaction, because a search vector
+/// rebuilt from half-written pages would index a document that never existed.
+///
+/// # Errors
+///
+/// Returns a database error when the text cannot be replaced.
+pub async fn replace_email_attachment_text(
+    pool: &PgPool,
+    node_id: Uuid,
+    part_path: &str,
+    pages: &[EmailAttachmentTextInput<'_>],
+    outcome: &EmailAttachmentTextOutcome<'_>,
+) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("DELETE FROM email_attachment_text WHERE node_id = $1 AND part_path = $2")
+        .bind(node_id)
+        .bind(part_path)
+        .execute(&mut *transaction)
+        .await?;
+
+    let mut text_bytes = 0i64;
+    for page in pages {
+        text_bytes += i64::try_from(page.content.len()).unwrap_or(i64::MAX);
+        sqlx::query(
+            r"
+            INSERT INTO email_attachment_text
+                (node_id, part_path, page_number, content, source, confidence)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ",
+        )
+        .bind(node_id)
+        .bind(part_path)
+        .bind(page.page_number)
+        .bind(page.content)
+        .bind(page.source)
+        .bind(page.confidence)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    sqlx::query(
+        r"
+        UPDATE email_attachment_artifacts
+           SET text_status = $3,
+               text_extractor_name = $4,
+               text_extractor_version = $5,
+               text_bytes = $6,
+               text_warnings = $7,
+               updated_at = now()
+         WHERE node_id = $1 AND part_path = $2
+        ",
+    )
+    .bind(node_id)
+    .bind(part_path)
+    .bind(outcome.status)
+    .bind(outcome.extractor_name)
+    .bind(outcome.extractor_version)
+    .bind(text_bytes)
+    .bind(outcome.warnings)
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await
+}
+
+/// Lists a message's extracted attachment text in document order.
+///
+/// # Errors
+///
+/// Returns a database error when the text cannot be queried.
+pub async fn list_email_attachment_text(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Vec<EmailAttachmentTextPage>, sqlx::Error> {
+    sqlx::query_as::<_, EmailAttachmentTextPage>(
+        "SELECT node_id, part_path, page_number, content, source, confidence
+         FROM email_attachment_text WHERE node_id = $1
+         ORDER BY part_path, page_number",
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// What a bounded attachment reprocessing pass should target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachmentReprocessScope<'a> {
+    /// One attachment of one message.
+    Part { node_id: Uuid, part_path: &'a str },
+    /// Every message holding an attachment whose extraction failed.
+    Failed,
+    /// Attachments that are stored but have produced no text yet.
+    Missing,
+    /// Attachments extracted by a version other than the current one.
+    ExtractorVersion(&'a str),
+}
+
+/// Enqueues bounded attachment extraction work for the selected scope.
+///
+/// Returns how many messages were enqueued. Work is queued per message rather
+/// than per attachment because the job queue targets nodes, and an attachment
+/// is a MIME part rather than a node of its own.
+///
+/// # Errors
+///
+/// Returns a database error when candidates cannot be selected or enqueued.
+pub async fn enqueue_attachment_reprocessing(
+    pool: &PgPool,
+    scope: AttachmentReprocessScope<'_>,
+    limit: i64,
+) -> Result<u64, sqlx::Error> {
+    let nodes: Vec<Uuid> = match scope {
+        AttachmentReprocessScope::Part { node_id, part_path } => {
+            // Resetting the row is what makes the rerun visible: the handler
+            // selects pending attachments, so a completed one would be skipped.
+            sqlx::query(
+                "UPDATE email_attachment_artifacts SET text_status = 'pending', updated_at = now()
+                 WHERE node_id = $1 AND part_path = $2",
+            )
+            .bind(node_id)
+            .bind(part_path)
+            .execute(pool)
+            .await?;
+            vec![node_id]
+        }
+        AttachmentReprocessScope::Failed => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT DISTINCT node_id FROM email_attachment_artifacts
+                 WHERE text_status = 'failed' ORDER BY node_id LIMIT $1",
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        AttachmentReprocessScope::Missing => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT DISTINCT node_id FROM email_attachment_artifacts
+                 WHERE state = 'ready' AND text_status = 'pending'
+                 ORDER BY node_id LIMIT $1",
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        AttachmentReprocessScope::ExtractorVersion(version) => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT DISTINCT node_id FROM email_attachment_artifacts
+                 WHERE state = 'ready'
+                   AND text_status = 'completed'
+                   AND text_extractor_version IS DISTINCT FROM $1
+                 ORDER BY node_id LIMIT $2",
+            )
+            .bind(version)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    if !matches!(scope, AttachmentReprocessScope::Part { .. }) {
+        // Reset the selected messages so the handler treats them as work.
+        sqlx::query(
+            "UPDATE email_attachment_artifacts SET text_status = 'pending', updated_at = now()
+             WHERE node_id = ANY($1) AND state = 'ready'",
+        )
+        .bind(&nodes)
+        .execute(pool)
+        .await?;
+    }
+
+    let mut enqueued = 0;
+    for node_id in nodes {
+        if enqueue_job_with_context(
+            pool,
+            JobType::AttachmentExtraction,
+            node_id,
+            20,
+            JobOrigin::Repair,
+            None,
+            default_resource_class(JobType::AttachmentExtraction),
+        )
+        .await?
+        .is_some()
+        {
+            enqueued += 1;
+        }
+    }
+    Ok(enqueued)
+}
+
 /// One ranked email search hit.
 #[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
 pub struct EmailSearchResult {
@@ -1355,6 +1792,13 @@ pub struct EmailSearchResult {
     pub from_address: Option<String>,
     pub from_display_name: Option<String>,
     pub labels: Vec<String>,
+    /// Which parts of the message the query matched, so a result can explain
+    /// itself rather than appearing for no visible reason. Empty for a
+    /// filter-only search, which has no text to attribute.
+    pub match_sources: Vec<String>,
+    /// Attachment filename and page for the best attachment-content match.
+    pub matched_attachment: Option<String>,
+    pub matched_attachment_page: Option<i32>,
 }
 
 /// Structured narrowing applied alongside (or instead of) a text query.
@@ -1537,12 +1981,24 @@ pub async fn search_email(
             ORDER BY score DESC, sent_at DESC NULLS LAST, node_id DESC
             LIMIT $16
         )
-        -- Sender and labels are joined after the page is cut, so these lookups
-        -- run once per returned row rather than once per match.
+        -- Sender, labels, and match provenance are joined after the page is cut,
+        -- so these lookups run once per returned row rather than once per match.
         SELECT p.*,
                sender.address AS from_address,
                sender.display_name AS from_display_name,
-               coalesce(labels.values, ARRAY[]::text[]) AS labels
+               coalesce(labels.values, ARRAY[]::text[]) AS labels,
+               -- A result that cannot say why it matched is hard to trust, and
+               -- an attachment-only hit looks like a mistake without it.
+               array_remove(ARRAY[
+                   CASE WHEN provenance.subject_match THEN 'subject' END,
+                   CASE WHEN provenance.address_match THEN 'headers' END,
+                   CASE WHEN provenance.body_match THEN 'body' END,
+                   CASE WHEN provenance.filename_match THEN 'attachment_filename' END,
+                   CASE WHEN attachment.filename IS NOT NULL
+                         OR attachment.page_number IS NOT NULL THEN 'attachment_content' END
+               ], NULL) AS match_sources,
+               attachment.filename AS matched_attachment,
+               attachment.page_number AS matched_attachment_page
         FROM page p
         LEFT JOIN LATERAL (
             SELECT a.address, a.display_name
@@ -1556,6 +2012,47 @@ pub async fn search_email(
             FROM email_labels l
             WHERE l.node_id = p.node_id
         ) labels ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT
+                $1::text IS NOT NULL AND (
+                    to_tsvector('english', coalesce(p.subject, ''))
+                    || to_tsvector('simple', coalesce(p.subject, ''))
+                ) @@ (websearch_to_tsquery('english', $1)
+                      || websearch_to_tsquery('simple', $1)) AS subject_match,
+                $1::text IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM email_addresses a
+                    WHERE a.node_id = p.node_id
+                      AND to_tsvector('simple',
+                              coalesce(a.display_name, '') || ' ' || a.address)
+                          @@ websearch_to_tsquery('simple', $1)
+                ) AS address_match,
+                -- Body is tested against the stored vector's weight-C class
+                -- rather than by re-tokenizing the body, which can be megabytes.
+                -- The weight array is ordered {D,C,B,A}.
+                $1::text IS NOT NULL AND ts_rank('{0,1,0,0}', e.search_vector,
+                    websearch_to_tsquery('english', $1)
+                    || websearch_to_tsquery('simple', $1)) > 0 AS body_match,
+                $1::text IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM email_attachments ea
+                    WHERE ea.node_id = p.node_id AND ea.filename IS NOT NULL
+                      AND to_tsvector('simple', ea.filename)
+                          @@ websearch_to_tsquery('simple', $1)
+                ) AS filename_match
+            FROM email_messages e
+            WHERE e.node_id = p.node_id
+        ) provenance ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT ea.filename, t.page_number
+            FROM email_attachment_text t
+            LEFT JOIN email_attachments ea
+                   ON ea.node_id = t.node_id AND ea.part_path = t.part_path
+            WHERE t.node_id = p.node_id
+              AND $1::text IS NOT NULL
+              AND to_tsvector('english', t.content)
+                  @@ websearch_to_tsquery('english', $1)
+            ORDER BY t.part_path, t.page_number
+            LIMIT 1
+        ) attachment ON TRUE
         ORDER BY p.score DESC, p.sent_at DESC NULLS LAST, p.node_id DESC
         ",
     )
@@ -2680,7 +3177,12 @@ pub const fn default_resource_class(job_type: JobType) -> JobResourceClass {
         // Email parsing starts under the shared heavy permit even though MIME
         // parsing is cheaper than OCR. ADR 0009 gates promotion to `Extractor`
         // on the 10,000-message canary in email.md Story 22.5.
-        JobType::Ocr | JobType::EmailExtraction => JobResourceClass::HeavyCpu,
+        // Attachment extraction runs Tika and OCR over documents pulled out of
+        // messages, so it is the same kind of sustained CPU work as OCR itself
+        // and shares the heavy permit rather than competing outside it.
+        JobType::Ocr | JobType::EmailExtraction | JobType::AttachmentExtraction => {
+            JobResourceClass::HeavyCpu
+        }
         JobType::ImportScan => JobResourceClass::HeavyIo,
         JobType::TrashCleanup | JobType::PermanentDeletion => JobResourceClass::Light,
     }
@@ -5682,9 +6184,20 @@ pub async fn list_storage_keys_for_deletion(
             ) AS original_storage_key,
             COALESCE(
                 (
-                    SELECT array_agg(da.storage_key)
-                    FROM derived_artifacts AS da
-                    WHERE da.node_id = t.id
+                    -- Both sources live in the artifacts namespace and are
+                    -- reclaimed identically, so they are collected together.
+                    -- Omitting attachment artifacts would leave their bytes on
+                    -- disk after the message they belong to was deleted.
+                    SELECT array_agg(storage_key)
+                    FROM (
+                        SELECT da.storage_key
+                        FROM derived_artifacts AS da
+                        WHERE da.node_id = t.id
+                        UNION ALL
+                        SELECT eaa.storage_key
+                        FROM email_attachment_artifacts AS eaa
+                        WHERE eaa.node_id = t.id AND eaa.storage_key IS NOT NULL
+                    ) AS keys
                 ),
                 '{}'::text[]
             ) AS artifact_storage_keys

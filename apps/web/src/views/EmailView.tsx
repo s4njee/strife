@@ -244,6 +244,18 @@ export function EmailView() {
     if (message()) closeButton?.focus()
   })
 
+  // Thread and duplicate exploration are searches, not a separate mode: they
+  // navigate to a URL like any other, so back returns to the previous search
+  // and the view has no extra state to keep consistent.
+  const showThread = (threadId: string) => {
+    navigate(`/email?thread_id=${threadId}`, { scroll: false })
+  }
+  const showDuplicates = (groupId: string) => {
+    navigate(`/email?duplicate_group=${groupId}&include_duplicates=true`, {
+      scroll: false,
+    })
+  }
+
   const toggleValue = (list: string[], value: string) =>
     list.includes(value)
       ? list.filter((entry) => entry !== value)
@@ -586,6 +598,14 @@ export function EmailView() {
                   remoteRevealed={revealRemote()}
                   onRevealRemote={() => setRevealRemote(true)}
                   onClose={closeMessage}
+                  onShowThread={showThread}
+                  onShowDuplicates={showDuplicates}
+                  onFilterLabel={(label) =>
+                    apply({
+                      ...criteria(),
+                      label: toggleValue(criteria().label, label),
+                    })
+                  }
                   ref={(element) => (closeButton = element)}
                 />
               )}
@@ -628,6 +648,9 @@ const sampleResults: EmailSearchHit[] = [
     from_address: 'ada@example.test',
     from_display_name: 'Ada Lovelace',
     labels: ['Work'],
+    match_sources: ['subject', 'body'],
+    matched_attachment: null,
+    matched_attachment_page: null,
   },
   {
     node_id: 'preview-2',
@@ -641,6 +664,9 @@ const sampleResults: EmailSearchHit[] = [
     from_address: null,
     from_display_name: null,
     labels: ['Archive'],
+    match_sources: ['attachment_content'],
+    matched_attachment: 'contract.pdf',
+    matched_attachment_page: 4,
   },
 ]
 
@@ -660,8 +686,11 @@ const sampleMessage: EmailMessage = {
   blocked_remote_count: 2,
   blocked_hosts: ['tracker.example.test'],
   preview_text: 'The reconciliation figures are attached.',
-  thread_group_id: null,
-  duplicate_group_id: null,
+  thread_group_id: '00000000-0000-0000-0000-0000000000a1',
+  thread_reason: 'references',
+  thread_conflict: false,
+  duplicate_group_id: '00000000-0000-0000-0000-0000000000b2',
+  duplicate_reason: 'message_id',
   provider_thread_id: null,
   labels: ['Work'],
   addresses: [

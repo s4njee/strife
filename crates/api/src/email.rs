@@ -146,6 +146,10 @@ struct SearchHit {
     from_address: Option<String>,
     from_display_name: Option<String>,
     labels: Vec<String>,
+    /// Which parts of the message matched, so a result can explain itself.
+    match_sources: Vec<String>,
+    matched_attachment: Option<String>,
+    matched_attachment_page: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -223,7 +227,13 @@ struct MessageResponse {
     blocked_hosts: Vec<String>,
     preview_text: String,
     thread_group_id: Option<Uuid>,
+    /// Why the message landed in that thread, so a weak grouping (a shared
+    /// subject) can be told apart from a strong one (a References root).
+    thread_reason: String,
+    /// A provider thread id was used but the RFC headers disagree with it.
+    thread_conflict: bool,
     duplicate_group_id: Option<Uuid>,
+    duplicate_reason: String,
     provider_thread_id: Option<String>,
     labels: Vec<String>,
     addresses: Vec<AddressResponse>,
@@ -395,6 +405,9 @@ async fn search(
             from_address: hit.from_address,
             from_display_name: hit.from_display_name,
             labels: hit.labels,
+            match_sources: hit.match_sources,
+            matched_attachment: hit.matched_attachment,
+            matched_attachment_page: hit.matched_attachment_page,
         })
         .collect();
     let next_cursor = (u32::try_from(results.len()).unwrap_or(u32::MAX) == limit)
@@ -493,7 +506,10 @@ async fn message(
             .map_or_else(Vec::new, |value| value.blocked_hosts.clone()),
         preview_text: record.preview_text,
         thread_group_id: record.thread_group_id,
+        thread_reason: thread_reason_name(record.thread_reason).to_owned(),
+        thread_conflict: record.thread_conflict,
         duplicate_group_id: record.duplicate_group_id,
+        duplicate_reason: duplicate_reason_name(record.duplicate_reason).to_owned(),
         provider_thread_id: record.provider_thread_id,
         labels,
         addresses: addresses
@@ -555,6 +571,24 @@ fn sanitize_body(
     body_html.map(|html| strife_media::sanitize_email_html(html, &options))
 }
 
+const fn thread_reason_name(reason: strife_db::EmailThreadReason) -> &'static str {
+    match reason {
+        strife_db::EmailThreadReason::Provider => "provider",
+        strife_db::EmailThreadReason::References => "references",
+        strife_db::EmailThreadReason::MessageId => "message_id",
+        strife_db::EmailThreadReason::Subject => "subject",
+        strife_db::EmailThreadReason::None => "none",
+    }
+}
+
+const fn duplicate_reason_name(reason: strife_db::EmailDuplicateReason) -> &'static str {
+    match reason {
+        strife_db::EmailDuplicateReason::MessageId => "message_id",
+        strife_db::EmailDuplicateReason::ContentHash => "content_hash",
+        strife_db::EmailDuplicateReason::None => "none",
+    }
+}
+
 const fn role_name(role: strife_db::EmailAddressRole) -> &'static str {
     match role {
         strife_db::EmailAddressRole::From => "from",
@@ -587,6 +621,9 @@ mod tests {
                 from_address: None,
                 from_display_name: None,
                 labels: Vec::new(),
+                match_sources: Vec::new(),
+                matched_attachment: None,
+                matched_attachment_page: None,
             };
             let decoded = decode_cursor(&encode_cursor(&hit)).expect("round trip");
             assert_eq!(decoded.node_id, node_id);

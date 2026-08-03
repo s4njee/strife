@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from 'solid-js'
 import type { EmailMessage } from '../../api/types'
-import { downloadFileUrl } from '../../api/client'
+import { downloadFileUrl, emailAttachmentUrl } from '../../api/client'
 import { useTheme } from '../../theme/ThemeProvider'
 import type { Theme } from '../../theme/ThemeProvider'
 import {
@@ -73,6 +73,15 @@ function frameDocument(
 </head><body>${html}</body></html>`
 }
 
+/** Plain-English basis for a thread grouping, weakest reasons spelled out. */
+const THREAD_BASIS: Record<string, string> = {
+  provider: 'Grouped by the Gmail conversation this message was exported from.',
+  references: 'Grouped by the reply headers the sender wrote.',
+  message_id: 'No replies to this message are in the archive.',
+  subject: 'Grouped only by a matching subject, which can join unrelated mail.',
+  none: 'Not enough information to group this message.',
+}
+
 /** Tallest the message frame may grow before it scrolls internally. */
 const MAX_FRAME_HEIGHT = 4000
 
@@ -115,6 +124,12 @@ export function MessageReader(props: {
   onRevealRemote: () => void
   remoteRevealed: boolean
   onClose: () => void
+  /** Replaces the search with every message in this conversation. */
+  onShowThread?: (threadId: string) => void
+  /** Replaces the search with every copy of this message. */
+  onShowDuplicates?: (groupId: string) => void
+  /** Narrows the search to one Gmail label. */
+  onFilterLabel?: (label: string) => void
   /** Receives the close button so the view can restore focus predictably. */
   ref?: (element: HTMLElement) => void
 }) {
@@ -201,11 +216,64 @@ export function MessageReader(props: {
         </dl>
 
         <Show when={props.message.labels.length > 0}>
-          <ul class="email-reader__labels" aria-label="Gmail labels">
+          {/* Imported facts, not a live view: Strife does not claim these are
+              still what Gmail shows. */}
+          <ul
+            class="email-reader__labels"
+            aria-label="Gmail labels as imported"
+          >
             <For each={props.message.labels}>
-              {(label) => <li class="email-chip">{label}</li>}
+              {(label) => (
+                <li>
+                  <button
+                    type="button"
+                    class="email-chip is-toggle"
+                    onClick={() => props.onFilterLabel?.(label)}
+                  >
+                    {label}
+                  </button>
+                </li>
+              )}
             </For>
           </ul>
+        </Show>
+
+        <Show
+          when={
+            props.message.thread_group_id ?? props.message.duplicate_group_id
+          }
+        >
+          <div class="email-reader__grouping">
+            <Show when={props.message.thread_group_id}>
+              {(threadId) => (
+                <button
+                  type="button"
+                  onClick={() => props.onShowThread?.(threadId())}
+                >
+                  Show conversation
+                </button>
+              )}
+            </Show>
+            <Show when={props.message.duplicate_group_id}>
+              {(groupId) => (
+                <button
+                  type="button"
+                  onClick={() => props.onShowDuplicates?.(groupId())}
+                >
+                  Show every copy
+                </button>
+              )}
+            </Show>
+            {/* Grouping archived mail is inference. Saying what it rests on
+                keeps a subject-only thread from reading as certainty. */}
+            <small class="email-reader__grouping-basis">
+              {THREAD_BASIS[props.message.thread_reason]}
+              <Show when={props.message.thread_conflict}>
+                {' '}
+                Gmail and the message headers disagree about this conversation.
+              </Show>
+            </small>
+          </div>
         </Show>
       </header>
 
@@ -293,9 +361,19 @@ export function MessageReader(props: {
             <For each={props.message.attachments}>
               {(attachment) => (
                 <li>
-                  <span class="email-reader__attachment-name">
+                  {/* Downloads through the message-scoped endpoint, which is
+                      what keeps one message's attachments unreachable from
+                      another's. */}
+                  <a
+                    class="email-reader__attachment-name"
+                    href={emailAttachmentUrl(
+                      props.message.node_id,
+                      attachment.part_path,
+                    )}
+                    download=""
+                  >
                     {attachment.filename ?? `part ${attachment.part_path}`}
-                  </span>
+                  </a>
                   <small>{attachment.media_type}</small>
                   <Show when={attachment.decoded_size !== null}>
                     {/* `data` carries the exact byte count while the text stays
@@ -311,9 +389,11 @@ export function MessageReader(props: {
               )}
             </For>
           </ul>
-          <p class="email-reader__note">
-            Attachment downloads arrive with attachment materialization.
-          </p>
+          <Show when={props.message.attachments.some((a) => a.is_inline)}>
+            <p class="email-reader__note">
+              Inline parts are also referenced by the message body.
+            </p>
+          </Show>
         </section>
       </Show>
 

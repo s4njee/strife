@@ -1,0 +1,3 @@
+-- PostgreSQL enum values cannot be removed without rebuilding every dependent
+-- column. Leaving the unused attachment job type in place makes rollback safe
+-- for existing job rows, matching 0019's treatment of the email job type.
