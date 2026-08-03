@@ -438,6 +438,47 @@ Attachment OCR uses the same OCR and `heavy_cpu` permits as ordinary OCR. It nev
 - Keep repair/reprocess controls bounded; completing a campaign does not authorize automatic future full-library version reprocessing.
 - Run backup and restore validation after the new database/index footprint stabilizes.
 
+## Backup and restore requirements
+
+The email feature changes what a backup has to cover, because it creates a large
+volume of data that is *not* worth backing up alongside a small volume that
+absolutely is.
+
+**Canonical and irreplaceable — must be in every backup and every restore drill:**
+
+- The `.eml` originals in managed storage. Nothing can rebuild these. If they are
+  lost, the archive is lost, and every projection below becomes an orphan
+  describing messages that no longer exist.
+- The `nodes` and `file_objects` rows that give those originals identity.
+
+**Derived and rebuildable — restore is a convenience, not a requirement:**
+
+- `email_messages`, `email_addresses`, `email_headers`, `email_labels`,
+  `email_attachments` — reparsed from the originals.
+- `email_attachment_artifacts` and their storage objects — rematerialized.
+- `email_attachment_text` — re-extracted.
+- `search_vector` — rebuilt by the bounded index backfill.
+
+Rebuilding all of it means a full campaign, which is hours to days of sustained
+CPU, so restoring the projections is worth doing when they are available. Losing
+them is a delay; losing an original is permanent.
+
+Requirements before the full backfill starts:
+
+1. A verified PostgreSQL backup taken **after** the additive migration and
+   **before** the first campaign, so a rollback target exists that already has
+   the new schema.
+2. A storage backup or snapshot covering the originals namespace. Artifact and
+   staging namespaces may be excluded to keep the backup small — both are
+   regenerable, and the artifact namespace grows by roughly the archive size
+   again once attachments are materialized.
+3. A restore drill that proves the originals come back readable: restore to a
+   scratch host, run the read-only preflight against the restored storage, and
+   confirm the file count and total bytes match the pre-backup survey.
+4. Backup free space checked against the projected database growth from the
+   preflight report. A backup that silently stops mid-campaign is worse than one
+   that was never configured.
+
 ## Canary promotion gates
 
 A canary advances only when:

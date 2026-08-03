@@ -349,10 +349,53 @@ export interface EmailCounts {
   unsupported: number
   remaining: number
   indexed: number
+  candidates: number
+  attachments_pending: number
+  attachments_completed: number
+  attachments_failed: number
+}
+
+export interface EmailCampaign {
+  id: string
+  state: string
+  snapshot_before: string | null
+  cursor_created_at: string | null
+  cursor_node_id: string | null
+  batch_size: number
+  max_queued: number
+  max_running: number
+  resource_class: string
+  foreground_fairness: number
+  candidate_count: number
+  enqueued_count: number
+  completed_count: number
+  failed_count: number
+  skipped_count: number
+  last_error: string | null
 }
 
 export interface EmailStatus {
   counts: EmailCounts
+  completed_per_hour: number
+  /** Absent when nothing has completed recently; a rate of zero has no ETA. */
+  eta_seconds: number | null
+  parser_version: string
+  attachment_extractor_version: string
+  campaigns: EmailCampaign[]
+}
+
+export interface EmailEvent {
+  id: number
+  node_id: string | null
+  name: string
+  state: 'running' | 'completed' | 'failed' | 'skipped' | 'unsupported'
+  subject: string | null
+  attachment_count: number | null
+  duration_ms: number | null
+  origin: 'foreground' | 'repair' | 'backfill'
+  campaign_id: string | null
+  warning: string | null
+  created_at: string
 }
 
 export interface EmailSearchHit {

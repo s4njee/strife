@@ -22,6 +22,20 @@ async fn main() -> Result<()> {
     let tesseract_version = verify_tesseract(&config.tesseract_binary).await?;
     strife_db::set_ocr_engine_state(&pool, "tesseract", &tesseract_version, &config.ocr_language)
         .await?;
+    // The shared heavy-CPU permit is a set of durable slot rows, so its width is
+    // reconciled at startup rather than baked into a migration. OCR, email
+    // parsing, and attachment extraction all draw from it.
+    let heavy_slots = strife_db::set_resource_slots(
+        &pool,
+        strife_db::JobResourceClass::HeavyCpu,
+        i32::try_from(config.heavy_cpu_concurrency)?,
+    )
+    .await?;
+    tracing::info!(
+        heavy_cpu_slots = heavy_slots,
+        "heavy CPU admission configured"
+    );
+
     let storage = Arc::new(LocalFsBackend::new(&config.storage_root).await?);
     let handler = Arc::new(
         WorkerHandler::new(
@@ -42,6 +56,11 @@ async fn main() -> Result<()> {
             file_timeout: config.ocr_file_timeout,
             memory_limit_bytes: config.ocr_memory_limit_bytes,
             max_text_bytes: config.ocr_max_text_bytes,
+        })
+        .with_email_settings(strife_worker::EmailSettings {
+            limits: config.email_limits,
+            attachments: config.email_attachment_limits,
+            file_timeout: config.email_file_timeout,
         })
         .with_imports(
             pool.clone(),

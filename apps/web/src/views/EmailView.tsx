@@ -13,16 +13,19 @@ import {
   getEmailFacets,
   getEmailMessage,
   getEmailStatus,
+  reprocessEmail,
   searchEmail,
 } from '../api/client'
 import type {
   EmailFacets,
   EmailMessage,
   EmailSearchCriteria,
+  EmailEvent,
   EmailSearchHit,
   EmailStatus,
 } from '../api/types'
 import { MessageReader } from './email/MessageReader'
+import { ProcessingConsole } from './email/ProcessingConsole'
 import { ResultList } from './email/ResultList'
 import {
   criteriaFromSearch,
@@ -84,14 +87,72 @@ export function EmailView() {
   // Distinguishes "this archive has nothing indexed" from "this search matched
   // nothing". Telling a user to broaden their terms when no mail has been
   // parsed at all sends them looking for a problem in the wrong place.
-  const [archive] = createResource<EmailStatus | undefined>(async () => {
-    if (staticPreview) return undefined
-    try {
-      return await getEmailStatus()
-    } catch {
-      return undefined
-    }
+  //
+  // Seeded by a fetch and thereafter updated by the event stream, so the counts
+  // and the console never disagree about what the archive is doing.
+  const [archive, setArchive] = createSignal<EmailStatus | undefined>(
+    staticPreview ? sampleStatus : undefined,
+  )
+  const [entries, setEntries] = createSignal<EmailEvent[]>(
+    staticPreview ? sampleEvents : [],
+  )
+  const [connection, setConnection] = createSignal<
+    'connecting' | 'live' | 'reconnecting'
+  >(staticPreview ? 'live' : 'connecting')
+  const [consoleBusy, setConsoleBusy] = createSignal(false)
+
+  createEffect(() => {
+    if (staticPreview) return
+    void getEmailStatus()
+      .then(setArchive)
+      .catch(() => setArchive(undefined))
   })
+
+  // One stream feeds both the counts and the activity log. The console is
+  // bounded at 200 entries because a ten-year backfill would otherwise grow the
+  // DOM without limit.
+  createEffect(() => {
+    if (staticPreview) return
+    const events = new EventSource('/api/email/events')
+    events.onopen = () => setConnection('live')
+    events.onerror = () => setConnection('reconnecting')
+    events.addEventListener('entry', (event) => {
+      const parsed = parseJson<EmailEvent>((event as MessageEvent<string>).data)
+      if (parsed) setEntries((items) => [parsed, ...items.slice(0, 199)])
+    })
+    events.addEventListener('status', (event) => {
+      const parsed = parseJson<EmailStatus>(
+        (event as MessageEvent<string>).data,
+      )
+      if (parsed) setArchive(parsed)
+    })
+    onCleanup(() => events.close())
+  })
+
+  const retry = async (scope: 'node' | 'failed', nodeId?: string) => {
+    if (
+      scope === 'failed' &&
+      !window.confirm(
+        'Requeue failed messages? This runs in bounded batches, not all at once.',
+      )
+    )
+      return
+    setConsoleBusy(true)
+    try {
+      const enqueued = staticPreview
+        ? 1
+        : await reprocessEmail({ scope, nodeId, limit: 50 })
+      setAnnouncement(
+        `${enqueued} message${enqueued === 1 ? '' : 's'} requeued.`,
+      )
+    } catch (cause) {
+      setAnnouncement(
+        cause instanceof Error ? cause.message : 'Reprocessing failed.',
+      )
+    } finally {
+      setConsoleBusy(false)
+    }
+  }
   const nothingIndexed = () => {
     const counts = archive()?.counts
     return counts !== undefined && counts.indexed === 0
@@ -504,6 +565,17 @@ export function EmailView() {
         {announcement()}
       </p>
 
+      {/* Below the search so the page still opens on what most visits want —
+          finding a message — with backfill progress a scroll away. */}
+      <ProcessingConsole
+        status={archive()}
+        entries={entries()}
+        connection={connection()}
+        busy={consoleBusy()}
+        onRetryOne={(nodeId) => void retry('node', nodeId)}
+        onRetryFailed={() => void retry('failed')}
+      />
+
       <div class="email-layout" classList={{ 'is-reading': !!message() }}>
         <section
           class="email-layout__list"
@@ -616,6 +688,101 @@ export function EmailView() {
     </section>
   )
 }
+
+/** SSE payloads are untrusted text until parsed; a malformed frame is dropped. */
+function parseJson<T>(value: string): T | undefined {
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return undefined
+  }
+}
+
+const sampleStatus: EmailStatus = {
+  counts: {
+    foreground_pending: 3,
+    foreground_running: 1,
+    backfill_pending: 128,
+    backfill_running: 1,
+    completed: 48211,
+    failed: 12,
+    skipped: 340,
+    unsupported: 88,
+    remaining: 133,
+    indexed: 48211,
+    candidates: 48651,
+    attachments_pending: 940,
+    attachments_completed: 12044,
+    attachments_failed: 6,
+  },
+  completed_per_hour: 4200,
+  eta_seconds: 114,
+  parser_version: '0.11.5',
+  attachment_extractor_version: '1',
+  campaigns: [
+    {
+      id: '00000000-0000-0000-0000-0000000000c1',
+      state: 'running',
+      snapshot_before: '2026-08-03T09:00:00Z',
+      cursor_created_at: '2024-02-11T04:12:00Z',
+      cursor_node_id: '00000000-0000-0000-0000-0000000000a7',
+      batch_size: 100,
+      max_queued: 500,
+      max_running: 1,
+      resource_class: 'heavy_cpu',
+      foreground_fairness: 20,
+      candidate_count: 691402,
+      enqueued_count: 1200,
+      completed_count: 1142,
+      failed_count: 3,
+      skipped_count: 55,
+      last_error: null,
+    },
+  ],
+}
+
+const sampleEvents: EmailEvent[] = [
+  {
+    id: 3,
+    node_id: 'preview-1',
+    name: 'q3-recon.eml',
+    state: 'completed',
+    subject: 'Quarterly reconciliation figures',
+    attachment_count: 2,
+    duration_ms: 42,
+    origin: 'backfill',
+    campaign_id: '00000000-0000-0000-0000-0000000000c1',
+    warning: null,
+    created_at: '2026-08-03T09:42:15Z',
+  },
+  {
+    id: 2,
+    node_id: 'preview-9',
+    name: 'broken.eml',
+    state: 'failed',
+    subject: null,
+    attachment_count: null,
+    duration_ms: null,
+    origin: 'backfill',
+    campaign_id: '00000000-0000-0000-0000-0000000000c1',
+    warning:
+      'email source size limit exceeded: 91000000 bytes is greater than 67108864',
+    created_at: '2026-08-03T09:42:09Z',
+  },
+  {
+    id: 1,
+    node_id: 'preview-8',
+    name: 'notes.txt',
+    state: 'unsupported',
+    subject: null,
+    attachment_count: null,
+    duration_ms: null,
+    origin: 'foreground',
+    campaign_id: null,
+    warning: 'email parsing does not support MIME type text/plain',
+    created_at: '2026-08-03T09:41:58Z',
+  },
+]
 
 const sampleFacets: EmailFacets = {
   labels: [

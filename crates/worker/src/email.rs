@@ -11,7 +11,8 @@ use strife_db::{
     EmailAddressInput, EmailAddressRole, EmailAttachmentInput, EmailExtractionStatus,
     EmailHeaderInput, EmailProjection, JobRecord, JobType, LifecycleState, UpsertEmailMessage,
     default_resource_class, enqueue_job_with_context, fail_job_terminal,
-    get_file_object_by_node_id, get_node_by_id, replace_email_projection, skip_job,
+    get_file_object_by_node_id, get_node_by_id, record_email_event, replace_email_projection,
+    skip_job,
 };
 use strife_media::{
     AttachmentLimits, EMAIL_PARSER_NAME, EMAIL_PARSER_VERSION, EmailAddressKind, EmailParseLimits,
@@ -83,6 +84,19 @@ impl EmailHandler {
                 std::slice::from_ref(&warning),
             )
             .await?;
+            let _ = record_email_event(
+                &self.pool,
+                Some(job.target_node_id),
+                &node.name,
+                "skipped",
+                None,
+                None,
+                None,
+                job.origin,
+                job.campaign_id,
+                Some(&warning),
+            )
+            .await;
             skip_job(&self.pool, job.id, &warning).await?;
             return Ok(());
         }
@@ -94,7 +108,7 @@ impl EmailHandler {
 
         let source = std::env::temp_dir().join(format!("strife-email-{}", Uuid::new_v4()));
         let started = Instant::now();
-        let work = self.parse_and_store(job, storage_id, &source, started);
+        let work = self.parse_and_store(job, &node.name, storage_id, &source, started);
         let outcome = match timeout(self.settings.file_timeout, work).await {
             Ok(outcome) => outcome,
             Err(_) => Err(anyhow::anyhow!(
@@ -124,6 +138,19 @@ impl EmailHandler {
                         std::slice::from_ref(&detail),
                     )
                     .await?;
+                    let _ = record_email_event(
+                        &self.pool,
+                        Some(job.target_node_id),
+                        &node.name,
+                        "failed",
+                        None,
+                        None,
+                        None,
+                        job.origin,
+                        job.campaign_id,
+                        Some(&sanitize(&detail)),
+                    )
+                    .await;
                     fail_job_terminal(&self.pool, job.id, &sanitize(&detail)).await?;
                     Ok(())
                 } else {
@@ -136,6 +163,7 @@ impl EmailHandler {
     async fn parse_and_store(
         &self,
         job: &JobRecord,
+        node_name: &str,
         storage_id: Uuid,
         source: &Path,
         started: Instant,
@@ -157,6 +185,19 @@ impl EmailHandler {
                 std::slice::from_ref(&warning),
             )
             .await?;
+            let _ = record_email_event(
+                &self.pool,
+                Some(job.target_node_id),
+                node_name,
+                "unsupported",
+                None,
+                None,
+                None,
+                job.origin,
+                job.campaign_id,
+                Some(&warning),
+            )
+            .await;
             info!(
                 node_id = %job.target_node_id,
                 mime = %mime,
@@ -200,6 +241,26 @@ impl EmailHandler {
             )
             .await
             .context("enqueue attachment text extraction")?;
+        }
+
+        // The console event is best effort: a message is parsed and stored
+        // whether or not its activity row could be written, and failing the job
+        // over a console row would be the wrong trade.
+        if let Err(error) = record_email_event(
+            &self.pool,
+            Some(job.target_node_id),
+            node_name,
+            "completed",
+            parsed.subject.as_deref(),
+            i32::try_from(parsed.attachments.len()).ok(),
+            Some(duration_ms),
+            job.origin,
+            job.campaign_id,
+            parsed.warnings.first().map(String::as_str),
+        )
+        .await
+        {
+            warn!(%error, node_id = %job.target_node_id, "email console event not recorded");
         }
 
         info!(

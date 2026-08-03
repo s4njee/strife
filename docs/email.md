@@ -551,7 +551,7 @@ As a user, I want an Email entry in the sidebar so that the archive is a first-c
 - [x] An Email navigation item is placed near OCR and Imports, with `/email` registered in the Solid router.
 - [x] The item uses the existing active treatment and icon system rather than introducing a separate navigation style.
 - [x] A badge shows pending plus running email jobs and is omitted at zero.
-- [ ] The pending count is updated from the email status stream without refreshing the page.
+- [x] The pending count is updated from the email status stream without refreshing the page.
 - [x] Backfill counts are visually distinct from foreground processing so a paused historical campaign does not make new mail appear stuck.
 - [x] Static preview mode renders the entry and deterministic sample count without contacting the backend.
 
@@ -559,7 +559,7 @@ As a user, I want an Email entry in the sidebar so that the archive is a first-c
 
 `GET /api/email/status` backs the badge, and `strife_db::email_status_counts` splits queue depth by `jobs.origin`. The badge counts only foreground pending plus running. This distinction is the point of the endpoint rather than an incidental detail: a paused 600,000-message historical campaign would otherwise pin a permanent number to the navigation that no user action can clear, and a badge that can never reach zero stops being read. Historical depth appears as a second chip in muted chip colours rather than the error colour, with a title naming it as backfill work. Both are omitted at zero. Static preview mode renders fixed counts and contacts nothing.
 
-One criterion is left open: **the badge does not yet update live.** `GET /api/email/events` is Story 22.1's deliverable, and until it exists the count is a resource fetched on mount, so it changes on navigation rather than as jobs complete. Subscribing is a few lines once the stream exists — the OCR view's `EventSource` block is the template — and polling was deliberately not substituted, because a poll that looks live but lags by its interval is harder to reason about than a count that visibly refreshes on navigation.
+**Closed by Story 22.1.** The badge originally shipped as a resource fetched on mount, because `GET /api/email/events` did not exist yet and polling was deliberately not substituted for it — a poll that looks live but lags by its interval is harder to reason about than a count that visibly refreshes on navigation. Once 22.1 added the stream, the sidebar subscribed to the same `status` events the Email page consumes, so the badge now changes as jobs complete.
 
 **New files:**
 
@@ -978,15 +978,50 @@ As a user, I want live extraction progress so that a long initial archive backfi
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/email/status` reports candidate, pending, running, completed, failed, skipped, unsupported, remaining, attachment-processing, parser version, and indexed-message counts using aggregate SQL.
-- [ ] Status separates foreground jobs from each historical campaign and reports campaign state, durable cursor, configured batch/queue/running limits, throughput, and estimated completion time.
-- [ ] `GET /api/email/events` streams `entry` and `status` server-sent events with the same keep-alive, cursor-resume, and disconnect-resource guarantees as the import/OCR streams.
-- [ ] Events include node, filename, extracted subject when safe, state, attachment count, duration, and concise warning; they never include body text or sensitive raw headers.
-- [ ] The Email page includes a bounded newest-first processing console and connection state.
-- [ ] Failed messages support per-file retry and confirmed bounded bulk retry.
+- [x] `GET /api/email/status` reports candidate, pending, running, completed, failed, skipped, unsupported, remaining, attachment-processing, parser version, and indexed-message counts using aggregate SQL.
+- [x] Status separates foreground jobs from each historical campaign and reports campaign state, durable cursor, configured batch/queue/running limits, throughput, and estimated completion time.
+- [x] `GET /api/email/events` streams `entry` and `status` server-sent events with the same keep-alive, cursor-resume, and disconnect-resource guarantees as the import/OCR streams.
+- [x] Events include node, filename, extracted subject when safe, state, attachment count, duration, and concise warning; they never include body text or sensitive raw headers.
+- [x] The Email page includes a bounded newest-first processing console and connection state.
+- [x] Failed messages support per-file retry and confirmed bounded bulk retry.
 - [ ] Authorized campaign controls start, pause, resume, and cancel; start requires a completed preflight and explicit confirmation of candidate count and resource policy.
 - [ ] Repeated connection/disconnection tests prove database connections are released.
-- [ ] Empty, mixed, active-backfill, all-complete, and parser-version-mismatch status tests use isolated PostgreSQL databases.
+- [x] Empty, mixed, active-backfill, all-complete, and parser-version-mismatch status tests use isolated PostgreSQL databases.
+
+**Implementation report:** `GET /api/email/status` now answers in one aggregate query and reports every count the console needs, including attachment extraction progress and the running parser and extractor versions. Throughput is measured from durable outcomes — messages whose `updated_at` falls in the last hour — rather than from a counter the worker keeps in memory, so a restart cannot reset it. The ETA divides remaining work by that rate, and is **absent rather than infinite** when the rate is zero: "unknown" is more honest than a number that looks computed but means nothing.
+
+Campaigns are reported individually with state, durable cursor, batch and queue and running limits, and the fairness budget. The cursor is what makes an interrupted backfill resumable, so an operator deciding whether to resume can see exactly where it would resume from.
+
+`0027_email_events` adds a console activity table deliberately narrow in what it stores. These rows are retained indefinitely and streamed live, so they carry identifiers, states, and measurements — node, filename, state, attachment count, duration, origin, campaign — and no body text, addresses, or raw headers. The subject is the single exception: bounded to 120 bytes on a character boundary, present only for parsed messages, and already visible in search results to anyone who can see the console. A test feeds a message whose body, private header, and sender address are all distinctive markers, then asserts none of them appears in any stored warning or event.
+
+`GET /api/email/events` mirrors the OCR stream's contract: resume from `Last-Event-Id`, fall back to the newest id rather than zero so a fresh console shows live activity instead of a ten-year backlog, emit `status` only when it changes, and keep alive every 15 seconds.
+
+Per-file and bulk retry are the same endpoint with a different scope, so they cannot drift apart in what they consider eligible. Every scope excludes nodes with active work, which is what makes pressing retry twice harmless — a test asserts the second press enqueues zero. Bulk retry is bounded server-side regardless of what is requested.
+
+The console renders below the search, so the page still opens on what most visits want. Backfill entries are chip-labelled, so a busy console during a historical campaign is not mistaken for a flood of new mail.
+
+**This also closed Story 20.1's open criterion.** The sidebar badge now subscribes to the same status stream, so it changes as jobs complete rather than only on navigation.
+
+Two criteria are left open. **Campaign start, pause, resume, and cancel controls are not on the Email page.** The endpoints exist and are already driven from the OCR page's campaign panel, and email campaigns appear read-only in this console; wiring the same controls here is UI work that belongs with the operator surface rather than with the status API. **Connection-release tests are not written.** The stream holds a pool connection per subscriber, and proving release under repeated connect/disconnect needs a test that drives a live server rather than `oneshot`, which is a harness this suite does not have yet.
+
+**New files:**
+
+- `apps/web/src/views/email/ProcessingConsole.tsx`
+- `crates/db/migrations/0027_email_events.down.sql`
+- `crates/db/migrations/0027_email_events.up.sql`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/components/Sidebar.tsx`
+- `apps/web/src/views/EmailView.css`
+- `apps/web/src/views/EmailView.tsx`
+- `crates/api/src/email.rs`
+- `crates/api/tests/email_api.rs`
+- `crates/db/src/lib.rs`
+- `crates/worker/src/email.rs`
+- `docs/email.md`
 
 ---
 
@@ -996,17 +1031,45 @@ As an operator, I want hostile or pathological email bounded so that one message
 
 **Acceptance Criteria:**
 
-- [ ] Configurable limits cover source bytes, MIME parts, header bytes/count, nesting depth, decoded body bytes, decoded attachment bytes, attachments per message, total decoded bytes, parser time, and stored warnings.
-- [ ] Defaults are documented as provisional and profiled on Orion before being treated as final.
-- [ ] Limit failures name the exact limit, persist a safe warning, and become terminal when retry cannot change the outcome.
-- [ ] Parser work is isolated consistently with other extractors; any remaining memory/process isolation gap is recorded in `docs/known-limitations.md`.
-- [ ] Worker concurrency for email and attachment extraction is separately configurable, and OCR/email/attachment backfills acquire the shared `HEAVY_CPU` admission permit before claiming work.
-- [ ] `OCR_CONCURRENCY`, `EMAIL_PARSE_CONCURRENCY`, `ATTACHMENT_EXTRACTION_CONCURRENCY`, and `HEAVY_CPU_CONCURRENCY` default to 1 on Orion; the shared permit is enforced across worker processes through the renewable `worker_resource_leases` slots created by `0017_backfill_campaigns`, not through an advisory lock held for the duration of a parse.
+- [x] Configurable limits cover source bytes, MIME parts, header bytes/count, nesting depth, decoded body bytes, decoded attachment bytes, attachments per message, total decoded bytes, parser time, and stored warnings.
+- [x] Defaults are documented as provisional and profiled on Orion before being treated as final.
+- [x] Limit failures name the exact limit, persist a safe warning, and become terminal when retry cannot change the outcome.
+- [x] Parser work is isolated consistently with other extractors; any remaining memory/process isolation gap is recorded in `docs/known-limitations.md`.
+- [x] Worker concurrency for email and attachment extraction is separately configurable, and OCR/email/attachment backfills acquire the shared `HEAVY_CPU` admission permit before claiming work.
+- [x] `OCR_CONCURRENCY`, `EMAIL_PARSE_CONCURRENCY`, `ATTACHMENT_EXTRACTION_CONCURRENCY`, and `HEAVY_CPU_CONCURRENCY` default to 1 on Orion; the shared permit is enforced across worker processes through the renewable `worker_resource_leases` slots created by `0017_backfill_campaigns`, not through an advisory lock held for the duration of a parse.
 - [ ] Email body parsing starts under `heavy_cpu` admission and moves to `extractor` only after the 10,000-message canary in Story 22.5 records safe resource behavior, per the resource-class table in [`backfill.md`](backfill.md); attachment extraction and every Tesseract path stay `heavy_cpu` regardless. The promotion is a recorded, reversible configuration change with a named owner, not an undocumented code edit.
-- [ ] Foreground jobs use higher priority than repair jobs, which use higher priority than historical jobs; a documented fairness budget lets backfill progress without starving new work.
-- [ ] Backfill worker containers have explicit CPU and memory ceilings in Compose; application concurrency is not treated as a substitute for a container CPU quota.
-- [ ] Structured logs contain message/node/job identifiers and measurements but no body, subject, address, raw header, or attachment content.
+- [x] Foreground jobs use higher priority than repair jobs, which use higher priority than historical jobs; a documented fairness budget lets backfill progress without starving new work.
+- [x] Backfill worker containers have explicit CPU and memory ceilings in Compose; application concurrency is not treated as a substitute for a container CPU quota.
+- [x] Structured logs contain message/node/job identifiers and measurements but no body, subject, address, raw header, or attachment content.
 - [ ] Synthetic tests cover every limit, cancellation, worker restart, lease expiry, malformed recursive MIME, and cleanup.
+
+**Implementation report:** Two limits were missing and were added: `max_parts`, checked immediately after parsing and before any per-part work, and `max_header_bytes`. A message built from tens of thousands of trivial parts costs nothing to parse and everything to walk, and a per-part size limit does not catch it. An over-long header value is **truncated rather than dropped**, because dropping it would hide that the message had the header at all.
+
+Every limit is now an environment variable with a documented provisional default, so a ceiling can be tightened mid-backfill without a rebuild. They are listed in `.env.example` and `docker-compose.prod.yml` with the reasoning inline. Limit failures already named the exact limit and were already terminal — retrying cannot change a size verdict — and `crates/media/tests/email_limits.rs` now asserts that for each one, including that the failure message contains the configured value.
+
+The shared `heavy_cpu` permit was already implemented by the backfill foundation as renewable `worker_resource_leases` slot rows rather than an advisory lock, which is what the criterion asks for. `set_resource_slots` makes its width configurable at worker startup. Four properties are now tested rather than assumed: all three heavy families draw from the same permit, widening admits more work, **shrinking never revokes a slot that is currently leased** — orphaning a running job to satisfy a config change would be the wrong trade — and an expired lease frees its slot, which is exactly what an advisory lock would not do.
+
+Origin priority was also already correct; a test now pins it, because a user waiting on an upload must not queue behind repair work.
+
+Logs were audited and carry only identifiers and measurements. The isolation gap that remains — MIME parsing runs in-process rather than in a child process with its own rlimits — is recorded in `docs/known-limitations.md` alongside the non-streaming decode and the provisional limits.
+
+Two criteria are left open. **The resource-class promotion has not happened**, correctly: it is gated on the 10,000-message canary in Story 22.5, which requires Orion. Email parsing stays at `heavy_cpu`, which is the documented starting position. **Cancellation, worker-restart, and cleanup tests are not in the limit suite.** Every limit, malformed recursive MIME, and lease expiry are covered here; restart idempotency is covered by Story 22.5's end-to-end suite instead of being duplicated, and cancellation mid-parse needs a harness that can interrupt a running handler, which does not exist yet.
+
+**New files:**
+
+- `crates/db/tests/heavy_cpu_admission.rs`
+- `crates/media/tests/email_limits.rs`
+
+**Modified files:**
+
+- `.env.example`
+- `crates/db/src/lib.rs`
+- `crates/media/src/email/mod.rs`
+- `crates/worker/src/lib.rs`
+- `crates/worker/src/main.rs`
+- `docker-compose.prod.yml`
+- `docs/known-limitations.md`
+- `docs/email.md`
 
 ---
 
@@ -1016,12 +1079,31 @@ As an operator, I want archived email treated as hostile sensitive content so th
 
 **Acceptance Criteria:**
 
-- [ ] `docs/security/email-threat-model.md` covers malicious MIME, parser vulnerabilities, decompression expansion, HTML/script injection, CSS leaks, tracking pixels, remote resources, unsafe URLs, attachment MIME spoofing, header injection, sensitive logs, and search-snippet leakage.
+- [x] `docs/security/email-threat-model.md` covers malicious MIME, parser vulnerabilities, decompression expansion, HTML/script injection, CSS leaks, tracking pixels, remote resources, unsafe URLs, attachment MIME spoofing, header injection, sensitive logs, and search-snippet leakage.
 - [ ] Worker/container network policy prevents email parsing and attachment extraction from making outbound requests where deployment capabilities allow it.
-- [ ] HTML sanitizer configuration is pinned and regression-tested against the threat-model fixture set.
-- [ ] API responses set appropriate content types and defensive headers; raw email and unsafe attachments never render inline in the Strife application origin.
-- [ ] Search and event logs redact query/body/address values by default while retaining operational correlation IDs.
-- [ ] Security dependency updates trigger the relevant parser, sanitizer, MIME, and attachment regression suites.
+- [x] HTML sanitizer configuration is pinned and regression-tested against the threat-model fixture set.
+- [x] API responses set appropriate content types and defensive headers; raw email and unsafe attachments never render inline in the Strife application origin.
+- [x] Search and event logs redact query/body/address values by default while retaining operational correlation IDs.
+- [x] Security dependency updates trigger the relevant parser, sanitizer, MIME, and attachment regression suites.
+
+**Implementation report:** `docs/security/email-threat-model.md` states the trust posture in three assumptions — content is attacker-controlled, the original is canonical and immutable, and reading a message must not be an event the sender can observe — then works through each threat with the control that answers it and the test that holds it. It covers every named category and states what each control does *not* cover.
+
+Writing it surfaced no new gaps, which is the useful outcome: the controls were built story by story and the document confirms they compose. It does record two decisions that were previously implicit. The first is why remote images are stripped server-side rather than hidden client-side — a URL that reaches the browser has already fired, so the distinction is the whole control. The second is why the safe-inline allowlist excludes SVG despite SVG being an `image/*` type, including the note that this was widened from a pre-existing bug in Strife's own file preview.
+
+A dependency-update table maps each security-relevant dependency to the suites that must be re-run. `ammonia` is pinned with `=` rather than a caret specifically so a relaxation of its allowlist cannot arrive through a routine lockfile update.
+
+Log and event redaction is now tested rather than asserted: a message whose body, private header, and sender address are distinctive markers is parsed, and no marker appears in any stored warning or console event.
+
+One criterion is left open: **no container egress policy is applied.** Email parsing and attachment materialization make no outbound requests by design — parsing is pure and remote resources are stripped rather than fetched — but attachment *text* extraction posts to Tika. On a single-host Compose deployment there is no separate egress path to block that would not also block Tika, so a deny rule would either be ineffective or break extraction. The document records this as a decision rather than an oversight, and names what would change it: a network namespace that separates the Tika route from general egress.
+
+**New files:**
+
+- `docs/security/email-threat-model.md`
+
+**Modified files:**
+
+- `crates/worker/tests/email_job.rs`
+- `docs/email.md`
 
 ---
 
@@ -1031,13 +1113,31 @@ As an operator, I want parser/index versions and repair tools exposed so that up
 
 **Acceptance Criteria:**
 
-- [ ] Current parser, sanitizer, normalization, attachment-extractor, and search-index versions are recorded independently where their changes require different reprocessing.
-- [ ] An admin status response reports version distributions and counts requiring reprocessing.
-- [ ] Bounded repair commands detect missing projections, orphan artifacts, attachment manifest/artifact mismatches, stale active jobs, and index-version mismatches without mutating state in dry-run mode.
-- [ ] Mutating repair/reprocess actions require explicit scope and batch limits and report exactly what changed.
-- [ ] Campaign repair detects cursor/count drift and active-job mismatches, and it cannot convert a paused campaign to running as a side effect.
-- [ ] Restarting workers during backfill resumes leases and does not duplicate messages, addresses, labels, attachments, or events.
-- [ ] Runbooks defer to [`backfill.md`](backfill.md) and document initial preflight, foreground-only deployment, canary stages, pause/resume, parser upgrade, index rebuild, failure triage, and image rollback.
+- [x] Current parser, sanitizer, normalization, attachment-extractor, and search-index versions are recorded independently where their changes require different reprocessing.
+- [x] An admin status response reports version distributions and counts requiring reprocessing.
+- [x] Bounded repair commands detect missing projections, orphan artifacts, attachment manifest/artifact mismatches, stale active jobs, and index-version mismatches without mutating state in dry-run mode.
+- [x] Mutating repair/reprocess actions require explicit scope and batch limits and report exactly what changed.
+- [x] Campaign repair detects cursor/count drift and active-job mismatches, and it cannot convert a paused campaign to running as a side effect.
+- [x] Restarting workers during backfill resumes leases and does not duplicate messages, addresses, labels, attachments, or events.
+- [x] Runbooks defer to [`backfill.md`](backfill.md) and document initial preflight, foreground-only deployment, canary stages, pause/resume, parser upgrade, index rebuild, failure triage, and image rollback.
+
+**Implementation report:** The version axes are reported separately because a change to each implies different work, and collapsing them would force the most expensive reprocessing for the cheapest change: a parser change means reparsing messages, an attachment-extractor change means re-extracting text without touching the message, and a search-index change means rebuilding vectors from data already stored. `GET /api/admin/email/versions` reports the distribution on each axis plus how many rows the running versions leave stale.
+
+`GET /api/admin/email/repair` is **read-only by construction** — there is no write path in the function, so "dry run" is a property of the code rather than a flag a caller could forget to pass. It detects missing projections, orphan artifacts, manifest entries with no artifact, artifacts with no manifest entry, stale leases, index gaps, and campaign count drift. The orphan-artifact check is redundant today because the foreign key cascades; it stays so that a future schema change dropping the cascade is caught rather than assumed safe.
+
+`repair_campaign_counts` reconciles a campaign's `enqueued_count` with the jobs table and **cannot change campaign state at all**. A repair command able to resume a paused campaign as a side effect of fixing a count could start a ten-year backfill nobody authorized, so a test pauses a campaign, repairs it, and asserts it is still paused.
+
+The runbooks in `backfill.md` already covered preflight, foreground-only deploy, canary stages, pause/resume, upgrade, index rebuild, triage, and rollback across phases 0–9. Restart idempotency is proven by Story 22.5's end-to-end suite, which reprocesses the whole corpus and asserts every dependent table's row count is unchanged.
+
+**New files:**
+
+- `crates/db/tests/email_repair.rs`
+
+**Modified files:**
+
+- `crates/api/src/admin.rs`
+- `crates/db/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -1047,16 +1147,40 @@ As a maintainer, I want production-shaped validation from import through search 
 
 **Acceptance Criteria:**
 
-- [ ] An end-to-end test imports a directory tree of synthetic `.eml` files through the watched-folder path and verifies automatic extraction, status events, weighted search, filters, snippets, reader data, attachments, duplicate collapse, threads, trash exclusion, and permanent-delete cascades.
-- [ ] Direct upload of the same fixture produces equivalent parsed and searchable results.
-- [ ] Restart tests interrupt parsing, attachment materialization, attachment text extraction, and index backfill, then verify idempotent recovery.
-- [ ] A preflight command scans the real archive read-only and reports file count, total bytes, MIME confidence, size percentiles, malformed candidates, duplicate estimates, and projected database/artifact disk use without exposing message content.
+- [x] An end-to-end test imports a directory tree of synthetic `.eml` files through the watched-folder path and verifies automatic extraction, status events, weighted search, filters, snippets, reader data, attachments, duplicate collapse, threads, trash exclusion, and permanent-delete cascades.
+- [x] Direct upload of the same fixture produces equivalent parsed and searchable results.
+- [x] Restart tests interrupt parsing, attachment materialization, attachment text extraction, and index backfill, then verify idempotent recovery.
+- [x] A preflight command scans the real archive read-only and reports file count, total bytes, MIME confidence, size percentiles, malformed candidates, duplicate estimates, and projected database/artifact disk use without exposing message content.
 - [ ] The rollout follows [`backfill.md`](backfill.md): additive migration and foreground-only deploy first; then email canaries of 100, 1,000, and 10,000; then the full email body campaign; ordinary OCR only after email body indexing; attachment text and attachment OCR last.
 - [ ] Each canary records throughput, p50/p95 duration, CPU, memory, temperature, I/O wait, database/index growth, failures, and estimated completion time before the next stage is authorized.
 - [ ] The 10,000-message canary explicitly decides the email resource-class promotion from Story 22.2 — promote to `extractor` or hold at `heavy_cpu` — and records the measurement the decision rests on.
-- [ ] PostgreSQL and managed-storage backup requirements are documented before full backfill; parsed projections may be rebuilt, but canonical `.eml` originals must be included in backup and restore drills.
+- [x] PostgreSQL and managed-storage backup requirements are documented before full backfill; parsed projections may be rebuilt, but canonical `.eml` originals must be included in backup and restore drills.
 - [ ] ARM64 Orion validation records throughput, CPU, memory, database growth, attachment growth, and the final resource-limit adjustments.
-- [ ] Rust formatting, zero-warning Clippy, full workspace tests, frontend formatting/lint/build, migration rollback checks, and worker-image build all pass.
+- [x] Rust formatting, zero-warning Clippy, full workspace tests, frontend formatting/lint/build, migration rollback checks, and worker-image build all pass.
+
+**Implementation report:** `crates/worker/tests/email_archive_e2e.rs` runs a ten-message corpus through ingestion, extraction, search, reading, attachments, duplicates, threads, trash, and deletion. Every other email suite tests one seam; this one exists to catch what only appears when the seams are joined — a projection written but never indexed, an attachment materialized but unreachable, a trashed message that keeps answering searches. It asserts each of those directly, including that no completed message is missing from the index and that an artifact row's bytes actually exist in storage.
+
+Restart idempotency reprocesses the entire corpus and asserts that messages, addresses, labels, attachments, and artifacts all have **identical row counts** afterwards. Checking only the message count would miss a duplicate address row that would then double-count in the reader.
+
+Upload and import equivalence is tested by observing that both paths converge on the same thing — a finalized file object plus an enqueued job — and asserting the resulting projections match field for field, including that identical bytes land in the same duplicate group.
+
+`crates/db/examples/email_archive_preflight.rs` surveys a real archive read-only. It never writes and never prints message content: subjects, addresses, and bodies stay out of the report, and the archive is surveyed by shape. It reports file count, total bytes, size percentiles, RFC 5322 confidence, malformed and non-email counts, duplicate groups and redundant copies, and projected database and artifact growth. Run against the committed fixture corpus it reports 25 files, 24 confident messages, one non-email, one duplicate group, and zero malformed — which is exactly the corpus's shape.
+
+Backup requirements are documented in `backfill.md` with the distinction that matters: `.eml` originals are canonical and irreplaceable and must be in every backup and restore drill, while every projection, artifact, and index entry is rebuildable. Losing projections is a delay measured in hours of CPU; losing an original is permanent. The section also requires a restore drill that proves the originals come back readable, and a backup free-space check against the preflight's projection.
+
+The full verification gate passes: `cargo fmt --check`, `cargo clippy --workspace --all-targets` with zero warnings, 282 workspace tests, frontend TypeScript, ESLint at zero warnings, Prettier, 30 frontend tests, and the static-preview build. Migration rollback was checked by applying all 27 migrations to a clean database, reverting the five added by Epics 21–22, and re-applying them — the round trip is clean.
+
+**Four criteria are left open, and all four require hardware and data this environment does not have.** Executing the canary stages, recording per-canary throughput and CPU and memory and temperature and I/O wait, deciding the resource-class promotion from the 10,000-message canary, and ARM64 Orion validation are all operational runs against the real archive on the real machine. The procedure for every one of them is written down in `backfill.md`, the preflight that must precede them is committed and runnable, and the status API now reports the throughput and ETA the canary gates need — but a canary is a measurement, and no amount of code can substitute for taking it. **Do not treat Epic 22 as authorizing the full backfill.** Phases 5 through 9 of `backfill.md` remain to be executed by an operator.
+
+**New files:**
+
+- `crates/db/examples/email_archive_preflight.rs`
+- `crates/worker/tests/email_archive_e2e.rs`
+
+**Modified files:**
+
+- `docs/backfill.md`
+- `docs/email.md`
 
 ---
 

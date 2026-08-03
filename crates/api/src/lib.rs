@@ -3,6 +3,7 @@ pub mod backfills;
 pub mod config;
 pub mod email;
 pub mod email_parts;
+pub mod error;
 pub mod files;
 pub mod folders;
 pub mod health;

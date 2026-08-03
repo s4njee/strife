@@ -2,7 +2,6 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
 use chrono::{DateTime, Utc};
@@ -15,7 +14,7 @@ use strife_db::{
 use strife_domain::{FolderError, FolderRules};
 use uuid::Uuid;
 
-use crate::log_internal;
+use crate::error::ApiError;
 
 const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 100;
@@ -116,82 +115,23 @@ pub struct MoveConflictResponse {
     pub reason: MoveConflictReasonResponse,
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: String,
-}
-
-#[derive(Debug, Serialize)]
-struct MoveConflictBody {
-    code: &'static str,
-    message: &'static str,
-    conflicts: Vec<MoveConflictResponse>,
-}
-
-#[derive(Debug)]
-enum ApiError {
-    BadRequest(&'static str),
-    NotFound,
-    NameConflict,
-    CycleDetected,
-    MoveConflict(Vec<MoveConflictResponse>),
-    Internal,
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        if let Self::MoveConflict(conflicts) = self {
-            return (
-                StatusCode::CONFLICT,
-                Json(MoveConflictBody {
-                    code: "move_conflict",
-                    message: "One or more folders cannot be moved",
-                    conflicts,
-                }),
-            )
-                .into_response();
-        }
-
-        let (status, code, message) = match self {
-            Self::BadRequest(message) => {
-                (StatusCode::BAD_REQUEST, "bad_request", message.to_owned())
-            }
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "Folder or destination was not found".to_owned(),
-            ),
-            Self::NameConflict => (
-                StatusCode::CONFLICT,
-                "name_conflict",
-                "An active sibling already has this name".to_owned(),
-            ),
-            Self::CycleDetected => (
-                StatusCode::BAD_REQUEST,
-                "cycle_detected",
-                "Moving this folder would create a cycle".to_owned(),
-            ),
-            Self::MoveConflict(_) => unreachable!(),
-            Self::Internal => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "The folder operation could not be completed".to_owned(),
-            ),
-        };
-
-        (status, Json(ErrorBody { code, message })).into_response()
-    }
-}
+/// Messages preserved verbatim from the per-module error type this replaced,
+/// so consolidating the type did not change what any client is shown.
+const NOT_FOUND: &str = "Folder or destination was not found";
+const NAME_CONFLICT: &str = "An active sibling already has this name";
+const INTERNAL: &str = "The folder operation could not be completed";
+const ROUTE: &str = "/api/folders";
 
 impl From<FolderMutationError> for ApiError {
     fn from(error: FolderMutationError) -> Self {
         match error {
-            FolderMutationError::Rule(FolderError::NotFound) => Self::NotFound,
-            FolderMutationError::Rule(FolderError::NameConflict) => Self::NameConflict,
+            FolderMutationError::Rule(FolderError::NotFound) => Self::NotFound(NOT_FOUND),
+            FolderMutationError::Rule(FolderError::NameConflict) => {
+                Self::NameConflict(NAME_CONFLICT)
+            }
             FolderMutationError::Rule(FolderError::CycleDetected) => Self::CycleDetected,
             FolderMutationError::Rule(FolderError::InvalidName) => {
-                Self::BadRequest("Folder name cannot be empty")
+                Self::BadRequest("Folder name cannot be empty".into())
             }
             FolderMutationError::MoveConflict(conflicts) => Self::MoveConflict(
                 conflicts
@@ -199,7 +139,9 @@ impl From<FolderMutationError> for ApiError {
                     .map(MoveConflictResponse::from)
                     .collect(),
             ),
-            FolderMutationError::Database(error) => log_internal(error, Self::Internal),
+            FolderMutationError::Database(error) => {
+                Self::internal_with(error, ROUTE, "folder mutation", INTERNAL)
+            }
         }
     }
 }
@@ -211,11 +153,11 @@ async fn list_children(
 ) -> Result<Json<ChildrenResponse>, ApiError> {
     let folder = strife_db::get_node_by_id(&state.pool, folder_id)
         .await
-        .map_err(|error| log_internal(error, ApiError::Internal))?
+        .map_err(|error| ApiError::internal_with(error, ROUTE, folder_id, INTERNAL))?
         .filter(|node| node.kind == NodeKind::Folder)
-        .ok_or(ApiError::NotFound)?;
+        .ok_or(ApiError::NotFound(NOT_FOUND))?;
     if folder.lifecycle_state != strife_db::LifecycleState::Active {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(NOT_FOUND));
     }
 
     let limit = query
@@ -235,7 +177,7 @@ async fn list_children(
         &kinds,
     )
     .await
-    .map_err(|error| log_internal(error, ApiError::Internal))?;
+    .map_err(|error| ApiError::internal_with(error, ROUTE, folder_id, INTERNAL))?;
     let has_more = nodes.len() > limit as usize;
     if has_more {
         nodes.pop();
@@ -244,7 +186,7 @@ async fn list_children(
     let node_ids: Vec<Uuid> = nodes.iter().map(|node| node.id).collect();
     let favorite_ids = strife_db::favorite_ids_among(&state.pool, &node_ids)
         .await
-        .map_err(|error| log_internal(error, ApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, folder_id, INTERNAL))?;
     let favorite_set: std::collections::HashSet<Uuid> = favorite_ids.into_iter().collect();
 
     Ok(Json(ChildrenResponse {
@@ -267,7 +209,7 @@ fn parse_sort(value: Option<&str>) -> Result<ChildrenSort, ApiError> {
         "size" => Ok(ChildrenSort::Size),
         "updated_at" | "modified" | "date" => Ok(ChildrenSort::UpdatedAt),
         "created_at" | "created" => Ok(ChildrenSort::CreatedAt),
-        _ => Err(ApiError::BadRequest("Unknown sort column")),
+        _ => Err(ApiError::BadRequest("Unknown sort column".into())),
     }
 }
 
@@ -275,7 +217,7 @@ fn parse_order(value: Option<&str>) -> Result<SortOrder, ApiError> {
     match value.unwrap_or("asc") {
         "asc" => Ok(SortOrder::Asc),
         "desc" => Ok(SortOrder::Desc),
-        _ => Err(ApiError::BadRequest("order must be asc or desc")),
+        _ => Err(ApiError::BadRequest("order must be asc or desc".into())),
     }
 }
 
@@ -293,7 +235,7 @@ fn parse_kinds(values: &[String]) -> Result<Vec<ChildrenKindFilter>, ApiError> {
                 "document" | "documents" => ChildrenKindFilter::Document,
                 "video" | "videos" => ChildrenKindFilter::Video,
                 "audio" => ChildrenKindFilter::Audio,
-                _ => return Err(ApiError::BadRequest("Unknown kind filter")),
+                _ => return Err(ApiError::BadRequest("Unknown kind filter".into())),
             });
         }
     }
@@ -308,9 +250,9 @@ async fn list_ancestors(
 ) -> Result<Json<Vec<AncestorResponse>>, ApiError> {
     let ancestors = strife_db::list_ancestors(&state.pool, folder_id)
         .await
-        .map_err(|error| log_internal(error, ApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, folder_id, INTERNAL))?;
     if ancestors.is_empty() {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(NOT_FOUND));
     }
 
     Ok(Json(
@@ -339,7 +281,7 @@ async fn update_folder(
     Json(request): Json<UpdateFolderRequest>,
 ) -> Result<Json<FolderResponse>, ApiError> {
     if request.name.is_none() && request.parent_id.is_none() {
-        return Err(ApiError::BadRequest("Provide a name or parent_id"));
+        return Err(ApiError::BadRequest("Provide a name or parent_id".into()));
     }
     let name = request.name.as_deref().map(validate_name).transpose()?;
     let folder = strife_db::update_folder(&state.pool, folder_id, name, request.parent_id).await?;
@@ -351,7 +293,7 @@ async fn move_folders(
     Json(request): Json<MoveFoldersRequest>,
 ) -> Result<Json<MoveFoldersResponse>, ApiError> {
     if request.folder_ids.is_empty() {
-        return Err(ApiError::BadRequest("Select at least one folder"));
+        return Err(ApiError::BadRequest("Select at least one folder".into()));
     }
 
     let folders =
@@ -363,7 +305,7 @@ async fn move_folders(
 
 fn validate_name(name: &str) -> Result<&str, ApiError> {
     FolderRules::validate_name(name)
-        .map_err(|_| ApiError::BadRequest("Folder name cannot be empty"))
+        .map_err(|_| ApiError::BadRequest("Folder name cannot be empty".into()))
 }
 
 impl From<NodeRecord> for FolderResponse {

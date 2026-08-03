@@ -15,10 +15,16 @@ use sqlx::PgPool;
 use strife_db::{ArtifactState, ArtifactType, JobType, UpsertArtifact};
 use strife_storage::{StorageBackend, StorageKey};
 use tokio_util::io::ReaderStream;
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
-use crate::{internal_error, log_internal};
+use crate::error::ApiError;
+use crate::internal_error;
+
+/// Messages preserved verbatim from the ad-hoc handling this replaced.
+const NOT_FOUND: &str = "File was not found";
+const INTERNAL: &str = "The file request could not be completed";
+const ROUTE: &str = "/api/files";
 
 #[derive(Clone)]
 struct FileState {
@@ -60,7 +66,7 @@ async fn preview_request(
     if is_native_preview_mime(mime) {
         return try_serve_original(&state, id, &headers, true)
             .await
-            .unwrap_or_else(DownloadError::into_response);
+            .unwrap_or_else(IntoResponse::into_response);
     }
     artifact_request(&state, id, ArtifactType::Preview, mime).await
 }
@@ -470,7 +476,7 @@ async fn download_file(
 ) -> Response {
     try_serve_original(&state, node_id, &headers, false)
         .await
-        .unwrap_or_else(DownloadError::into_response)
+        .unwrap_or_else(IntoResponse::into_response)
 }
 
 async fn preview_native(
@@ -480,7 +486,7 @@ async fn preview_native(
 ) -> Response {
     try_serve_original(&state, node_id, &headers, true)
         .await
-        .unwrap_or_else(DownloadError::into_response)
+        .unwrap_or_else(IntoResponse::into_response)
 }
 
 async fn try_serve_original(
@@ -488,25 +494,25 @@ async fn try_serve_original(
     node_id: Uuid,
     headers: &HeaderMap,
     inline: bool,
-) -> Result<Response, DownloadError> {
+) -> Result<Response, ApiError> {
     let file = strife_db::get_download_file(&state.pool, node_id)
         .await
-        .map_err(|error| log_internal(error, DownloadError::Internal))?
-        .ok_or(DownloadError::NotFound)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?
+        .ok_or(ApiError::NotFound(NOT_FOUND))?;
     let object_id = Uuid::parse_str(&file.storage_key)
-        .map_err(|error| log_internal(error, DownloadError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     let mime = file
         .mime_type
         .as_deref()
         .unwrap_or("application/octet-stream");
     if inline && !is_native_preview_mime(mime) {
-        return Err(DownloadError::NotFound);
+        return Err(ApiError::NotFound(NOT_FOUND));
     }
     let total = u64::try_from(file.byte_size)
-        .map_err(|error| log_internal(error, DownloadError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     let requested_range = headers
         .get(header::RANGE)
-        .map(|value| parse_range(value, total).map_err(|()| DownloadError::Range(total)))
+        .map(|value| parse_range(value, total).map_err(|()| ApiError::RangeNotSatisfiable(total)))
         .transpose()?;
     let (status, start, length) = requested_range.map_or((StatusCode::OK, 0, total), |range| {
         (StatusCode::PARTIAL_CONTENT, range.start, range.length())
@@ -522,7 +528,13 @@ async fn try_serve_original(
             .get_stream(StorageKey::original(object_id))
             .await
     }
-    .map_err(|_| DownloadError::NotFound)?;
+    // A missing object is a 404 to the caller, but the cause matters: a
+    // permissions or device failure looks identical from outside and would
+    // otherwise be invisible.
+    .map_err(|error| {
+        warn!(%error, node_id = %node_id, route = ROUTE, "original bytes were unreadable");
+        ApiError::NotFound(NOT_FOUND)
+    })?;
     let body = Body::from_stream(ReaderStream::new(reader));
     let mut response = Response::builder()
         .status(status)
@@ -579,23 +591,6 @@ pub(crate) fn is_native_preview_mime(mime: &str) -> bool {
         || base.starts_with("video/")
         || base.starts_with("audio/")
         || base == "application/pdf"
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DownloadError {
-    NotFound,
-    Range(u64),
-    Internal,
-}
-
-impl DownloadError {
-    fn into_response(self) -> Response {
-        match self {
-            Self::NotFound => status_response(StatusCode::NOT_FOUND),
-            Self::Range(total) => range_not_satisfiable(total),
-            Self::Internal => status_response(StatusCode::INTERNAL_SERVER_ERROR),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

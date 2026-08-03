@@ -1247,6 +1247,430 @@ async fn replace_email_dependents(
     Ok(())
 }
 
+/// One email extraction console event.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct EmailEventRecord {
+    pub id: i64,
+    pub node_id: Option<Uuid>,
+    pub node_name: String,
+    pub state: String,
+    pub subject: Option<String>,
+    pub attachment_count: Option<i32>,
+    pub duration_ms: Option<i64>,
+    pub origin: JobOrigin,
+    pub campaign_id: Option<Uuid>,
+    pub warning: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Longest subject kept on an event row.
+///
+/// The console needs enough to recognise a message, not the whole header. A
+/// bounded copy also keeps one pathological subject from dominating the table.
+const EMAIL_EVENT_SUBJECT_LIMIT: usize = 120;
+
+/// Records one email extraction outcome for the operator console.
+///
+/// Carries identifiers and measurements only. Body text, addresses, and raw
+/// headers are never written here: these rows are retained indefinitely and
+/// displayed live, so anything sensitive in them would leak into both.
+///
+/// # Errors
+///
+/// Returns a database error when the event cannot be inserted.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_email_event(
+    pool: &PgPool,
+    node_id: Option<Uuid>,
+    node_name: &str,
+    state: &str,
+    subject: Option<&str>,
+    attachment_count: Option<i32>,
+    duration_ms: Option<i64>,
+    origin: JobOrigin,
+    campaign_id: Option<Uuid>,
+    warning: Option<&str>,
+) -> Result<EmailEventRecord, sqlx::Error> {
+    let subject = subject.map(|value| {
+        let mut end = value.len().min(EMAIL_EVENT_SUBJECT_LIMIT);
+        while end > 0 && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        &value[..end]
+    });
+    sqlx::query_as::<_, EmailEventRecord>(
+        r"
+        INSERT INTO email_events (
+            node_id, node_name, state, subject, attachment_count, duration_ms,
+            origin, campaign_id, warning
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING *
+        ",
+    )
+    .bind(node_id)
+    .bind(node_name)
+    .bind(state)
+    .bind(subject)
+    .bind(attachment_count)
+    .bind(duration_ms)
+    .bind(origin)
+    .bind(campaign_id)
+    .bind(warning)
+    .fetch_one(pool)
+    .await
+}
+
+/// Lists email events after a monotonically increasing cursor.
+///
+/// # Errors
+///
+/// Returns a database error when event history cannot be queried.
+pub async fn list_email_events_after(
+    pool: &PgPool,
+    after_id: i64,
+    limit: i64,
+) -> Result<Vec<EmailEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, EmailEventRecord>(
+        "SELECT * FROM email_events WHERE id > $1 ORDER BY id LIMIT $2",
+    )
+    .bind(after_id)
+    .bind(limit.clamp(1, 200))
+    .fetch_all(pool)
+    .await
+}
+
+/// One version value and how many rows carry it.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct VersionCount {
+    pub version: String,
+    pub count: i64,
+}
+
+/// Version distributions across the independent reprocessing axes.
+///
+/// These are separate fields rather than one "email version" because a change
+/// to each requires different work: a parser change means reparsing messages, a
+/// sanitizer change means only re-rendering, an attachment-extractor change
+/// means re-extracting text without touching the message, and a search-index
+/// change means rebuilding vectors from data already stored. Collapsing them
+/// would force the most expensive reprocessing for the cheapest change.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EmailVersionReport {
+    pub parser: Vec<VersionCount>,
+    pub attachment_materializer: Vec<VersionCount>,
+    pub attachment_extractor: Vec<VersionCount>,
+    /// Messages whose parser version differs from the running one.
+    pub messages_needing_reparse: i64,
+    /// Attachments whose extractor version differs from the running one.
+    pub attachments_needing_reextraction: i64,
+    /// Completed messages with no search vector.
+    pub messages_needing_reindex: i64,
+}
+
+/// Reports version distributions and how much reprocessing each implies.
+///
+/// # Errors
+///
+/// Returns a database error when an aggregate query cannot run.
+pub async fn email_version_report(
+    pool: &PgPool,
+    parser_version: &str,
+    attachment_extractor_version: &str,
+) -> Result<EmailVersionReport, sqlx::Error> {
+    let parser = sqlx::query_as::<_, VersionCount>(
+        "SELECT parser_version AS version, count(*) AS count
+         FROM email_messages GROUP BY parser_version ORDER BY count DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let attachment_materializer = sqlx::query_as::<_, VersionCount>(
+        "SELECT materializer_version AS version, count(*) AS count
+         FROM email_attachment_artifacts GROUP BY materializer_version ORDER BY count DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let attachment_extractor = sqlx::query_as::<_, VersionCount>(
+        "SELECT coalesce(text_extractor_version, '(none)') AS version, count(*) AS count
+         FROM email_attachment_artifacts GROUP BY text_extractor_version ORDER BY count DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let messages_needing_reparse = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_messages WHERE parser_version IS DISTINCT FROM $1",
+    )
+    .bind(parser_version)
+    .fetch_one(pool)
+    .await?;
+    let attachments_needing_reextraction = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_attachment_artifacts
+         WHERE state = 'ready' AND text_status = 'completed'
+           AND text_extractor_version IS DISTINCT FROM $1",
+    )
+    .bind(attachment_extractor_version)
+    .fetch_one(pool)
+    .await?;
+    let messages_needing_reindex = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_messages
+         WHERE status = 'completed' AND search_vector IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(EmailVersionReport {
+        parser,
+        attachment_materializer,
+        attachment_extractor,
+        messages_needing_reparse,
+        attachments_needing_reextraction,
+        messages_needing_reindex,
+    })
+}
+
+/// What a repair scan found, without changing anything.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EmailRepairReport {
+    /// Finalized `.eml`-shaped nodes with no projection at all.
+    pub missing_projections: i64,
+    /// Artifact rows whose message no longer exists.
+    pub orphan_artifacts: i64,
+    /// Manifest entries with no artifact, and artifacts with no manifest entry.
+    pub manifest_without_artifact: i64,
+    pub artifact_without_manifest: i64,
+    /// Jobs leased past their expiry, which a live worker would have renewed.
+    pub stale_leases: i64,
+    /// Campaigns whose recorded counts disagree with the jobs table.
+    pub campaigns_with_count_drift: i64,
+    pub messages_needing_reindex: i64,
+}
+
+/// Scans for inconsistencies without mutating anything.
+///
+/// Read-only by construction: there is no write path in this function, so
+/// "dry run" is not a flag that could be passed wrongly. Acting on what it finds
+/// is a separate, explicitly scoped call.
+///
+/// # Errors
+///
+/// Returns a database error when a scan query cannot run.
+pub async fn email_repair_scan(pool: &PgPool) -> Result<EmailRepairReport, sqlx::Error> {
+    let missing_projections = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM nodes n
+         JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+         LEFT JOIN email_messages e ON e.node_id = n.id
+         WHERE n.kind = 'file' AND n.lifecycle_state = 'active' AND e.node_id IS NULL
+           AND n.name ILIKE '%.eml'",
+    )
+    .fetch_one(pool)
+    .await?;
+    // The foreign key makes true orphans impossible; the check stays so a future
+    // schema change that drops the cascade is caught rather than assumed safe.
+    let orphan_artifacts = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_attachment_artifacts a
+         LEFT JOIN email_messages e ON e.node_id = a.node_id
+         WHERE e.node_id IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    let manifest_without_artifact = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_attachments m
+         LEFT JOIN email_attachment_artifacts a
+                ON a.node_id = m.node_id AND a.part_path = m.part_path
+         WHERE a.id IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    let artifact_without_manifest = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_attachment_artifacts a
+         LEFT JOIN email_attachments m
+                ON m.node_id = a.node_id AND m.part_path = a.part_path
+         WHERE m.id IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    let stale_leases = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM jobs
+         WHERE state = 'leased' AND lease_expires_at IS NOT NULL
+           AND lease_expires_at < now()",
+    )
+    .fetch_one(pool)
+    .await?;
+    let campaigns_with_count_drift = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM backfill_campaigns c
+         WHERE c.enqueued_count <
+               (SELECT count(*) FROM jobs j WHERE j.campaign_id = c.id)",
+    )
+    .fetch_one(pool)
+    .await?;
+    let messages_needing_reindex = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_messages
+         WHERE status = 'completed' AND search_vector IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(EmailRepairReport {
+        missing_projections,
+        orphan_artifacts,
+        manifest_without_artifact,
+        artifact_without_manifest,
+        stale_leases,
+        campaigns_with_count_drift,
+        messages_needing_reindex,
+    })
+}
+
+/// Reconciles a campaign's recorded counts with the jobs table.
+///
+/// Deliberately cannot change campaign *state*. Repairing a count is a
+/// bookkeeping fix; resuming a paused campaign is an operational decision, and a
+/// repair command that could do the second as a side effect of the first would
+/// be able to start a ten-year backfill nobody authorized.
+///
+/// # Errors
+///
+/// Returns a database error when the campaign cannot be reconciled.
+pub async fn repair_campaign_counts(
+    pool: &PgPool,
+    campaign_id: Uuid,
+) -> Result<BackfillCampaignRecord, sqlx::Error> {
+    sqlx::query_as::<_, BackfillCampaignRecord>(
+        r"
+        UPDATE backfill_campaigns c
+        SET enqueued_count = GREATEST(
+                c.enqueued_count,
+                (SELECT count(*) FROM jobs j WHERE j.campaign_id = c.id)
+            ),
+            updated_at = now()
+        WHERE c.id = $1
+        RETURNING *
+        ",
+    )
+    .bind(campaign_id)
+    .fetch_one(pool)
+    .await
+}
+
+/// Deletes finished jobs past their retention window, in one bounded batch.
+///
+/// Retention is per outcome rather than uniform, because the two kinds of row
+/// have different value. A `completed` job is a receipt nobody reads: it proves
+/// work happened and is superseded by the artifact it produced. A `failed` or
+/// `cancelled` job is evidence — it carries `last_error` and the attempt count,
+/// which is what an operator triaging a bad import or a parser regression
+/// actually reads. So successes are dropped early and failures are kept long.
+///
+/// Three things are never deleted:
+///
+/// - `pending` and `leased` jobs, at any age. A leased job whose worker died is
+///   recovered by lease expiry, not by deletion; removing it would strand the
+///   work permanently.
+/// - Failed jobs whose target still has an unresolved `failed` import entry.
+///   That entry is what the Actionable Errors tab lists, and its retry needs the
+///   job's error context to explain what went wrong.
+/// - Anything beyond `batch`, so a first run against a long-neglected table
+///   takes many small bites instead of locking it for one large one.
+///
+/// Returns how many rows were removed.
+///
+/// # Errors
+///
+/// Returns a database error when the purge cannot run.
+pub async fn purge_expired_jobs(
+    pool: &PgPool,
+    completed_retention_days: i32,
+    failed_retention_days: i32,
+    batch: u32,
+) -> Result<u64, sqlx::Error> {
+    let batch = i64::from(batch.clamp(1, 10_000));
+    let result = sqlx::query(
+        r"
+        WITH expired AS (
+            SELECT j.id
+            FROM jobs j
+            WHERE j.state IN ('completed', 'skipped', 'failed', 'cancelled')
+              AND coalesce(j.completed_at, j.updated_at) < now() - (
+                  CASE
+                      WHEN j.state IN ('completed', 'skipped') THEN $1
+                      ELSE $2
+                  END * interval '1 day'
+              )
+              -- The Actionable Errors tab lists unresolved failed imports and
+              -- offers a retry; deleting the job behind one would leave a row
+              -- the user can see but nothing can explain.
+              AND NOT (
+                  j.state = 'failed'
+                  AND EXISTS (
+                      SELECT 1 FROM import_entries e
+                      WHERE e.resulting_node_id = j.target_node_id
+                        AND e.state = 'failed'
+                  )
+              )
+            ORDER BY coalesce(j.completed_at, j.updated_at)
+            LIMIT $3
+            FOR UPDATE SKIP LOCKED
+        )
+        DELETE FROM jobs WHERE id IN (SELECT id FROM expired)
+        ",
+    )
+    .bind(completed_retention_days)
+    .bind(failed_retention_days)
+    .bind(batch)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Reconciles how many concurrent slots a resource class offers.
+///
+/// The permit is a set of rows rather than an advisory lock precisely so it can
+/// be resized without a deployment and so it survives a worker that dies mid-job
+/// — an expired lease frees its slot, where a held lock would not.
+///
+/// Shrinking never revokes a slot that is currently leased: the extra rows are
+/// removed only when free, so a running job is never orphaned by a config
+/// change. A shrink that cannot complete now completes on the next call.
+///
+/// # Errors
+///
+/// Returns a database error when slots cannot be reconciled.
+pub async fn set_resource_slots(
+    pool: &PgPool,
+    resource_class: JobResourceClass,
+    slots: i32,
+) -> Result<i32, sqlx::Error> {
+    let slots = slots.max(1);
+    let mut transaction = pool.begin().await?;
+    for slot_number in 1..=slots {
+        sqlx::query(
+            "INSERT INTO worker_resource_leases (resource_class, slot_number)
+             VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(resource_class)
+        .bind(slot_number)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    sqlx::query(
+        "DELETE FROM worker_resource_leases
+         WHERE resource_class = $1 AND slot_number > $2
+           AND (lease_expires_at IS NULL OR lease_expires_at < now())",
+    )
+    .bind(resource_class)
+    .bind(slots)
+    .execute(&mut *transaction)
+    .await?;
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM worker_resource_leases WHERE resource_class = $1",
+    )
+    .bind(resource_class)
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(i32::try_from(count).unwrap_or(slots))
+}
+
 /// Aggregate email extraction workload and durable outcome counts.
 ///
 /// Queued work is split by origin because a paused historical campaign and a
@@ -1264,6 +1688,15 @@ pub struct EmailStatusCounts {
     pub unsupported: i64,
     pub remaining: i64,
     pub indexed: i64,
+    /// Messages that have an extraction row of any kind, so "candidates minus
+    /// completed" is answerable without scanning nodes.
+    pub candidates: i64,
+    /// Attachment artifacts still awaiting text extraction.
+    pub attachments_pending: i64,
+    pub attachments_completed: i64,
+    pub attachments_failed: i64,
+    /// Messages parsed in the last hour, the basis for throughput and ETA.
+    pub completed_last_hour: i64,
 }
 
 /// Loads email status using indexed SQL aggregates without materializing rows.
@@ -1293,7 +1726,19 @@ pub async fn email_status_counts(pool: &PgPool) -> Result<EmailStatusCounts, sql
             (SELECT count(*) FROM email_messages WHERE status = 'unsupported') AS unsupported,
             (SELECT count(*) FROM jobs
               WHERE job_type = 'email_extraction' AND state IN ('pending', 'leased')) AS remaining,
-            (SELECT count(*) FROM email_messages WHERE search_vector IS NOT NULL) AS indexed
+            (SELECT count(*) FROM email_messages WHERE search_vector IS NOT NULL) AS indexed,
+            (SELECT count(*) FROM email_messages) AS candidates,
+            (SELECT count(*) FROM email_attachment_artifacts
+              WHERE state = 'ready' AND text_status = 'pending') AS attachments_pending,
+            (SELECT count(*) FROM email_attachment_artifacts
+              WHERE text_status = 'completed') AS attachments_completed,
+            (SELECT count(*) FROM email_attachment_artifacts
+              WHERE text_status = 'failed') AS attachments_failed,
+            -- Throughput is measured from durable outcomes rather than from a
+            -- counter the worker keeps in memory, so a restart cannot reset it.
+            (SELECT count(*) FROM email_messages
+              WHERE status = 'completed' AND updated_at > now() - interval '1 hour')
+                AS completed_last_hour
         ",
     )
     .fetch_one(pool)

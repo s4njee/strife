@@ -114,6 +114,12 @@ pub struct EmailParseLimits {
     pub max_body_bytes: usize,
     pub max_preview_bytes: usize,
     pub max_headers: usize,
+    /// Largest single header value kept. A megabyte-long `Received` chain is a
+    /// denial-of-service shape, not a header anyone reads.
+    pub max_header_bytes: usize,
+    /// Largest MIME part count. A message with tens of thousands of parts is a
+    /// structural attack: each part is cheap, the total is not.
+    pub max_parts: usize,
     pub max_attachments: usize,
     pub max_warnings: usize,
 }
@@ -125,6 +131,8 @@ impl Default for EmailParseLimits {
             max_body_bytes: 2 * 1024 * 1024,
             max_preview_bytes: 512,
             max_headers: 512,
+            max_header_bytes: 16 * 1024,
+            max_parts: 1024,
             max_attachments: 256,
             max_warnings: 64,
         }
@@ -308,6 +316,15 @@ fn parse_email_inner(
     let Some(message) = MessageParser::default().parse(bytes) else {
         bail!("message could not be parsed");
     };
+    // Checked before any per-part work: a message built from tens of thousands
+    // of trivial parts costs nothing to parse and everything to walk.
+    if message.parts.len() > limits.max_parts {
+        bail!(
+            "email MIME part limit exceeded: {} parts is greater than {}",
+            message.parts.len(),
+            limits.max_parts
+        );
+    }
 
     let mut warnings = Vec::new();
     let paths = part_paths(&message);
@@ -568,13 +585,36 @@ fn collect_headers(
     limits: EmailParseLimits,
     warnings: &mut Vec<String>,
 ) -> Vec<ParsedHeader> {
+    let mut truncated = 0usize;
     let mut headers: Vec<ParsedHeader> = message
         .headers_raw()
-        .map(|(name, value)| ParsedHeader {
-            name: name.trim().to_owned(),
-            value: value.trim().to_owned(),
+        .map(|(name, value)| {
+            let value = value.trim();
+            // Truncated rather than dropped: a very long Received chain still
+            // says something useful in its first few kilobytes, and losing the
+            // header entirely would hide that the message had one.
+            let value = if value.len() > limits.max_header_bytes {
+                truncated += 1;
+                let mut end = limits.max_header_bytes;
+                while end > 0 && !value.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &value[..end]
+            } else {
+                value
+            };
+            ParsedHeader {
+                name: name.trim().to_owned(),
+                value: value.to_owned(),
+            }
         })
         .collect();
+    if truncated > 0 {
+        warnings.push(format!(
+            "{truncated} header value(s) exceeded {} bytes and were truncated",
+            limits.max_header_bytes
+        ));
+    }
     if headers.len() > limits.max_headers {
         warnings.push(format!(
             "header count limit exceeded; kept the first {}",

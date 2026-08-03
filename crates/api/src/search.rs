@@ -1,15 +1,15 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
     routing::get,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::internal_error;
+use crate::error::ApiError;
+
+const ROUTE: &str = "/api/search";
 
 const DEFAULT_LIMIT: u32 = 25;
 
@@ -38,12 +38,6 @@ struct SearchResponse {
     indexed_documents: i64,
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: &'static str,
-}
-
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/api/search", get(search))
@@ -53,17 +47,13 @@ pub fn router(pool: PgPool) -> Router {
 async fn search(
     State(pool): State<PgPool>,
     Query(query): Query<SearchQuery>,
-) -> Result<Json<SearchResponse>, Response> {
+) -> Result<Json<SearchResponse>, ApiError> {
     let search = query.q.trim();
     if search.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                code: "bad_request",
-                message: "Search query must not be empty",
-            }),
-        )
-            .into_response());
+        return Err(
+            ApiError::BadRequest("Search query must not be empty".into())
+                .rejected(ROUTE, "empty query"),
+        );
     }
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
     let mut matches = strife_db::search_document_text(
@@ -74,7 +64,7 @@ async fn search(
         limit.saturating_add(1),
     )
     .await
-    .map_err(|error| internal_error(error).into_response())?;
+    .map_err(|error| ApiError::internal(error, ROUTE, "document search"))?;
     let has_more = matches.len() > limit as usize;
     if has_more {
         matches.pop();
@@ -86,7 +76,7 @@ async fn search(
         sqlx::query_scalar("SELECT count(*) FROM document_text WHERE status = 'completed'")
             .fetch_one(&pool)
             .await
-            .map_err(|error| internal_error(error).into_response())?;
+            .map_err(|error| ApiError::internal(error, ROUTE, "document search"))?;
     Ok(Json(SearchResponse {
         items: matches
             .into_iter()

@@ -8,8 +8,10 @@ use chrono::Duration as ChronoDuration;
 use sqlx::PgPool;
 use strife_db::{
     JobRecord, JobType, claim_job_with_resource_lease, complete_job,
-    enqueue_expired_trash_deletions, fail_job, get_job, release_expired_leases, renew_job_lease,
+    enqueue_expired_trash_deletions, fail_job, get_job, purge_expired_jobs, release_expired_leases,
+    renew_job_lease,
 };
+use strife_media::{AttachmentLimits, EmailParseLimits};
 use strife_storage::StorageBackend;
 use tokio::{sync::watch, task::JoinSet, time::MissedTickBehavior};
 use tracing::{Instrument, error, info, info_span, warn};
@@ -60,6 +62,26 @@ pub struct WorkerConfig {
     pub ocr_file_timeout: Duration,
     pub ocr_memory_limit_bytes: u64,
     pub ocr_max_text_bytes: usize,
+    /// Concurrency knobs are per family so one extractor can be throttled
+    /// without throttling the rest. They bound how many jobs this process will
+    /// run; the shared `heavy_cpu` permit bounds how many run archive-wide.
+    pub ocr_concurrency: usize,
+    pub email_parse_concurrency: usize,
+    pub attachment_extraction_concurrency: usize,
+    /// Slots in the cross-process `heavy_cpu` admission permit. Default 1 on
+    /// Orion: OCR, email parsing, and attachment extraction all draw from it,
+    /// and the box has four cores shared with everything else.
+    pub heavy_cpu_concurrency: usize,
+    pub email_limits: EmailParseLimits,
+    pub email_attachment_limits: AttachmentLimits,
+    pub email_file_timeout: Duration,
+    /// Days a `completed` or `skipped` job is kept. Successes are receipts
+    /// nobody reads once the artifact exists.
+    pub job_retention_completed_days: i32,
+    /// Days a `failed` or `cancelled` job is kept. Failures carry `last_error`
+    /// and the attempt count, which is what triage actually reads.
+    pub job_retention_failed_days: i32,
+    pub job_purge_batch: u32,
 }
 
 impl WorkerConfig {
@@ -98,6 +120,50 @@ impl WorkerConfig {
             ocr_file_timeout: Duration::from_secs(positive_u64("OCR_FILE_TIMEOUT_SECONDS", 600)?),
             ocr_memory_limit_bytes: positive_u64("OCR_MEMORY_LIMIT_BYTES", 512 * 1024 * 1024)?,
             ocr_max_text_bytes: positive_usize("OCR_MAX_TEXT_BYTES", 16 * 1024 * 1024)?,
+            ocr_concurrency: positive_usize("OCR_CONCURRENCY", 1)?,
+            email_parse_concurrency: positive_usize("EMAIL_PARSE_CONCURRENCY", 1)?,
+            attachment_extraction_concurrency: positive_usize(
+                "ATTACHMENT_EXTRACTION_CONCURRENCY",
+                1,
+            )?,
+            heavy_cpu_concurrency: positive_usize("HEAVY_CPU_CONCURRENCY", 1)?,
+            // Provisional defaults, to be profiled on Orion before they are
+            // treated as final. Every one is an env var so a limit can be
+            // tightened during a backfill without a rebuild.
+            email_limits: EmailParseLimits {
+                max_source_bytes: positive_usize("EMAIL_MAX_SOURCE_BYTES", 64 * 1024 * 1024)?,
+                max_body_bytes: positive_usize("EMAIL_MAX_BODY_BYTES", 2 * 1024 * 1024)?,
+                max_preview_bytes: positive_usize("EMAIL_MAX_PREVIEW_BYTES", 512)?,
+                max_headers: positive_usize("EMAIL_MAX_HEADERS", 512)?,
+                max_header_bytes: positive_usize("EMAIL_MAX_HEADER_BYTES", 16 * 1024)?,
+                max_parts: positive_usize("EMAIL_MAX_PARTS", 1024)?,
+                max_attachments: positive_usize("EMAIL_MAX_ATTACHMENTS", 256)?,
+                max_warnings: positive_usize("EMAIL_MAX_WARNINGS", 64)?,
+            },
+            email_attachment_limits: AttachmentLimits {
+                max_part_bytes: positive_usize("EMAIL_MAX_ATTACHMENT_BYTES", 25 * 1024 * 1024)?,
+                max_message_bytes: positive_usize(
+                    "EMAIL_MAX_TOTAL_ATTACHMENT_BYTES",
+                    64 * 1024 * 1024,
+                )?,
+                max_depth: positive_usize("EMAIL_MAX_ATTACHMENT_DEPTH", 1)?,
+            },
+            email_file_timeout: Duration::from_secs(positive_u64(
+                "EMAIL_FILE_TIMEOUT_SECONDS",
+                120,
+            )?),
+            job_retention_completed_days: i32::try_from(positive_u64(
+                "JOB_RETENTION_COMPLETED_DAYS",
+                7,
+            )?)
+            .context("JOB_RETENTION_COMPLETED_DAYS is too large")?,
+            job_retention_failed_days: i32::try_from(positive_u64(
+                "JOB_RETENTION_FAILED_DAYS",
+                30,
+            )?)
+            .context("JOB_RETENTION_FAILED_DAYS is too large")?,
+            job_purge_batch: u32::try_from(positive_u64("JOB_PURGE_BATCH", 500)?)
+                .context("JOB_PURGE_BATCH is too large")?,
         })
     }
 }
@@ -304,7 +370,8 @@ pub async fn run(
             shutdown_rx.clone(),
         ));
     }
-    tasks.spawn(trash_cleanup_loop(pool, shutdown_rx));
+    tasks.spawn(trash_cleanup_loop(pool.clone(), shutdown_rx.clone()));
+    tasks.spawn(job_purge_loop(config.clone(), pool, shutdown_rx));
 
     wait_for_shutdown().await?;
     info!("shutdown requested; draining active jobs");
@@ -561,6 +628,61 @@ async fn trash_cleanup_loop(pool: PgPool, mut shutdown: watch::Receiver<bool>) -
             }
         }
     }
+}
+
+/// Deletes finished jobs past their retention window.
+///
+/// Runs on the same hourly cadence as trash cleanup and takes one bounded bite
+/// per tick, so a table neglected for months drains over hours instead of
+/// locking in a single statement.
+async fn job_purge_loop(
+    config: WorkerConfig,
+    pool: PgPool,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    let mut interval = tokio::time::interval(Duration::from_secs(3600));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    interval.tick().await;
+    loop {
+        match purge_expired_jobs(
+            &pool,
+            config.job_retention_completed_days,
+            config.job_retention_failed_days,
+            config.job_purge_batch,
+        )
+        .await
+        {
+            Ok(count) if count > 0 => info!(
+                count,
+                completed_retention_days = config.job_retention_completed_days,
+                failed_retention_days = config.job_retention_failed_days,
+                "purged finished jobs past their retention window"
+            ),
+            Ok(_) => {}
+            Err(error) => error!(%error, "failed to purge finished jobs"),
+        }
+        tokio::select! {
+            _ = interval.tick() => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { return Ok(()); }
+            }
+        }
+    }
+}
+
+/// Exposed for integration tests: run one job-purge batch immediately.
+///
+/// # Errors
+///
+/// Returns a database error when the purge fails.
+pub async fn run_job_purge_once(pool: &PgPool, config: &WorkerConfig) -> Result<u64> {
+    Ok(purge_expired_jobs(
+        pool,
+        config.job_retention_completed_days,
+        config.job_retention_failed_days,
+        config.job_purge_batch,
+    )
+    .await?)
 }
 
 /// Exposed for integration tests: run one trash-cleanup batch immediately.

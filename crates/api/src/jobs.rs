@@ -1,14 +1,13 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
     routing::get,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::internal_error;
+use crate::error::ApiError;
 
 #[derive(Serialize)]
 struct JobStatus {
@@ -38,11 +37,11 @@ pub fn router(pool: PgPool) -> Router {
 async fn status(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
-) -> Result<Json<JobStatus>, StatusCode> {
+) -> Result<Json<JobStatus>, ApiError> {
     let job = strife_db::get_job(&pool, id)
         .await
-        .map_err(internal_error)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|error| ApiError::internal(error, "/api/jobs", id))?
+        .ok_or(ApiError::NotFound("Job was not found"))?;
     Ok(Json(JobStatus {
         id,
         status: format!("{:?}", job.state).to_lowercase(),
@@ -53,7 +52,7 @@ async fn status(
 async fn list_or_count(
     State(pool): State<PgPool>,
     Query(query): Query<JobListQuery>,
-) -> Result<Json<JobCountResponse>, StatusCode> {
+) -> Result<Json<JobCountResponse>, ApiError> {
     let states = query
         .state
         .as_deref()
@@ -73,7 +72,7 @@ async fn list_or_count(
     .bind(&states)
     .fetch_one(&pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal(error, "/api/jobs", "job count"))?;
 
     let _ = query.count;
     Ok(Json(JobCountResponse { count }))

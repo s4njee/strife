@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::Serialize;
 use sqlx::PgPool;
 use strife_storage::{LocalFsBackend, StorageBackend};
 
-use crate::internal_error;
+use crate::error::ApiError;
 
 #[derive(Clone)]
 struct StorageState {
@@ -33,10 +33,12 @@ pub struct StorageUsageResponse {
     pub usage_percent: f64,
 }
 
-async fn usage(
-    State(state): State<StorageState>,
-) -> Result<Json<StorageUsageResponse>, StatusCode> {
-    let disk = state.storage.disk_usage().await.map_err(internal_error)?;
+async fn usage(State(state): State<StorageState>) -> Result<Json<StorageUsageResponse>, ApiError> {
+    let disk = state
+        .storage
+        .disk_usage()
+        .await
+        .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
 
     let originals_bytes: i64 = sqlx::query_scalar(
         r"
@@ -49,7 +51,7 @@ async fn usage(
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
 
     let trash_bytes: i64 = sqlx::query_scalar(
         r"
@@ -62,7 +64,7 @@ async fn usage(
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
 
     let artifacts_bytes: i64 = sqlx::query_scalar(
         r"
@@ -73,7 +75,7 @@ async fn usage(
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
 
     #[allow(clippy::cast_precision_loss)]
     let usage_percent = if disk.total_bytes == 0 {

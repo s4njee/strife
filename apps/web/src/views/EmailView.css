@@ -552,3 +552,168 @@
     gap: var(--space-3);
   }
 }
+
+/* --- Processing console --- */
+
+.email-console {
+  margin-bottom: var(--space-4);
+  overflow: hidden;
+  background: var(--color-surface-panel);
+  border: 1px solid var(--color-border-structural);
+  border-radius: var(--radius-md);
+}
+
+.email-console__heading {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.email-console__heading h3 {
+  margin: 0;
+  font-size: var(--font-size-base);
+}
+
+.email-console__heading span {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+}
+
+.email-console__heading i {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-ghost);
+}
+
+.email-console__heading .is-live i {
+  background: var(--color-success);
+}
+
+.email-console__heading .is-reconnecting i {
+  background: var(--color-warning);
+}
+
+.email-console__counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+}
+
+.email-console__counts dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-label);
+  text-transform: uppercase;
+}
+
+.email-console__counts dd {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-family: var(--font-mono);
+}
+
+.email-console__counts .is-error dd {
+  color: var(--color-error);
+}
+
+.email-console__throughput,
+.email-campaign__limits,
+.email-campaign__progress {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+}
+
+.email-campaign {
+  margin: 0 var(--space-3) var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-row);
+}
+
+.email-campaign__heading {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-3);
+}
+
+.email-campaign__heading h4 {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.email-campaign__state {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+}
+
+.email-campaign__state.is-running {
+  color: var(--color-success);
+}
+
+.email-campaign__state.is-paused {
+  color: var(--color-warning);
+}
+
+.email-console__output {
+  max-height: 18rem;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border-row);
+}
+
+.email-console__entry {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.email-console__entry > p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.email-console__entry time,
+.email-console__entry small {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+}
+
+.email-console__entry.is-failed > p > span {
+  color: var(--color-error);
+}
+
+.email-console__entry button {
+  margin-left: auto;
+}
+
+.email-console__warning {
+  margin: 0;
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  white-space: normal;
+}
+
+.email-console__empty {
+  padding: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-md);
+  text-align: center;
+}

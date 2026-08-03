@@ -25,6 +25,54 @@ async fn get(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     (status, value)
 }
 
+/// Gives a node the finalized file object a real `.eml` always has.
+///
+/// Every reprocess scope joins through `file_objects`, because a message with
+/// no stored original cannot be reparsed.
+async fn finalize_source(pool: &PgPool, node_id: Uuid) {
+    let file =
+        strife_db::create_file_object(pool, Uuid::new_v4(), 1024, Some("message/rfc822"), None)
+            .await
+            .expect("create file object");
+    strife_db::finalize_file_object(pool, file.id, node_id)
+        .await
+        .expect("finalize file object");
+}
+
+/// A finalized `.eml` node with no email projection yet.
+async fn seed_unparsed(pool: &PgPool, name: &str) -> Uuid {
+    let node_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
+        .bind(node_id)
+        .bind(ROOT_NODE_ID)
+        .bind(format!("{name}-{node_id}.eml"))
+        .execute(pool)
+        .await
+        .expect("create node");
+    finalize_source(pool, node_id).await;
+    node_id
+}
+
+async fn post(app: axum::Router, uri: &str, payload: serde_json::Value) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::post(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("read body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
 async fn seed(pool: &PgPool, subject: &str, body: &str, from: &str, label: Option<&str>) -> Uuid {
     let node_id = Uuid::new_v4();
     sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
@@ -34,6 +82,7 @@ async fn seed(pool: &PgPool, subject: &str, body: &str, from: &str, label: Optio
         .execute(pool)
         .await
         .expect("create node");
+    finalize_source(pool, node_id).await;
     let labels: Vec<String> = label
         .map(|value| vec![value.to_owned()])
         .unwrap_or_default();
@@ -436,4 +485,203 @@ async fn message_html_is_sanitized_before_it_leaves_the_api(pool: PgPool) {
     assert_eq!(body["blocked_hosts"][0], "tracker.test");
     // Parser warnings survive alongside any the sanitizer adds.
     assert_eq!(body["warnings"][0], "parser note");
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn status_reports_campaigns_throughput_and_versions(pool: PgPool) {
+    let node_id = seed(&pool, "Recent", "Body.", "ada@example.test", None).await;
+    strife_db::enqueue_job(&pool, strife_db::JobType::EmailExtraction, node_id, 5)
+        .await
+        .expect("queue work");
+    let campaign = strife_db::create_backfill_campaign(
+        &pool,
+        &strife_db::NewBackfillCampaign {
+            kind: strife_db::BackfillKind::Email,
+            candidate_definition: serde_json::json!({"version": 1}),
+            batch_size: 100,
+            max_queued: 500,
+            max_running: 1,
+            resource_class: strife_db::JobResourceClass::HeavyCpu,
+            foreground_fairness: 20,
+            created_by_version: "test".to_owned(),
+        },
+    )
+    .await
+    .expect("campaign");
+
+    let (status, body) = get(strife_api::email::router(pool), "/api/email/status").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Campaigns are reported individually, with the durable cursor and the
+    // configured limits an operator needs to judge whether to resume.
+    let reported = &body["campaigns"][0];
+    assert_eq!(reported["id"], campaign.id.to_string());
+    assert_eq!(reported["batch_size"], 100);
+    assert_eq!(reported["max_queued"], 500);
+    assert_eq!(reported["max_running"], 1);
+    assert_eq!(reported["resource_class"], "heavycpu");
+    assert_eq!(reported["candidate_count"], 0);
+
+    assert_eq!(body["counts"]["candidates"], 1);
+    assert_eq!(body["counts"]["attachments_pending"], 0);
+    assert!(body["parser_version"].is_string());
+    assert!(body["attachment_extractor_version"].is_string());
+
+    // One message completed just now, so throughput is non-zero and the ETA is
+    // derived from it rather than invented.
+    assert!(body["completed_per_hour"].as_i64().unwrap_or(0) >= 1);
+    assert!(body["eta_seconds"].as_i64().is_some());
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn an_idle_archive_reports_no_estimated_completion(pool: PgPool) {
+    let (status, body) = get(strife_api::email::router(pool), "/api/email/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["counts"]["remaining"], 0);
+    assert_eq!(body["completed_per_hour"], 0);
+    // Dividing by a rate of zero would produce a confident-looking infinity.
+    assert!(body["eta_seconds"].is_null());
+    assert_eq!(body["campaigns"].as_array().expect("campaigns").len(), 0);
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn events_carry_identifiers_and_measurements_but_no_message_content(pool: PgPool) {
+    let node_id = seed(&pool, "Quarterly", "Body.", "ada@example.test", None).await;
+    strife_db::record_email_event(
+        &pool,
+        Some(node_id),
+        "message.eml",
+        "completed",
+        Some("Quarterly reconciliation"),
+        Some(2),
+        Some(45),
+        strife_db::JobOrigin::Backfill,
+        None,
+        None,
+    )
+    .await
+    .expect("record event");
+
+    let events = strife_db::list_email_events_after(&pool, 0, 10)
+        .await
+        .expect("list events");
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.node_id, Some(node_id));
+    assert_eq!(event.attachment_count, Some(2));
+    assert_eq!(event.duration_ms, Some(45));
+    assert_eq!(event.origin, strife_db::JobOrigin::Backfill);
+    // The subject is the one content field, bounded and already visible in
+    // search results; nothing else about the message reaches this table.
+    assert_eq!(event.subject.as_deref(), Some("Quarterly reconciliation"));
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn a_long_subject_is_truncated_on_a_character_boundary(pool: PgPool) {
+    let node_id = seed(&pool, "Long", "Body.", "ada@example.test", None).await;
+    // Multi-byte characters spanning the limit must not produce invalid UTF-8.
+    let subject = "é".repeat(400);
+    let event = strife_db::record_email_event(
+        &pool,
+        Some(node_id),
+        "message.eml",
+        "completed",
+        Some(&subject),
+        None,
+        None,
+        strife_db::JobOrigin::Foreground,
+        None,
+        None,
+    )
+    .await
+    .expect("record event");
+    let stored = event.subject.expect("subject");
+    assert!(stored.len() <= 120);
+    assert!(subject.starts_with(&stored));
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn events_resume_from_a_cursor_without_replaying_history(pool: PgPool) {
+    let node_id = seed(&pool, "Stream", "Body.", "ada@example.test", None).await;
+    let mut ids = Vec::new();
+    for index in 0..5 {
+        ids.push(
+            strife_db::record_email_event(
+                &pool,
+                Some(node_id),
+                &format!("m{index}.eml"),
+                "completed",
+                None,
+                None,
+                None,
+                strife_db::JobOrigin::Foreground,
+                None,
+                None,
+            )
+            .await
+            .expect("record")
+            .id,
+        );
+    }
+
+    // A reconnect resumes strictly after its cursor, so a console that has been
+    // up through a long backfill does not re-render everything it already saw.
+    let resumed = strife_db::list_email_events_after(&pool, ids[2], 10)
+        .await
+        .expect("resume");
+    assert_eq!(resumed.len(), 2);
+    assert_eq!(resumed[0].id, ids[3]);
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn retry_targets_one_message_and_is_idempotent(pool: PgPool) {
+    let node_id = seed(&pool, "Retry me", "Body.", "ada@example.test", None).await;
+    let app = strife_api::email::router(pool.clone());
+
+    let first = post(
+        app.clone(),
+        "/api/email/reprocess",
+        serde_json::json!({"scope": "node", "node_id": node_id}),
+    )
+    .await;
+    assert_eq!(first.0, StatusCode::OK);
+    assert_eq!(first.1["enqueued"], 1);
+
+    // Pressing retry again while work is already queued must not stack a second
+    // job for the same message.
+    let second = post(
+        app,
+        "/api/email/reprocess",
+        serde_json::json!({"scope": "node", "node_id": node_id}),
+    )
+    .await;
+    assert_eq!(second.1["enqueued"], 0);
+}
+
+#[sqlx::test(migrations = "../db/migrations")]
+async fn bulk_retry_is_bounded_and_rejects_an_unknown_scope(pool: PgPool) {
+    // `missing` means "finalized but never parsed", so these are seeded without
+    // a projection rather than with one.
+    for index in 0..5 {
+        seed_unparsed(&pool, &format!("bulk{index}")).await;
+    }
+    let app = strife_api::email::router(pool);
+
+    let (status, body) = post(
+        app.clone(),
+        "/api/email/reprocess",
+        serde_json::json!({"scope": "missing", "limit": 2}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // A ten-year archive cannot afford a "retry all" that ignores its limit.
+    assert_eq!(body["enqueued"], 2);
+
+    let (bad, _) = post(
+        app,
+        "/api/email/reprocess",
+        serde_json::json!({"scope": "everything"}),
+    )
+    .await;
+    assert_eq!(bad, StatusCode::BAD_REQUEST);
 }

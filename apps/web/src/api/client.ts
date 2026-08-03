@@ -114,6 +114,26 @@ export async function searchEmail(
   return (await response.json()) as EmailSearchResponse
 }
 
+/** Requeues extraction for one message or a bounded batch. */
+export async function reprocessEmail(options: {
+  scope: 'node' | 'failed' | 'missing' | 'version'
+  nodeId?: string
+  limit?: number
+}): Promise<number> {
+  const response = await fetch('/api/email/reprocess', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: options.scope,
+      node_id: options.nodeId,
+      limit: options.limit,
+    }),
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Email reprocessing failed (${response.status}).`)
+  return ((await response.json()) as { enqueued: number }).enqueued
+}
+
 /** Authenticated URL for one attachment of one message. */
 export function emailAttachmentUrl(
   nodeId: string,

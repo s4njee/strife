@@ -1,8 +1,14 @@
+use std::{convert::Infallible, time::Duration};
+
 use axum::{
     Json, Router,
     extract::{Path, Query, RawQuery, State},
-    http::StatusCode,
-    routing::get,
+    http::{HeaderMap, StatusCode},
+    response::{
+        Sse,
+        sse::{Event, KeepAlive},
+    },
+    routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -260,16 +266,73 @@ pub struct EmailCountsResponse {
     pub unsupported: i64,
     pub remaining: i64,
     pub indexed: i64,
+    pub candidates: i64,
+    pub attachments_pending: i64,
+    pub attachments_completed: i64,
+    pub attachments_failed: i64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// One historical campaign's live progress.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct EmailCampaignResponse {
+    pub id: Uuid,
+    pub state: String,
+    pub snapshot_before: Option<DateTime<Utc>>,
+    /// Durable resume position. A restart continues from here rather than
+    /// restarting the scan.
+    pub cursor_created_at: Option<DateTime<Utc>>,
+    pub cursor_node_id: Option<Uuid>,
+    pub batch_size: i32,
+    pub max_queued: i32,
+    pub max_running: i32,
+    pub resource_class: String,
+    pub foreground_fairness: i32,
+    pub candidate_count: i64,
+    pub enqueued_count: i64,
+    pub completed_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct EmailStatusResponse {
     pub counts: EmailCountsResponse,
+    /// Messages parsed per hour, measured from durable outcomes.
+    pub completed_per_hour: i64,
+    /// Seconds to finish the remaining queue at the observed rate. Absent when
+    /// nothing has completed recently, because dividing by a rate of zero would
+    /// produce a confident-looking infinity.
+    pub eta_seconds: Option<i64>,
+    pub parser_version: String,
+    pub attachment_extractor_version: String,
+    /// Each historical campaign separately, so a paused backfill is never
+    /// confused with foreground mail that has stopped moving.
+    pub campaigns: Vec<EmailCampaignResponse>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct EmailEventResponse {
+    id: i64,
+    node_id: Option<Uuid>,
+    name: String,
+    state: String,
+    /// Present only for parsed messages, bounded by the writer. No body text,
+    /// address, or raw header ever appears on this stream.
+    subject: Option<String>,
+    attachment_count: Option<i32>,
+    duration_ms: Option<i64>,
+    origin: String,
+    campaign_id: Option<Uuid>,
+    warning: Option<String>,
+    created_at: DateTime<Utc>,
 }
 
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/api/email/status", get(status))
+        .route("/api/email/events", get(events))
+        .route("/api/email/reprocess", post(reprocess))
         .route("/api/email/search", get(search))
         .route("/api/email/facets", get(facets))
         .route("/api/email/messages/{node_id}", get(message))
@@ -277,10 +340,42 @@ pub fn router(pool: PgPool) -> Router {
 }
 
 async fn status(State(pool): State<PgPool>) -> Result<Json<EmailStatusResponse>, StatusCode> {
-    let counts = strife_db::email_status_counts(&pool)
-        .await
-        .map_err(internal_error)?;
-    Ok(Json(EmailStatusResponse {
+    load_status(&pool).await.map(Json).map_err(internal_error)
+}
+
+async fn load_status(pool: &PgPool) -> Result<EmailStatusResponse, sqlx::Error> {
+    let counts = strife_db::email_status_counts(pool).await?;
+    let campaigns: Vec<EmailCampaignResponse> = strife_db::list_backfill_campaigns(pool)
+        .await?
+        .into_iter()
+        .filter(|campaign| campaign.kind == strife_db::BackfillKind::Email)
+        .map(|campaign| EmailCampaignResponse {
+            id: campaign.id,
+            state: format!("{:?}", campaign.state).to_lowercase(),
+            snapshot_before: campaign.snapshot_before,
+            cursor_created_at: campaign.cursor_created_at,
+            cursor_node_id: campaign.cursor_node_id,
+            batch_size: campaign.batch_size,
+            max_queued: campaign.max_queued,
+            max_running: campaign.max_running,
+            resource_class: format!("{:?}", campaign.resource_class).to_lowercase(),
+            foreground_fairness: campaign.foreground_fairness,
+            candidate_count: campaign.candidate_count,
+            enqueued_count: campaign.enqueued_count,
+            completed_count: campaign.completed_count,
+            failed_count: campaign.failed_count,
+            skipped_count: campaign.skipped_count,
+            last_error: campaign.last_error,
+        })
+        .collect();
+
+    // A rate of zero yields no estimate rather than an infinity: "unknown" is
+    // more honest than a number that looks computed but means nothing.
+    let completed_per_hour = counts.completed_last_hour;
+    let eta_seconds = (completed_per_hour > 0 && counts.remaining > 0)
+        .then(|| counts.remaining.saturating_mul(3600) / completed_per_hour);
+
+    Ok(EmailStatusResponse {
         counts: EmailCountsResponse {
             foreground_pending: counts.foreground_pending,
             foreground_running: counts.foreground_running,
@@ -292,8 +387,173 @@ async fn status(State(pool): State<PgPool>) -> Result<Json<EmailStatusResponse>,
             unsupported: counts.unsupported,
             remaining: counts.remaining,
             indexed: counts.indexed,
+            candidates: counts.candidates,
+            attachments_pending: counts.attachments_pending,
+            attachments_completed: counts.attachments_completed,
+            attachments_failed: counts.attachments_failed,
         },
-    }))
+        completed_per_hour,
+        eta_seconds,
+        parser_version: strife_media::EMAIL_PARSER_VERSION.to_owned(),
+        attachment_extractor_version: ATTACHMENT_EXTRACTOR_VERSION.to_owned(),
+        campaigns,
+    })
+}
+
+#[derive(Deserialize)]
+struct ReprocessRequest {
+    /// `node`, `failed`, `missing`, or `version`.
+    scope: String,
+    node_id: Option<Uuid>,
+    parser_version: Option<String>,
+    /// Bounded server-side regardless of what is asked for; a retry that walks
+    /// the whole archive is not a retry.
+    limit: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct ReprocessResponse {
+    enqueued: u64,
+}
+
+/// Requeues extraction for a single message or a bounded batch.
+///
+/// Per-file retry and bulk retry are the same operation with a different scope,
+/// so they cannot drift apart in what they consider eligible. Every scope
+/// excludes nodes that already have active work, which is what makes pressing
+/// retry twice harmless.
+async fn reprocess(
+    State(pool): State<PgPool>,
+    Json(request): Json<ReprocessRequest>,
+) -> Result<Json<ReprocessResponse>, StatusCode> {
+    let scope = match request.scope.as_str() {
+        "node" => {
+            strife_db::EmailReprocessScope::Node(request.node_id.ok_or(StatusCode::BAD_REQUEST)?)
+        }
+        "failed" => strife_db::EmailReprocessScope::Failed,
+        "missing" => strife_db::EmailReprocessScope::Missing,
+        "version" => strife_db::EmailReprocessScope::VersionMismatch(
+            request
+                .parser_version
+                .unwrap_or_else(|| strife_media::EMAIL_PARSER_VERSION.to_owned()),
+        ),
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let enqueued =
+        strife_db::enqueue_email_reprocessing(&pool, &scope, request.limit.unwrap_or(50))
+            .await
+            .map_err(internal_error)?;
+    Ok(Json(ReprocessResponse { enqueued }))
+}
+
+/// Mirrors the worker's extractor version without depending on the worker crate.
+///
+/// The API and worker are separate binaries; duplicating the constant is
+/// preferable to the API taking a dependency on the worker for one string. The
+/// repair endpoint in Story 22.4 compares stored values against this.
+pub const ATTACHMENT_EXTRACTOR_VERSION: &str = "1";
+
+/// Streams extraction activity and status changes.
+///
+/// Resumes from `Last-Event-Id` so a reconnect does not replay the whole
+/// history, and falls back to the newest id — not to zero — when no cursor is
+/// supplied, because a fresh console wants live activity rather than a
+/// ten-year backlog.
+async fn events(
+    State(pool): State<PgPool>,
+    headers: HeaderMap,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let cursor = match headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<i64>().ok())
+    {
+        Some(cursor) => cursor,
+        None => sqlx::query_scalar::<_, i64>("SELECT COALESCE(max(id), 0) FROM email_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_default(),
+    };
+
+    let stream = futures_util::stream::unfold(
+        (
+            pool,
+            cursor,
+            Vec::<Event>::new(),
+            None::<EmailStatusResponse>,
+        ),
+        |(pool, mut cursor, mut pending, mut previous_status)| async move {
+            loop {
+                if let Some(event) = pending.pop() {
+                    return Some((
+                        Ok::<_, Infallible>(event),
+                        (pool, cursor, pending, previous_status),
+                    ));
+                }
+                let records = match strife_db::list_email_events_after(&pool, cursor, 100).await {
+                    Ok(records) => records,
+                    Err(error) => {
+                        tracing::error!(%error, "email event stream query failed");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+                let current_status = match load_status(&pool).await {
+                    Ok(status) => status,
+                    Err(error) => {
+                        tracing::error!(%error, "email status stream query failed");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+                let mut next = Vec::with_capacity(records.len() + 1);
+                for record in records {
+                    cursor = record.id;
+                    let response = EmailEventResponse {
+                        id: record.id,
+                        node_id: record.node_id,
+                        name: record.node_name,
+                        state: record.state,
+                        subject: record.subject,
+                        attachment_count: record.attachment_count,
+                        duration_ms: record.duration_ms,
+                        origin: format!("{:?}", record.origin).to_lowercase(),
+                        campaign_id: record.campaign_id,
+                        warning: record.warning,
+                        created_at: record.created_at,
+                    };
+                    next.push(
+                        Event::default()
+                            .event("entry")
+                            .id(record.id.to_string())
+                            .json_data(response)
+                            .unwrap_or_else(|_| Event::default().event("stream-error")),
+                    );
+                }
+                // Status is emitted only when it changes, so an idle archive
+                // does not push a full status payload twice a second.
+                if previous_status.as_ref() != Some(&current_status) {
+                    next.push(
+                        Event::default()
+                            .event("status")
+                            .json_data(&current_status)
+                            .unwrap_or_else(|_| Event::default().event("stream-error")),
+                    );
+                    previous_status = Some(current_status);
+                }
+                if next.is_empty() {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                } else {
+                    pending = next.into_iter().rev().collect();
+                }
+            }
+        },
+    );
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
 }
 
 /// Encodes a stable page position as `score:sent_at_millis:node_id`.

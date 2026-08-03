@@ -4,19 +4,16 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use strife_db::{
-    FavoriteRecord, FolderMutationError, NodeKind, NodeRecord, TrashEntryRecord, TrashMutationError,
-};
+use strife_db::{FavoriteRecord, NodeKind, NodeRecord, TrashEntryRecord, TrashMutationError};
 use strife_domain::FolderError;
 use uuid::Uuid;
 
-use crate::log_internal;
+use crate::error::ApiError;
 
 #[derive(Clone)]
 struct NodesState {
@@ -107,84 +104,32 @@ pub struct FavoritesListResponse {
     pub items: Vec<FavoriteItemResponse>,
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: String,
-}
-
-#[derive(Debug)]
-enum ApiError {
-    BadRequest(&'static str),
-    NotFound,
-    NotTrashed,
-    CannotTrashRoot,
-    NameConflict,
-    Internal,
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, code, message) = match self {
-            Self::BadRequest(message) => {
-                (StatusCode::BAD_REQUEST, "bad_request", message.to_owned())
-            }
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "Node was not found".to_owned(),
-            ),
-            Self::NotTrashed => (
-                StatusCode::CONFLICT,
-                "not_trashed",
-                "Node is not in the trash".to_owned(),
-            ),
-            Self::CannotTrashRoot => (
-                StatusCode::BAD_REQUEST,
-                "cannot_trash_root",
-                "The root folder cannot be moved to trash".to_owned(),
-            ),
-            Self::NameConflict => (
-                StatusCode::CONFLICT,
-                "name_conflict",
-                "An active sibling already has this name".to_owned(),
-            ),
-            Self::Internal => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "The node operation could not be completed".to_owned(),
-            ),
-        };
-        (status, Json(ErrorBody { code, message })).into_response()
-    }
-}
+/// Messages preserved verbatim from the per-module error type this replaced.
+const NOT_FOUND: &str = "Node was not found";
+const NAME_CONFLICT: &str = "An active sibling already has this name";
+const INTERNAL: &str = "The node operation could not be completed";
+const ROUTE: &str = "/api/nodes";
 
 impl From<TrashMutationError> for ApiError {
     fn from(error: TrashMutationError) -> Self {
         match error {
-            TrashMutationError::Rule(FolderError::NotFound) => Self::NotFound,
-            TrashMutationError::Rule(FolderError::NameConflict) => Self::NameConflict,
+            TrashMutationError::Rule(FolderError::NotFound) => Self::NotFound(NOT_FOUND),
+            TrashMutationError::Rule(FolderError::NameConflict) => {
+                Self::NameConflict(NAME_CONFLICT)
+            }
             TrashMutationError::Rule(FolderError::InvalidName | FolderError::CycleDetected) => {
-                log_internal("invalid trash rule state", Self::Internal)
+                Self::internal_with(
+                    "invalid trash rule state",
+                    ROUTE,
+                    "trash mutation",
+                    INTERNAL,
+                )
             }
             TrashMutationError::CannotTrashRoot => Self::CannotTrashRoot,
             TrashMutationError::NotTrashed => Self::NotTrashed,
-            TrashMutationError::Database(error) => log_internal(error, Self::Internal),
-        }
-    }
-}
-
-impl From<FolderMutationError> for ApiError {
-    fn from(error: FolderMutationError) -> Self {
-        match error {
-            FolderMutationError::Rule(FolderError::NotFound) => Self::NotFound,
-            FolderMutationError::Rule(FolderError::NameConflict) => Self::NameConflict,
-            FolderMutationError::Rule(FolderError::InvalidName | FolderError::CycleDetected)
-            | FolderMutationError::MoveConflict(_) => log_internal(
-                "unexpected folder mutation rule for nodes API",
-                Self::Internal,
-            ),
-            FolderMutationError::Database(error) => log_internal(error, Self::Internal),
+            TrashMutationError::Database(error) => {
+                Self::internal_with(error, ROUTE, "node mutation", INTERNAL)
+            }
         }
     }
 }
@@ -202,7 +147,7 @@ async fn trash_nodes_batch(
     Json(request): Json<TrashBatchRequest>,
 ) -> Result<Json<TrashBatchResponse>, ApiError> {
     if request.node_ids.is_empty() {
-        return Err(ApiError::BadRequest("Select at least one item"));
+        return Err(ApiError::BadRequest("Select at least one item".into()));
     }
     let nodes = strife_db::trash_nodes(&state.pool, &request.node_ids).await?;
     Ok(Json(TrashBatchResponse {
@@ -221,7 +166,7 @@ async fn restore_node(
 async fn list_trash(State(state): State<NodesState>) -> Result<Json<TrashListResponse>, ApiError> {
     let items = strife_db::list_trash(&state.pool)
         .await
-        .map_err(|error| log_internal(error, ApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "trash listing", INTERNAL))?;
     Ok(Json(TrashListResponse {
         items: items.into_iter().map(TrashItemResponse::from).collect(),
     }))
@@ -232,7 +177,7 @@ async fn list_favorites(
 ) -> Result<Json<FavoritesListResponse>, ApiError> {
     let items = strife_db::list_favorites(&state.pool)
         .await
-        .map_err(|error| log_internal(error, ApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "favorites listing", INTERNAL))?;
     Ok(Json(FavoritesListResponse {
         items: items.into_iter().map(FavoriteItemResponse::from).collect(),
     }))
@@ -252,7 +197,7 @@ async fn remove_favorite(
 ) -> Result<StatusCode, ApiError> {
     strife_db::remove_favorite(&state.pool, node_id)
         .await
-        .map_err(|error| log_internal(error, ApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -267,7 +212,7 @@ async fn permanent_delete(
         // Already deleted, or an identical job is already pending/leased.
         let existing = strife_db::get_node_by_id(&state.pool, node_id)
             .await
-            .map_err(|error| log_internal(error, ApiError::Internal))?;
+            .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
         if existing.is_none() {
             (StatusCode::OK, "already_deleted", None)
         } else {

@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response, Sse, sse::Event, sse::KeepAlive},
+    response::{Sse, sse::Event, sse::KeepAlive},
     routing::{get, patch, post},
 };
 use chrono::{DateTime, Utc};
@@ -19,7 +19,9 @@ use strife_db::{ImportEntryRecord, ImportEntryState, ImportSourceRecord};
 use strife_storage::StorageBackend;
 use uuid::Uuid;
 
-use crate::log_internal;
+use tracing::warn;
+
+use crate::error::ApiError;
 
 #[derive(Clone)]
 struct ImportState {
@@ -101,50 +103,17 @@ struct EntryQuery {
     state: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: &'static str,
-}
-
-#[derive(Debug)]
-enum ImportApiError {
-    BadRequest(&'static str),
-    NotFound,
-    Disabled,
-    Internal,
-}
-
-impl IntoResponse for ImportApiError {
-    fn into_response(self) -> Response {
-        let (status, code, message) = match self {
-            Self::BadRequest(message) => (StatusCode::BAD_REQUEST, "bad_request", message),
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "Import source was not found",
-            ),
-            Self::Disabled => (
-                StatusCode::CONFLICT,
-                "source_disabled",
-                "Import source is disabled",
-            ),
-            Self::Internal => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "Import operation failed",
-            ),
-        };
-        (status, Json(ErrorBody { code, message })).into_response()
-    }
-}
+/// Messages preserved verbatim from the per-module error type this replaced.
+const NOT_FOUND: &str = "Import source was not found";
+const INTERNAL: &str = "The import operation could not be completed";
+const ROUTE: &str = "/api/imports";
 
 async fn list_sources(
     State(state): State<ImportState>,
-) -> Result<Json<Vec<ImportSourceResponse>>, ImportApiError> {
+) -> Result<Json<Vec<ImportSourceResponse>>, ApiError> {
     let sources = strife_db::list_import_source_statuses(&state.pool)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?;
     Ok(Json(
         sources
             .into_iter()
@@ -170,17 +139,17 @@ async fn update_source(
     State(state): State<ImportState>,
     Path(source_id): Path<Uuid>,
     Json(request): Json<UpdateSourceRequest>,
-) -> Result<Json<ImportSourceResponse>, ImportApiError> {
+) -> Result<Json<ImportSourceResponse>, ApiError> {
     strife_db::set_import_source_enabled(&state.pool, source_id, request.enabled)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?
-        .ok_or(ImportApiError::NotFound)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?
+        .ok_or(ApiError::NotFound(NOT_FOUND))?;
     let source = strife_db::list_import_source_statuses(&state.pool)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?
         .into_iter()
         .find(|source| source.id == source_id)
-        .ok_or(ImportApiError::NotFound)?;
+        .ok_or(ApiError::NotFound(NOT_FOUND))?;
     Ok(Json(ImportSourceResponse {
         id: source.id,
         watch_path: source.watch_path,
@@ -200,13 +169,13 @@ async fn update_source(
 async fn scan_source(
     State(state): State<ImportState>,
     Path(source_id): Path<Uuid>,
-) -> Result<(StatusCode, Json<ScanResponse>), ImportApiError> {
+) -> Result<(StatusCode, Json<ScanResponse>), ApiError> {
     load_enabled_source(&state.pool, source_id).await?;
     validate_watch_path(&state.watch_root, &state.storage_root).await?;
     let job = strife_db::enqueue_import_scan(&state.pool, source_id)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?
-        .ok_or(ImportApiError::Disabled)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?
+        .ok_or(ApiError::ImportDisabled)?;
     Ok((
         StatusCode::ACCEPTED,
         Json(ScanResponse {
@@ -220,11 +189,11 @@ async fn list_entries(
     State(state): State<ImportState>,
     Path(source_id): Path<Uuid>,
     Query(query): Query<EntryQuery>,
-) -> Result<Json<Vec<ImportEntryResponse>>, ImportApiError> {
+) -> Result<Json<Vec<ImportEntryResponse>>, ApiError> {
     let filter = query.state.as_deref().map(parse_entry_state).transpose()?;
     let entries = strife_db::list_import_entries(&state.pool, source_id, filter)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?;
     Ok(Json(entries.into_iter().map(Into::into).collect()))
 }
 
@@ -233,11 +202,11 @@ async fn stream_import_events(
     State(state): State<ImportState>,
     Path(source_id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ImportApiError> {
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     strife_db::get_import_source(&state.pool, source_id)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?
-        .ok_or(ImportApiError::NotFound)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?
+        .ok_or(ApiError::NotFound(NOT_FOUND))?;
 
     let resume_cursor = headers
         .get("last-event-id")
@@ -249,7 +218,7 @@ async fn stream_import_events(
             sqlx::query_scalar::<_, DateTime<Utc>>("SELECT now()")
                 .fetch_one(&state.pool)
                 .await
-                .map_err(|error| log_internal(error, ImportApiError::Internal))?,
+                .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?,
             Uuid::nil(),
         ),
     };
@@ -383,58 +352,57 @@ fn parse_event_cursor(value: &str) -> Option<(DateTime<Utc>, Uuid)> {
 async fn retry_entry(
     State(state): State<ImportState>,
     Path((source_id, entry_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<ImportEntryResponse>, ImportApiError> {
+) -> Result<Json<ImportEntryResponse>, ApiError> {
     let entry = strife_db::retry_import_entry(&state.pool, source_id, entry_id)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?
-        .ok_or(ImportApiError::NotFound)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?
+        .ok_or(ApiError::NotFound(NOT_FOUND))?;
     Ok(Json(entry.into()))
 }
 
 async fn load_enabled_source(
     pool: &PgPool,
     source_id: Uuid,
-) -> Result<ImportSourceRecord, ImportApiError> {
+) -> Result<ImportSourceRecord, ApiError> {
     let source = strife_db::get_import_source(pool, source_id)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?
-        .ok_or(ImportApiError::NotFound)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?
+        .ok_or(ApiError::NotFound(NOT_FOUND))?;
     if source.enabled {
         Ok(source)
     } else {
-        Err(ImportApiError::Disabled)
+        Err(ApiError::ImportDisabled)
     }
 }
 
-async fn validate_watch_path(
-    watch_root: &FsPath,
-    storage_root: &FsPath,
-) -> Result<(), ImportApiError> {
-    let watch = tokio::fs::canonicalize(watch_root)
-        .await
-        .map_err(|_| ImportApiError::BadRequest("Watch path does not exist or is unreadable"))?;
+async fn validate_watch_path(watch_root: &FsPath, storage_root: &FsPath) -> Result<(), ApiError> {
+    let watch = tokio::fs::canonicalize(watch_root).await.map_err(|error| {
+        warn!(%error, route = ROUTE, "watch path was rejected");
+        ApiError::BadRequest("Watch path does not exist or is unreadable".into())
+    })?;
     let storage = tokio::fs::canonicalize(storage_root)
         .await
-        .map_err(|error| log_internal(error, ImportApiError::Internal))?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, "import", INTERNAL))?;
     if watch.starts_with(&storage) || storage.starts_with(&watch) {
-        return Err(ImportApiError::BadRequest(
-            "Watch path cannot overlap managed storage",
+        return Err(ApiError::BadRequest(
+            "Watch path cannot overlap managed storage".into(),
         ));
     }
-    let _reader = tokio::fs::read_dir(&watch)
-        .await
-        .map_err(|_| ImportApiError::BadRequest("Watch path does not exist or is unreadable"))?;
+    let _reader = tokio::fs::read_dir(&watch).await.map_err(|error| {
+        warn!(%error, route = ROUTE, "watch path was rejected");
+        ApiError::BadRequest("Watch path does not exist or is unreadable".into())
+    })?;
     Ok(())
 }
 
-fn parse_entry_state(value: &str) -> Result<ImportEntryState, ImportApiError> {
+fn parse_entry_state(value: &str) -> Result<ImportEntryState, ApiError> {
     match value {
         "discovered" => Ok(ImportEntryState::Discovered),
         "stable" => Ok(ImportEntryState::Stable),
         "importing" => Ok(ImportEntryState::Importing),
         "imported" => Ok(ImportEntryState::Imported),
         "failed" => Ok(ImportEntryState::Failed),
-        _ => Err(ImportApiError::BadRequest("Unknown import entry state")),
+        _ => Err(ApiError::BadRequest("Unknown import entry state".into())),
     }
 }
 

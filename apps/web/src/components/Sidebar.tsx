@@ -1,5 +1,12 @@
 import { A, useLocation } from '@solidjs/router'
-import { createResource, createSignal, For, Show } from 'solid-js'
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+} from 'solid-js'
 import {
   getEmailStatus,
   getImportEntries,
@@ -8,6 +15,7 @@ import {
   getStorageUsage,
 } from '../api/client'
 import type { StorageUsage } from '../api/client'
+import type { EmailStatus } from '../api/types'
 import { useTheme } from '../theme/ThemeProvider'
 import './Sidebar.css'
 
@@ -93,22 +101,34 @@ export function Sidebar() {
   // Only foreground work counts toward the badge. A paused ten-year backfill
   // sitting at 600,000 queued would otherwise permanently pin a number to the
   // navigation that no user action can clear.
-  const [emailPending] = createResource(
-    () => !staticPreview,
-    async () => {
+  const [emailPending, setEmailPending] = createSignal(previewEmailPending)
+
+  // Seeded once, then kept current by the same status stream the Email page
+  // uses, so the badge changes as jobs finish rather than only on navigation.
+  createEffect(() => {
+    if (staticPreview) return
+    const apply = (status: EmailStatus) =>
+      setEmailPending({
+        foreground:
+          status.counts.foreground_pending + status.counts.foreground_running,
+        backfill:
+          status.counts.backfill_pending + status.counts.backfill_running,
+      })
+    void getEmailStatus()
+      .then(apply)
+      .catch(() => setEmailPending({ foreground: 0, backfill: 0 }))
+
+    const events = new EventSource('/api/email/events')
+    events.addEventListener('status', (event) => {
       try {
-        const { counts } = await getEmailStatus()
-        return {
-          foreground: counts.foreground_pending + counts.foreground_running,
-          backfill: counts.backfill_pending + counts.backfill_running,
-        }
+        apply(JSON.parse((event as MessageEvent<string>).data) as EmailStatus)
       } catch {
-        return { foreground: 0, backfill: 0 }
+        // A malformed frame leaves the last good counts in place.
       }
-    },
-  )
-  const emailBadge = () =>
-    staticPreview ? previewEmailPending : emailPending()
+    })
+    onCleanup(() => events.close())
+  })
+  const emailBadge = () => emailPending()
   const currentUsage = () => (staticPreview ? previewStorageUsage : usage())
 
   const percent = () => Math.round(currentUsage()?.usage_percent ?? 0)

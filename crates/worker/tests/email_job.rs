@@ -367,3 +367,63 @@ async fn every_fixture_in_the_corpus_parses_through_the_handler(pool: PgPool) {
         );
     }
 }
+
+/// Content that must never leave the parser through a log, event, or API error.
+///
+/// Uses a distinctive marker rather than realistic text so a leak is
+/// unambiguous: if any of these strings appears in a stored warning or console
+/// event, it came from the message body or headers.
+#[sqlx::test(migrations = "../db/migrations")]
+async fn events_and_warnings_never_carry_body_or_address_content(pool: PgPool) {
+    let harness = harness(&pool).await;
+    let source = "From: Ada Secret <canary-address@example.test>\r\n\
+         To: bob@example.test\r\n\
+         Subject: Canary subject\r\n\
+         X-Private-Header: canary-header-value\r\n\
+         Date: Mon, 1 Jan 2018 00:00:00 +0000\r\n\
+         Message-ID: <canary@example.test>\r\n\r\n\
+         canary-body-content should never be logged.\r\n";
+    let node_id = seed_message(&pool, &harness, "canary", source.as_bytes()).await;
+    run(&pool, &harness, node_id).await;
+
+    let message = get_email_message(&pool, node_id)
+        .await
+        .expect("load message")
+        .expect("message exists");
+    // The body and headers are stored — that is the point — but they must not
+    // leak into the operational surfaces below.
+    assert!(message.body_text.contains("canary-body-content"));
+
+    for warning in &message.warnings {
+        for secret in [
+            "canary-body-content",
+            "canary-header-value",
+            "canary-address@example.test",
+        ] {
+            assert!(
+                !warning.contains(secret),
+                "warning leaked {secret}: {warning}"
+            );
+        }
+    }
+
+    let events = strife_db::list_email_events_after(&pool, 0, 50)
+        .await
+        .expect("list events");
+    assert!(!events.is_empty(), "no console event was recorded");
+    for event in &events {
+        let rendered = format!("{event:?}");
+        for secret in [
+            "canary-body-content",
+            "canary-header-value",
+            "canary-address@example.test",
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "console event leaked {secret}: {rendered}"
+            );
+        }
+        // The subject is the one permitted content field, and it is bounded.
+        assert_eq!(event.subject.as_deref(), Some("Canary subject"));
+    }
+}

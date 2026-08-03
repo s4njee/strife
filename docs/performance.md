@@ -68,9 +68,51 @@ Rough resident set under light concurrent use (order-of-magnitude):
 
 If the Pi OOMs, reduce `WORKER_CONCURRENCY` and `PREVIEW_CONCURRENCY` to 1 and avoid simultaneous DOCX conversion and RAW decode.
 
+## Jobs table steady state
+
+The jobs table is append-only in practice: every upload, watched-folder import,
+metadata extraction, preview, OCR, email parse, and attachment extraction adds a
+row, and a backfill campaign adds one per candidate. Without a purge it grows for
+the life of the deployment, and the partial indexes that make claiming fast are
+built over an ever-larger heap.
+
+Finished jobs are purged hourly in bounded batches. Successes are dropped after
+`JOB_RETENTION_COMPLETED_DAYS` (7); failures and cancellations are kept for
+`JOB_RETENTION_FAILED_DAYS` (30), because `last_error` and the attempt count are
+what triage reads. Pending and leased jobs are never purged at any age, and a
+failed job behind an unresolved entry in the Actionable Errors tab is retained
+until that entry is resolved.
+
+### A 100,000-file library
+
+Steady state is governed by *throughput*, not library size — the table holds a
+retention window's worth of work, not one row per file. For a library of 100,000
+files with each file producing roughly three jobs over its life (metadata,
+preview, and one extractor):
+
+| Scenario | Rows in the window | Table + index size |
+| --- | --- | --- |
+| Idle library, no ingestion | ~0 | &lt; 1 MB |
+| Steady use, ~200 new files/day | ~4,200 | ~3 MB |
+| Heavy week, ~5,000 files/day | ~105,000 | ~60 MB |
+| Mid-backfill, 100k queued + processed | ~300,000 | ~180 MB |
+
+Rows average roughly 400 bytes with indexes. The backfill row is the one that
+matters: a 691,000-message email campaign would leave about 4.8 million completed
+rows and around 2 GB if nothing purged them, and would still be there months
+later. With the 7-day window it drains to near zero within a week of the campaign
+finishing.
+
+If the table is ever found large after a long-neglected deployment, the purge
+takes one `JOB_PURGE_BATCH` bite per hour by design rather than locking the table
+for a single large delete. Raise `JOB_PURGE_BATCH` temporarily to drain faster,
+and lower it again — a large batch during a backfill competes with job claiming
+for the same rows.
+
 ## Load tips
 
 - Stream uploads; never buffer whole files in the API.
 - Prefer native browser preview for JPEG/PNG/GIF/WebP/PDF/audio/video to skip generation.
 - Trash cleanup and permanent deletion are batch-limited (50/hour enqueue) to protect the worker.
+- Finished jobs are purged hourly (500/batch); unfinished work is never purged.
 - Disk guard at 90% rejects new ingestion before the volume fills.

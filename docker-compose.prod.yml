@@ -18,6 +18,30 @@ x-runtime-environment: &runtime-environment
   OCR_MAX_TEXT_BYTES: "16777216"
   EXTRACTOR_CONCURRENCY: "2"
   PREVIEW_CONCURRENCY: "1"
+  # Every heavy extractor draws from one shared admission permit, so these are
+  # per-family caps inside a process, not the archive-wide limit. All default to
+  # 1 on Orion: four cores are shared with Postgres, Tika, and the API.
+  OCR_CONCURRENCY: "1"
+  EMAIL_PARSE_CONCURRENCY: "1"
+  ATTACHMENT_EXTRACTION_CONCURRENCY: "1"
+  HEAVY_CPU_CONCURRENCY: "1"
+  # Provisional email parser limits. Profiled on Orion before being treated as
+  # final; every one can be tightened mid-backfill without a rebuild.
+  EMAIL_MAX_SOURCE_BYTES: "67108864"
+  EMAIL_MAX_BODY_BYTES: "2097152"
+  EMAIL_MAX_HEADERS: "512"
+  EMAIL_MAX_HEADER_BYTES: "16384"
+  EMAIL_MAX_PARTS: "1024"
+  EMAIL_MAX_ATTACHMENTS: "256"
+  EMAIL_MAX_WARNINGS: "64"
+  EMAIL_FILE_TIMEOUT_SECONDS: "120"
+  EMAIL_MAX_ATTACHMENT_BYTES: "26214400"
+  EMAIL_MAX_TOTAL_ATTACHMENT_BYTES: "67108864"
+  EMAIL_MAX_ATTACHMENT_DEPTH: "1"
+  # Finished jobs are purged hourly in bounded batches; unfinished work never is.
+  JOB_RETENTION_COMPLETED_DAYS: "7"
+  JOB_RETENTION_FAILED_DAYS: "30"
+  JOB_PURGE_BATCH: "500"
   RUST_LOG: info
   RUN_MIGRATIONS: "false"
   BACKFILL_ENABLED: "false"
