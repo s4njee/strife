@@ -1,24 +1,27 @@
+/* ── Inline inspector panel (268px right column) ────────────────────── */
+
 .file-details {
-  position: fixed;
-  z-index: 20;
-  inset: 0 0 0 auto;
-  width: min(26rem, 92vw);
+  width: 268px;
+  min-width: 268px;
   overflow-y: auto;
   border-left: 1px solid var(--color-border-structural);
   background: var(--color-surface);
-  box-shadow: var(--shadow-popover);
   color: var(--color-text-secondary);
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
+
+/* ── Header ─────────────────────────────────────────────────────────── */
 
 .file-details__header {
   position: sticky;
   top: 0;
   z-index: 1;
-  display: grid;
-  grid-template-columns: 2.75rem minmax(0, 1fr) 2rem;
+  display: flex;
   gap: var(--space-3);
   align-items: center;
-  padding: var(--space-5);
+  padding: var(--space-4) var(--space-4);
   border-bottom: 1px solid var(--color-border-row);
   background: color-mix(in oklab, var(--color-surface) 94%, transparent);
   backdrop-filter: blur(0.8rem);
@@ -38,30 +41,98 @@
   overflow: hidden;
   margin-top: var(--space-1);
   color: var(--color-text-primary);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.file-details__header-text {
+  flex: 1;
+  min-width: 0;
+}
 .file-details__file-icon {
   display: grid;
-  width: 2.75rem;
-  height: 2.75rem;
+  width: 2.25rem;
+  height: 2.25rem;
   place-items: center;
   border-radius: var(--radius-md);
   background: var(--color-accent-soft);
   color: var(--color-accent);
   font: var(--font-weight-semibold) var(--font-size-xs) / 1 var(--font-mono);
+  flex-shrink: 0;
 }
 .file-details__close {
   border: 0;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   cursor: pointer;
+  flex-shrink: 0;
+  padding: var(--space-1);
+  line-height: 1;
 }
+
+/* ── Preview thumbnail ──────────────────────────────────────────────── */
+
+.file-details__preview {
+  height: 150px;
+  margin: var(--space-4) var(--space-4) 0;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-row);
+  background:
+    repeating-linear-gradient(
+      135deg,
+      var(--color-surface-raised),
+      var(--color-surface-raised) 8px,
+      var(--color-surface) 8px,
+      var(--color-surface) 16px
+    );
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.file-details__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.file-details__preview-placeholder {
+  color: var(--color-text-muted);
+  font: var(--font-size-xs) / 1 var(--font-mono);
+}
+
+/* ── File identity (name + subtitle) ────────────────────────────────── */
+
+.file-details__identity {
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.file-details__filename {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-details__subtitle {
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font: 11px / 1.4 var(--font-mono);
+}
+
+/* ── Content area ───────────────────────────────────────────────────── */
+
 .file-details__content {
-  padding: var(--space-5);
+  padding: var(--space-4);
 }
+
+/* ── Processing status badge ────────────────────────────────────────── */
+
 .file-details__status {
   display: flex;
   gap: var(--space-2);
@@ -71,6 +142,7 @@
   background: var(--color-accent-soft);
   color: var(--color-accent);
   font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
 }
 .file-details__status.is-ready {
   background: var(--color-success-soft);
@@ -84,17 +156,22 @@
 .file-details__status.is-processing span {
   animation: details-spin 1s linear infinite;
 }
+
+/* ── Sections & metadata grid ───────────────────────────────────────── */
+
 .file-details__section {
-  padding: var(--space-5) 0;
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--color-border-row);
 }
 .file-details__section h3 {
   margin: 0 0 var(--space-3);
   color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+
+/* ── Extracted text ─────────────────────────────────────────────────── */
 
 .file-text__heading,
 .file-text__page header {
@@ -173,15 +250,24 @@
   width: 100%;
   margin-top: var(--space-3);
 }
+
+/* ── Facts definition list ──────────────────────────────────────────── */
+
 .file-details__section dl {
   display: grid;
   gap: var(--space-3);
   margin: 0;
 }
 .file-details__fact {
-  display: grid;
-  grid-template-columns: 6.5rem minmax(0, 1fr);
+  display: flex;
+  justify-content: space-between;
   gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--color-border-row);
+  font-size: 12px;
+}
+.file-details__fact:first-child {
+  border-top: 0;
 }
 .file-details__fact dt {
   color: var(--color-text-muted);
@@ -207,6 +293,9 @@
   color: var(--color-text-secondary);
   cursor: pointer;
 }
+
+/* ── Stream rows ────────────────────────────────────────────────────── */
+
 .file-details__stream {
   display: grid;
   gap: var(--space-1);
@@ -223,6 +312,9 @@
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
+
+/* ── State messages ─────────────────────────────────────────────────── */
+
 .file-details__state {
   padding: var(--space-8);
   text-align: center;
@@ -232,8 +324,23 @@
   color: var(--color-error);
 }
 
+/* ── Animations ─────────────────────────────────────────────────────── */
+
 @keyframes details-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* ── Mobile fallback: overlay ───────────────────────────────────────── */
+
+@media (max-width: 52rem) {
+  .file-details {
+    position: fixed;
+    z-index: 20;
+    inset: 0 0 0 auto;
+    width: min(26rem, 92vw);
+    height: auto;
+    box-shadow: var(--shadow-popover);
   }
 }

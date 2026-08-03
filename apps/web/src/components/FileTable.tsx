@@ -10,6 +10,7 @@ import {
 } from 'solid-js'
 import type { FolderItem } from '../api/types'
 import { ContextMenu, type ContextMenuAction } from './ContextMenu'
+import { FileIcon } from './FileIcon'
 import './FileTable.css'
 
 export type FileTableSortColumn =
@@ -433,7 +434,7 @@ export function FileTable(props: FileTableProps) {
                         />
                       </td>
                       <td class="file-table__icon">
-                        <NodeIcon kind={item.kind} />
+                        <FileIcon name={item.name} kind={item.kind} />
                       </td>
                       <td class="file-table__favorite">
                         <button
@@ -508,14 +509,6 @@ function formatDate(value: string): string {
 
 function capitalize(value: string): string {
   return `${value.charAt(0).toUpperCase()}${value.slice(1)}`
-}
-
-function NodeIcon(props: { kind: FolderItem['kind'] }) {
-  return (
-    <span class="file-table__glyph" data-kind={props.kind} aria-hidden="true">
-      {props.kind === 'folder' ? 'FLD' : 'FILE'}
-    </span>
-  )
 }
 
 function FolderEmptyIcon() {

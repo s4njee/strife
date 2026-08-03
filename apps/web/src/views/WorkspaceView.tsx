@@ -462,41 +462,59 @@ function FolderContents(props: { folderId: string }) {
           </Show>
         </div>
       </Show>
-      <FileTable
-        items={items()}
-        loading={children.loading}
-        error={
-          children.error instanceof Error ? children.error.message : undefined
-        }
-        onRetry={() => void refetch()}
-        sortColumn={sortColumn()}
-        sortOrder={sortOrder() ?? (sortColumn() === 'name' ? 'asc' : 'asc')}
-        onSort={cycleSort}
-        onRename={setRenameItem}
-        onMove={setMoveItems}
-        onTrash={(selected) => void handleTrash(selected)}
-        onToggleFavorite={(item) => void handleToggleFavorite(item)}
-        onFavoriteSelected={(selected, favorite) =>
-          void handleFavoriteSelected(selected, favorite)
-        }
-        onDownload={handleDownload}
-        onDetails={setDetailsItem}
-        onPreview={setPreviewItem}
-        onSelectionChange={(selected) => {
-          setSelectedCount(selected.length)
-          if (
-            detailsItem() &&
-            selected.length === 1 &&
-            selected[0].kind === 'file'
-          ) {
-            setDetailsItem(selected[0])
-          }
-        }}
-      />
-      <StatusFooter
-        itemCount={items().length}
-        selectedCount={selectedCount()}
-      />
+      <div class="workspace-view__split">
+        <div class="workspace-view__split-main">
+          <FileTable
+            items={items()}
+            loading={children.loading}
+            error={
+              children.error instanceof Error ? children.error.message : undefined
+            }
+            onRetry={() => void refetch()}
+            sortColumn={sortColumn()}
+            sortOrder={sortOrder() ?? (sortColumn() === 'name' ? 'asc' : 'asc')}
+            onSort={cycleSort}
+            onRename={setRenameItem}
+            onMove={setMoveItems}
+            onTrash={(selected) => void handleTrash(selected)}
+            onToggleFavorite={(item) => void handleToggleFavorite(item)}
+            onFavoriteSelected={(selected, favorite) =>
+              void handleFavoriteSelected(selected, favorite)
+            }
+            onDownload={handleDownload}
+            onDetails={setDetailsItem}
+            onPreview={setPreviewItem}
+            onSelectionChange={(selected) => {
+              setSelectedCount(selected.length)
+              if (
+                detailsItem() &&
+                selected.length === 1 &&
+                selected[0].kind === 'file'
+              ) {
+                setDetailsItem(selected[0])
+              }
+            }}
+          />
+          <StatusFooter
+            itemCount={items().length}
+            selectedCount={selectedCount()}
+          />
+        </div>
+        <Show when={detailsItem()}>
+          {(item) => (
+            <FileDetailsPanel
+              item={item()}
+              staticDetails={
+                staticPreview ? previewFileDetails.get(item().id) : undefined
+              }
+              staticStreams={
+                staticPreview ? previewStreams.get(item().id) : undefined
+              }
+              onClose={() => setDetailsItem(undefined)}
+            />
+          )}
+        </Show>
+      </div>
       <Show when={previewItem()}>
         {(item) => (
           <PreviewModal
@@ -510,20 +528,6 @@ function FolderContents(props: { folderId: string }) {
             }
             onNavigate={setPreviewItem}
             onClose={() => setPreviewItem(undefined)}
-          />
-        )}
-      </Show>
-      <Show when={detailsItem()}>
-        {(item) => (
-          <FileDetailsPanel
-            item={item()}
-            staticDetails={
-              staticPreview ? previewFileDetails.get(item().id) : undefined
-            }
-            staticStreams={
-              staticPreview ? previewStreams.get(item().id) : undefined
-            }
-            onClose={() => setDetailsItem(undefined)}
           />
         )}
       </Show>

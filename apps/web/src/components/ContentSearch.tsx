@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
 import { searchDocumentText } from '../api/client'
 import type { TextSearchResponse } from '../api/types'
+import { FileIcon } from './FileIcon'
 import './ContentSearch.css'
 
 const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
@@ -93,9 +94,7 @@ export function ContentSearch() {
                   )
                 }
               >
-                <span class="content-search__icon" aria-hidden="true">
-                  DOC
-                </span>
+                <FileIcon name={match.name} kind="file" />
                 <span>
                   <strong>{match.name}</strong>
                   <small>Page {match.page_number}</small>

@@ -4,6 +4,7 @@ import {
   getFileDetails,
   getFileStreams,
   getFileText,
+  prepareFilePreview,
 } from '../api/client'
 import type {
   DocumentTextPage,
@@ -12,6 +13,7 @@ import type {
   FolderItem,
   MediaStream,
 } from '../api/types'
+import { FileIcon } from './FileIcon'
 import { formatFileSize } from './FileTable'
 import './FileDetailsPanel.css'
 
@@ -40,6 +42,10 @@ export function FileDetailsPanel(props: FileDetailsPanelProps) {
     () => (props.staticDetails ? false : props.item.id),
     (fileId) => getFileText(fileId),
   )
+  const [previewSrc] = createResource(
+    () => (props.item.kind === 'file' ? props.item.id : false),
+    (fileId) => prepareFilePreview(fileId).catch(() => null),
+  )
   const [morePages, setMorePages] = createSignal<DocumentTextPage[]>([])
   const [nextPage, setNextPage] = createSignal<number | null>()
   const details = () => props.staticDetails ?? remoteDetails()
@@ -64,13 +70,36 @@ export function FileDetailsPanel(props: FileDetailsPanelProps) {
     )
   }
 
+  const mimeLabel = () => {
+    const mime = details()?.detected_mime
+    if (!mime) return null
+    const sub = mime.split('/')[1] ?? mime
+    // Clean up common MIME subtypes for a friendlier label
+    return sub
+      .replace(/^x-/, '')
+      .replace(/^vnd\..+\./, '')
+      .toUpperCase()
+  }
+
+  const subtitleText = () => {
+    const parts: string[] = []
+    const label = mimeLabel()
+    if (label) parts.push(label)
+    if (props.item.size_bytes !== null) {
+      parts.push(formatFileSize(props.item.size_bytes, 'file'))
+    }
+    return parts.join(' · ') || null
+  }
+
   return (
     <aside class="file-details" aria-label={`Details for ${props.item.name}`}>
       <header class="file-details__header">
-        <div class="file-details__file-icon" aria-hidden="true">
-          {fileGlyph(props.item.name)}
-        </div>
-        <div>
+        <FileIcon
+          name={props.item.name}
+          kind={props.item.kind}
+          class="file-icon--large"
+        />
+        <div class="file-details__header-text">
           <p>File details</p>
           <h2>{props.item.name}</h2>
         </div>
@@ -83,6 +112,36 @@ export function FileDetailsPanel(props: FileDetailsPanelProps) {
           ×
         </button>
       </header>
+
+      <Show when={props.item.kind === 'file'}>
+        <div class="file-details__preview">
+          <Show
+            when={previewSrc()}
+            fallback={
+              <span class="file-details__preview-placeholder">
+                {previewSrc.loading ? (
+                  '…'
+                ) : (
+                  <FileIcon
+                    name={props.item.name}
+                    kind={props.item.kind}
+                    class="file-icon--large"
+                  />
+                )}
+              </span>
+            }
+          >
+            {(src) => <img src={src()} alt={`Preview of ${props.item.name}`} />}
+          </Show>
+        </div>
+      </Show>
+
+      <div class="file-details__identity">
+        <p class="file-details__filename">{props.item.name}</p>
+        <Show when={subtitleText()}>
+          {(sub) => <p class="file-details__subtitle">{sub()}</p>}
+        </Show>
+      </div>
 
       <Show
         when={details()}
@@ -417,9 +476,4 @@ function formatDuration(milliseconds: number | null) {
   if (milliseconds === null) return '—'
   const totalSeconds = Math.round(milliseconds / 1000)
   return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`
-}
-
-function fileGlyph(name: string) {
-  const extension = name.split('.').pop()?.toUpperCase()
-  return extension && extension.length <= 4 ? extension : 'FILE'
 }
