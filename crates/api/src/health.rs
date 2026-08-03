@@ -15,7 +15,7 @@ use crate::verify_storage_root;
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
-type CheckFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type CheckFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A serializable dependency state used by the readiness endpoint.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -163,11 +163,17 @@ pub struct StorageCheck {
 }
 
 impl StorageCheck {
-    const fn error() -> Self {
+    /// Creates a storage dependency result for custom dependency checkers.
+    #[must_use]
+    pub const fn new(healthy: bool, disk_usage_percent: f64) -> Self {
         Self {
-            healthy: false,
-            disk_usage_percent: 100.0,
+            healthy,
+            disk_usage_percent,
         }
+    }
+
+    const fn error() -> Self {
+        Self::new(false, 100.0)
     }
 }
 

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(SUM(byte_size), 0)::BIGINT AS \"bytes!\"\n        FROM derived_artifacts\n        WHERE state = 'ready'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "42f5c5afda2ee8b2606e4df5c7694b2e7a11c472f3cadd3f8cc175b5ce7da488"
+}

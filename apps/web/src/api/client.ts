@@ -1,6 +1,8 @@
 import type {
   ApiReadiness,
   BackfillCampaign,
+  BackfillCampaignMetrics,
+  BackfillCanaryResult,
   CreatedUploadSession,
   DependencyStatus,
   EmailFacets,
@@ -250,13 +252,20 @@ export async function createOcrCampaign(preflight: {
   batchSize: number
   maxQueued: number
   maxRunning: number
+  canaryLimit?: number
 }): Promise<BackfillCampaign> {
   const created = await fetch('/api/backfills', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
       kind: 'ocr',
-      candidate_definition: { version: 1, source: 'ocr-preflight' },
+      candidate_definition: {
+        version: 1,
+        source: 'ocr-preflight',
+        ...(preflight.canaryLimit
+          ? { canary_limit: preflight.canaryLimit }
+          : {}),
+      },
       batch_size: preflight.batchSize,
       max_queued: preflight.maxQueued,
       max_running: preflight.maxRunning,
@@ -294,6 +303,32 @@ export async function actOnBackfill(
   if (!response.ok)
     throw new ApiClientError(`Campaign ${action} failed (${response.status}).`)
   return (await response.json()) as BackfillCampaign
+}
+
+export async function getBackfillMetrics(
+  id: string,
+  signal?: AbortSignal,
+): Promise<BackfillCampaignMetrics> {
+  const response = await fetch(`/api/backfills/${id}/metrics`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Campaign metrics failed (${response.status}).`)
+  return (await response.json()) as BackfillCampaignMetrics
+}
+
+export async function listBackfillCanaryResults(
+  id: string,
+  signal?: AbortSignal,
+): Promise<BackfillCanaryResult[]> {
+  const response = await fetch(`/api/backfills/${id}/canary-results`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Canary results failed (${response.status}).`)
+  return (await response.json()) as BackfillCanaryResult[]
 }
 
 export async function getFileText(

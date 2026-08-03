@@ -13,11 +13,28 @@ As an operator, I want the job queue's hot queries indexed so that claim latency
 
 **Acceptance Criteria:**
 
-- [ ] A migration adds an index supporting `claim_job`'s predicate and ordering — `(job_type, state, priority DESC, created_at, id)`, or a partial index restricted to `state = 'pending'`.
-- [ ] A migration adds an index supporting the lease reaper's `WHERE state = 'leased' AND lease_expires_at < now()`.
-- [ ] `EXPLAIN ANALYZE` of `claim_job` against a table seeded with 100,000 completed jobs shows an index scan rather than a sequential scan; the before and after plans are recorded in `docs/performance.md`.
-- [ ] The existing `jobs_active_type_target_unique` partial unique index is retained.
-- [ ] Down migrations drop the new indexes.
+- [x] A migration adds an index supporting `claim_job`'s predicate and ordering — `(job_type, state, priority DESC, created_at, id)`, or a partial index restricted to `state = 'pending'`.
+- [x] A migration adds an index supporting the lease reaper's `WHERE state = 'leased' AND lease_expires_at < now()`.
+- [x] `EXPLAIN ANALYZE` of `claim_job` against a table seeded with 100,000 completed jobs shows an index scan rather than a sequential scan; the before and after plans are recorded in `docs/performance.md`.
+- [x] The existing `jobs_active_type_target_unique` partial unique index is retained.
+- [x] Down migrations drop the new indexes.
+
+**Implementation report:** Migration 0028 adds two partial indexes sized by live work rather than retained history. `jobs_claim_pending_idx` covers job type, origin, priority, creation time, and id for pending rows, matching the worker's foreground, repair, and backfill claim lookups. `jobs_expired_lease_idx` orders only leased rows by expiry for the reaper. The down migration drops both, while the existing active-job uniqueness index is untouched.
+
+The benchmark used PostgreSQL 17.10 and a rollback-only fixture containing 100,000 completed metadata jobs plus one pending job. The real pre-migration baseline already selected the broad `jobs_claim_origin_idx`; after migration PostgreSQL selected `jobs_claim_pending_idx`. Both returned the single live row in 0.036 ms, but the broad index occupied 7,768 kB while the partial live-work index occupied 56 kB. The expired-lease plan selected its new 8 kB index and executed in 0.011 ms. `docs/performance.md` records the plans, buffers, sizes, date, fixture, and reproduction guidance rather than presenting a misleading sequential-scan baseline. A migration integration test confirms both indexes and `jobs_active_type_target_unique` exist with their intended partial/unique definitions.
+
+**New files:**
+
+- `crates/db/migrations/0028_job_queue_indexes.down.sql`
+- `crates/db/migrations/0028_job_queue_indexes.up.sql`
+- `crates/db/tests/job_queue_indexes.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `docs/performance.md`
+- `docs/scrum/epic10.md`
+- `scrum.md`
 
 ---
 
@@ -67,11 +84,34 @@ As an operator, I want the import watch directory to come from configuration so 
 
 **Acceptance Criteria:**
 
-- [ ] The two hardcoded `/mnt/ext/watch` literals in `crates/api/src/lib.rs` (the `imports::router` argument and `recover_watched_imports`) are replaced by a `Config` field.
-- [ ] A new environment variable (for example `IMPORT_WATCH_ROOT`) is read by `Config::from_env`, defaults to `/mnt/ext/watch` for compatibility, and is validated the way `STORAGE_ROOT` is.
-- [ ] `docker-compose.prod.yml`, `docker-compose.dev.yml`, and `.env.example` set the variable explicitly rather than relying on the bind-mount path matching a compiled-in constant.
-- [ ] The configuration shape does not preclude multiple source-to-destination mappings later (see the import questions in `deferred.md`); a note records how it would extend.
-- [ ] A missing or unreadable watch root logs a warning and disables import rather than failing startup, preserving today's behavior.
-- [ ] Tests: config parsing covers the default, an override, and invalid values.
+- [x] The two hardcoded `/mnt/ext/watch` literals in `crates/api/src/lib.rs` (the `imports::router` argument and `recover_watched_imports`) are replaced by a `Config` field.
+- [x] A new environment variable (for example `IMPORT_WATCH_ROOT`) is read by `Config::from_env`, defaults to `/mnt/ext/watch` for compatibility, and is validated the way `STORAGE_ROOT` is.
+- [x] `docker-compose.prod.yml`, `docker-compose.dev.yml`, and `.env.example` set the variable explicitly rather than relying on the bind-mount path matching a compiled-in constant.
+- [x] The configuration shape does not preclude multiple source-to-destination mappings later (see the import questions in `deferred.md`); a note records how it would extend.
+- [x] A missing or unreadable watch root logs a warning and disables import rather than failing startup, preserving today's behavior.
+- [x] Tests: config parsing covers the default, an override, and invalid values.
+
+**Implementation report:** `Config` now owns `import_watch_root`, loaded from `IMPORT_WATCH_ROOT`, defaulting to `/mnt/ext/watch`, and rejecting empty values. Startup records the configured path, probes it with `read_dir`, and passes that same path to interrupted-import recovery and the import router. A missing path, regular file, or unreadable directory emits a structured warning and omits the import routes while the rest of the API continues to start.
+
+Production Compose explicitly maps the configured container path to `/mnt/ext/watch`; the development Compose metadata and `.env.example` use `./.data/import` for host-run development. ADR 0004 records that this independent field can later become a list of `{ source_root, destination_folder_id }` mappings without coupling imports to managed storage, and the deferred question and known limitation now use the configurable terminology.
+
+Unit tests cover the compatibility default, a relative override, an empty invalid value, a readable directory, a missing directory, and a regular file. API and database clippy remain warning-free, and the focused configuration and migration tests pass.
+
+**New files:**
+
+- None.
+
+**Modified files:**
+
+- `.env.example`
+- `crates/api/src/config.rs`
+- `crates/api/src/lib.rs`
+- `deferred.md`
+- `docker-compose.dev.yml`
+- `docker-compose.prod.yml`
+- `docs/decisions/0004-watched-folder-import.md`
+- `docs/known-limitations.md`
+- `docs/scrum/epic10.md`
+- `scrum.md`
 
 ---

@@ -99,22 +99,34 @@ async fn status_search_text_reprocess_and_sse_contracts() {
     set_ocr_engine_state(&pool, "tesseract", "5.5-api", "eng")
         .await
         .expect("set engine state");
+    let unique_term = format!("apiuniqueterm{}", Uuid::new_v4().simple());
+    let first_unique_page = format!("{unique_term} appears here");
     let first = create_text_file(
         &pool,
         &format!("ocr-api-first-{}.pdf", Uuid::new_v4()),
-        &["ordinary sibling page", "apiuniqueterm appears here"],
+        &["ordinary sibling page", &first_unique_page],
     )
     .await;
+    sqlx::query(
+        "INSERT INTO file_objects (id, node_id, storage_key, byte_size, upload_state) \
+         VALUES ($1, $2, $3, 1, 'finalized')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(first)
+    .bind(format!("ocr-api/{first}"))
+    .execute(&pool)
+    .await
+    .expect("create reprocessable finalized object");
     let second = create_text_file(
         &pool,
         &format!("ocr-api-second-{}.pdf", Uuid::new_v4()),
-        &["apiuniqueterm in another document"],
+        &[&format!("{unique_term} in another document")],
     )
     .await;
     let trashed = create_text_file(
         &pool,
         &format!("ocr-api-trash-{}.pdf", Uuid::new_v4()),
-        &["apiuniqueterm hidden in trash"],
+        &[&format!("{unique_term} hidden in trash")],
     )
     .await;
     trash_node(&pool, trashed).await.expect("trash search node");
@@ -133,12 +145,12 @@ async fn status_search_text_reprocess_and_sse_contracts() {
     let (empty_code, empty) = request(app.clone(), "/api/search?q=%20%20").await;
     assert_eq!(empty_code, StatusCode::BAD_REQUEST);
     assert_eq!(empty["code"], "bad_request");
-    let (_, page_one) = request(app.clone(), "/api/search?q=apiuniqueterm&limit=1").await;
+    let (_, page_one) = request(app.clone(), &format!("/api/search?q={unique_term}&limit=1")).await;
     assert_eq!(page_one["items"].as_array().expect("search items").len(), 1);
     let cursor = page_one["next_cursor"].as_str().expect("search cursor");
     let (_, page_two) = request(
         app.clone(),
-        &format!("/api/search?q=apiuniqueterm&limit=1&cursor={cursor}"),
+        &format!("/api/search?q={unique_term}&limit=1&cursor={cursor}"),
     )
     .await;
     assert_eq!(
@@ -154,7 +166,7 @@ async fn status_search_text_reprocess_and_sse_contracts() {
     );
     let (_, including_trash) = request(
         app.clone(),
-        "/api/search?q=apiuniqueterm&include_trash=true",
+        &format!("/api/search?q={unique_term}&include_trash=true"),
     )
     .await;
     assert_eq!(
@@ -183,6 +195,14 @@ async fn status_search_text_reprocess_and_sse_contracts() {
         .await
         .expect("reprocess response");
     assert_eq!(response.status(), StatusCode::OK);
+    let reprocess: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("reprocess response body"),
+    )
+    .expect("reprocess JSON response");
+    assert_eq!(reprocess["extractor"], "ocr");
+    assert_eq!(reprocess["enqueued"], 1);
 
     let event = append_ocr_event(&pool, first, "completed", Some(2), Some(80.0), None)
         .await
@@ -213,6 +233,11 @@ async fn status_search_text_reprocess_and_sse_contracts() {
         .expect("pool remains available after SSE disconnects");
     assert_eq!(one, 1);
 
+    sqlx::query("DELETE FROM file_objects WHERE node_id = $1")
+        .bind(first)
+        .execute(&pool)
+        .await
+        .expect("clean up reprocess fixture object");
     for node_id in [first, second, trashed] {
         sqlx::query("DELETE FROM nodes WHERE id = $1")
             .bind(node_id)

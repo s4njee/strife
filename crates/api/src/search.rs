@@ -72,11 +72,12 @@ async fn search(
     let next_cursor = has_more
         .then(|| matches.last().map(|item| item.cursor_id))
         .flatten();
-    let indexed_documents: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM document_text WHERE status = 'completed'")
-            .fetch_one(&pool)
-            .await
-            .map_err(|error| ApiError::internal(error, ROUTE, "document search"))?;
+    let indexed_documents: i64 = sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM document_text WHERE status = 'completed'"
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|error| ApiError::internal(error, ROUTE, "document search"))?;
     Ok(Json(SearchResponse {
         items: matches
             .into_iter()

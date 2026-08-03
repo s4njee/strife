@@ -66,6 +66,24 @@ impl BackfillCoordinator {
             else {
                 continue;
             };
+            let canary_limit = campaign
+                .candidate_definition
+                .get("canary_limit")
+                .and_then(serde_json::Value::as_i64);
+            if window.allowance == 0
+                && window.queued == 0
+                && canary_limit.is_some_and(|limit| campaign.enqueued_count >= limit)
+            {
+                strife_db::transition_backfill_campaign(
+                    pool,
+                    campaign.id,
+                    BackfillState::Paused,
+                    Some("canary limit reached"),
+                )
+                .await
+                .context("pause completed canary")?;
+                continue;
+            }
             if window.allowance > 0 {
                 provider.refill(&campaign, &window).await?;
             }

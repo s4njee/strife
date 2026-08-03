@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::internal_error;
+use crate::error::ApiError;
+
+const ROUTE: &str = "/api/metadata";
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -65,19 +67,19 @@ pub fn router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
-async fn status(
-    State(pool): State<PgPool>,
-) -> Result<Json<MetadataStatusResponse>, axum::http::StatusCode> {
-    Ok(Json(load_status(&pool).await.map_err(internal_error)?))
+async fn status(State(pool): State<PgPool>) -> Result<Json<MetadataStatusResponse>, ApiError> {
+    Ok(Json(load_status(&pool).await.map_err(|error| {
+        ApiError::internal(error, ROUTE, "status")
+    })?))
 }
 
 async fn recent(
     State(pool): State<PgPool>,
     Query(query): Query<RecentQuery>,
-) -> Result<Json<Vec<MetadataEventResponse>>, axum::http::StatusCode> {
+) -> Result<Json<Vec<MetadataEventResponse>>, ApiError> {
     let records = strife_db::list_recent_metadata_events(&pool, query.limit.unwrap_or(50))
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, "recent events"))?;
     Ok(Json(records.into_iter().map(Into::into).collect()))
 }
 
@@ -128,10 +130,12 @@ async fn events(
         .and_then(|value| value.parse::<i64>().ok());
     let cursor = match header_cursor {
         Some(cursor) => cursor,
-        None => sqlx::query_scalar::<_, i64>("SELECT COALESCE(max(id), 0) FROM metadata_events")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or_default(),
+        None => {
+            sqlx::query_scalar!("SELECT COALESCE(max(id), 0) AS \"cursor!\" FROM metadata_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_default()
+        }
     };
     let stream = futures_util::stream::unfold(
         (

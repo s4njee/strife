@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(max(id), 0) AS \"cursor!\" FROM email_events",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cursor!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "564be139e3ca0b62113c900b2bb42db2c8f703977035b68110f9b34ba38b6a35"
+}

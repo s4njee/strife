@@ -165,13 +165,15 @@ As an operator, I want historical OCR admitted through an explicit bounded campa
 - [x] Initial Orion defaults are 100 candidates per refill, at most 500 queued OCR jobs, one running OCR backfill job, and one shared `HEAVY_CPU` permit across OCR, email, and attachment backfills.
 - [x] Foreground jobs outrank repair work, which outranks historical OCR; a fairness budget allows slow backfill progress without hiding new uploads, imports, metadata, previews, or deletions.
 - [x] Pausing stops refills while leased work finishes; resuming continues from the durable cursor; cancelling prevents new claims without deleting completed OCR text.
-- [ ] The OCR page distinguishes foreground activity from campaigns and exposes candidate count, state, progress, throughput, ETA, limits, start/pause/resume/cancel controls, and canary results.
+- [x] The OCR page distinguishes foreground activity from campaigns and exposes candidate count, state, progress, throughput, ETA, limits, start/pause/resume/cancel controls, and canary results.
 - [ ] Email body parsing completes before the full ordinary OCR campaign begins, and email attachment OCR uses the same OCR/shared-heavy permit after ordinary OCR unless an operator explicitly changes the documented sequence.
-- [ ] Tests cover inert deployment/startup, foreground processing while paused, canary limits, low-water refill, cross-pipeline mutual exclusion, priority/fairness, pause/resume/cancel, restart recovery, and multi-worker resource-lease enforcement.
+- [x] Tests cover inert deployment/startup, foreground processing while paused, canary limits, low-water refill, cross-pipeline mutual exclusion, priority/fairness, pause/resume/cancel, restart recovery, and multi-worker resource-lease enforcement.
 
 **Implementation progress:** Registered the OCR adapter on the shared coordinator and implemented historical candidate selection end to end. Candidate selection, enqueue, and `(created_at, id)` cursor advance share one transaction, so an interrupted refill can neither skip nor repeat a file. Candidates are active finalized files whose extracted `detected_mime` is an OCR input and whose document text is absent or from a different engine version; files still awaiting metadata are counted separately rather than guessed at from their filename. Added a read-only preflight endpoint reporting candidates and byte percentiles per MIME family, and OCR page controls for preflight, paused campaign creation from a reviewed report, resume, pause, and cancel. Two safety guards are enforced in code: an unprepared campaign has no frozen snapshot and refuses to enumerate, and a worker with no verified Tesseract refuses to refill rather than treating every file as a version mismatch and enqueueing the whole library.
 
-Story 16.6 remains open on three criteria. The OCR page shows candidate count, state, progress, and limits but not throughput, ETA, or canary results. The email-ordering criterion cannot be satisfied until [`email.md`](../email.md) Epic 18 exists; it is a deployment-sequencing constraint recorded in [`backfill.md`](../backfill.md) Phases 6–7, not code. Test coverage is partial: inert draft/paused/unverified-engine startup, low-water refill, cursor advance, exhaustion-to-draining, active-job exclusion, snapshot boundary, and job classification are covered here, while cross-pipeline mutual exclusion, priority/fairness, and multi-worker resource-lease enforcement remain covered only by the Story 16.6 foundation tests in `crates/db/tests/backfills.rs`. Restart recovery mid-campaign and foreground throughput while a campaign is paused are still uncovered.
+The OCR page now adds live pending/running/remaining counts, recent throughput, an estimated completion time, and recorded canary results, refreshed every 15 seconds. Initial campaign creation uses an exact 100-item canary cap; the shared coordinator stops enqueueing at that boundary and automatically returns the campaign to paused after its queue drains. Canary result records capture stage, throughput, p50/p95 duration, failures, CPU, memory, temperature, I/O wait, database growth, and approval without a free-form field that could leak file data.
+
+Test coverage now includes the previously missing restart and foreground-isolation cases: a new coordinator resumes from the durable cursor without duplicates, paused history does not prevent a foreground OCR claim, and an exact 100-of-105 canary auto-pauses after drain. The focused suite also retains inert startup, low-water refill, exhaustion, pause/resume/cancel, mutual exclusion, priority/fairness, and multi-worker lease coverage. Story 16.6 remains open on only the production sequencing criterion: the email body campaign must complete before ordinary OCR, then attachment OCR follows ordinary OCR unless the operator records a documented sequence change. This is deliberately an operational gate in [`backfill.md`](../backfill.md), not an automatic deployment side effect.
 
 **New files:**
 
@@ -186,7 +188,9 @@ Story 16.6 remains open on three criteria. The OCR page shows candidate count, s
 - `apps/web/src/views/OcrStatusView.css`
 - `apps/web/src/views/OcrStatusView.tsx`
 - `crates/api/Cargo.toml`
+- `crates/api/src/backfills.rs`
 - `crates/api/src/ocr.rs`
+- `crates/api/tests/backfills_api.rs`
 - `crates/db/Cargo.toml`
 - `crates/db/src/lib.rs`
 - `crates/media/src/lib.rs`

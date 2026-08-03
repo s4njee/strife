@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT page_number, content, confidence, width, height\n        FROM document_text_pages\n        WHERE node_id = $1 AND page_number > $2\n        ORDER BY page_number\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "page_number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "document_text_pages",
+            "name": "page_number"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "content",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "document_text_pages",
+            "name": "content"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "confidence",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "document_text_pages",
+            "name": "confidence"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "width",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "document_text_pages",
+            "name": "width"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "height",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "document_text_pages",
+            "name": "height"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d464f73b603e393e3aa7f4c1ed48da522cb667fb70b2492dd06c1d8330d0c861"
+}

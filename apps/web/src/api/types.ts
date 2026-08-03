@@ -271,6 +271,7 @@ export interface BackfillCampaign {
   id: string
   kind: 'email' | 'ocr' | 'attachment_text' | 'attachment_ocr'
   state: BackfillState
+  candidate_definition: Record<string, unknown>
   snapshot_before: string | null
   cursor_created_at: string | null
   cursor_node_id: string | null
@@ -291,6 +292,36 @@ export interface BackfillCampaign {
   started_at: string | null
   paused_at: string | null
   completed_at: string | null
+}
+
+export interface BackfillCampaignMetrics {
+  pending: number
+  running: number
+  remaining: number
+  throughput_per_hour: number | null
+  estimated_completion_at: string | null
+}
+
+export interface BackfillCanaryResult {
+  id: number
+  campaign_id: string
+  event_type: 'canary_result'
+  details: {
+    stage: number
+    processed: number
+    failed: number
+    duration_seconds: number
+    throughput_per_hour: number
+    p50_seconds: number
+    p95_seconds: number
+    peak_cpu_percent: number
+    peak_memory_bytes: number
+    peak_temperature_c: number
+    peak_io_wait_percent: number
+    database_growth_bytes: number
+    approved: boolean
+  }
+  created_at: string
 }
 
 export interface DocumentTextPage {

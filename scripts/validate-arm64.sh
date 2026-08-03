@@ -10,7 +10,7 @@ uname -a
 uname -m
 
 echo "==> Extractor tools"
-for cmd in file exiftool ffmpeg ffprobe; do
+for cmd in file exiftool ffmpeg ffprobe tesseract pdftoppm; do
   if command -v "$cmd" >/dev/null 2>&1; then
     echo "  ok  $cmd ($("$cmd" -version 2>&1 | head -1 || "$cmd" -ver 2>&1 | head -1))"
   else
@@ -25,21 +25,10 @@ elif command -v vm_stat >/dev/null 2>&1; then
   vm_stat | head -10
 fi
 
-export SQLX_OFFLINE="${SQLX_OFFLINE:-true}"
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "WARN: DATABASE_URL unset; PostgreSQL integration tests will skip"
-fi
-
-echo "==> Rust fmt / clippy / build / test"
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace
-cargo test --workspace
-
-echo "==> Frontend"
-npm --prefix apps/web ci
-npm --prefix apps/web run lint
-npm --prefix apps/web run build
+echo "==> CI-covered checks"
+echo "  Rust formatting, Clippy, build, tests, frontend checks, and container"
+echo "  builds run natively on GitHub's ARM64 runner. This script retains only"
+echo "  device-specific tool, memory, and OOM observations."
 
 echo "==> Memory snapshot (after)"
 if command -v free >/dev/null 2>&1; then

@@ -6,6 +6,7 @@ use strife_domain::{FolderError, FolderRules, NodeId};
 use uuid::Uuid;
 
 /// Embedded, versioned database migrations.
+/// Embedded schema migrations, including the live-queue indexes in migration 28.
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 /// Stable identifier for the single root folder created by migrations.
@@ -3216,6 +3217,16 @@ pub struct BackfillRefillWindow {
     pub allowance: i64,
 }
 
+/// Live queue and recent completion measurements for an operator campaign.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct BackfillCampaignMetrics {
+    pub campaign_id: Uuid,
+    pub pending: i64,
+    pub running: i64,
+    pub completed_last_hour: i64,
+    pub observed_seconds: f64,
+}
+
 /// Validated settings used to create an inert draft campaign.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewBackfillCampaign {
@@ -3506,7 +3517,15 @@ pub async fn get_backfill_refill_window(
                    c.batch_size::bigint,
                    GREATEST(c.max_queued::bigint - count(j.id) FILTER (
                        WHERE j.state IN ('pending', 'leased')
-                   ), 0)
+                   ), 0),
+                   GREATEST(
+                       COALESCE(
+                           NULLIF(c.candidate_definition ->> 'canary_limit', '')::bigint
+                               - c.enqueued_count,
+                           c.batch_size::bigint
+                       ),
+                       0
+                   )
                ) AS allowance
         FROM backfill_campaigns c
         LEFT JOIN jobs j ON j.campaign_id = c.id
@@ -3516,6 +3535,90 @@ pub async fn get_backfill_refill_window(
     )
     .bind(campaign_id)
     .fetch_optional(pool)
+    .await
+}
+
+/// Returns live queue depth and a bounded recent throughput window.
+///
+/// # Errors
+///
+/// Returns a database error when campaign job aggregates cannot be read.
+pub async fn get_backfill_campaign_metrics(
+    pool: &PgPool,
+    campaign_id: Uuid,
+) -> Result<Option<BackfillCampaignMetrics>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        SELECT c.id AS campaign_id,
+               count(j.id) FILTER (WHERE j.state = 'pending') AS pending,
+               count(j.id) FILTER (WHERE j.state = 'leased') AS running,
+               count(j.id) FILTER (
+                   WHERE j.state = 'completed'
+                     AND j.completed_at >= now() - interval '1 hour'
+               ) AS completed_last_hour,
+               COALESCE(EXTRACT(EPOCH FROM (
+                   now() - min(j.completed_at) FILTER (
+                       WHERE j.state = 'completed'
+                         AND j.completed_at >= now() - interval '1 hour'
+                   )
+               ))::double precision, 0::double precision) AS observed_seconds
+        FROM backfill_campaigns c
+        LEFT JOIN jobs j ON j.campaign_id = c.id
+        WHERE c.id = $1
+        GROUP BY c.id
+        ",
+    )
+    .bind(campaign_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Records one reviewed canary result as an append-only campaign event.
+///
+/// A running campaign must be paused before its measurements can be approved.
+///
+/// # Errors
+///
+/// Returns a database error when the campaign or event cannot be written.
+pub async fn record_backfill_canary_result(
+    pool: &PgPool,
+    campaign_id: Uuid,
+    details: &serde_json::Value,
+) -> Result<Option<BackfillCampaignEventRecord>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        INSERT INTO backfill_campaign_events
+            (campaign_id, old_state, new_state, event_type, details)
+        SELECT id, state, state, 'canary_result', $2
+        FROM backfill_campaigns
+        WHERE id = $1 AND state IN ('paused', 'draining', 'completed')
+        RETURNING *
+        ",
+    )
+    .bind(campaign_id)
+    .bind(details)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Lists reviewed canary results in stage order and then creation order.
+///
+/// # Errors
+///
+/// Returns a database error when canary events cannot be read.
+pub async fn list_backfill_canary_results(
+    pool: &PgPool,
+    campaign_id: Uuid,
+) -> Result<Vec<BackfillCampaignEventRecord>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        SELECT * FROM backfill_campaign_events
+        WHERE campaign_id = $1 AND event_type = 'canary_result'
+        ORDER BY COALESCE((details ->> 'stage')::bigint, 0), id
+        ",
+    )
+    .bind(campaign_id)
+    .fetch_all(pool)
     .await
 }
 

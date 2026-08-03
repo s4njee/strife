@@ -19,7 +19,9 @@ use strife_db::{
 };
 use uuid::Uuid;
 
-use crate::internal_error;
+use crate::error::ApiError;
+
+const ROUTE: &str = "/api/backfills";
 
 #[derive(Deserialize)]
 struct CreateCampaignRequest {
@@ -48,6 +50,22 @@ struct PrepareCampaignRequest {
 struct CampaignActionRequest {
     action: String,
     reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CanaryResultRequest {
+    stage: i64,
+    processed: i64,
+    failed: i64,
+    duration_seconds: f64,
+    p50_seconds: f64,
+    p95_seconds: f64,
+    peak_cpu_percent: f64,
+    peak_memory_bytes: i64,
+    peak_temperature_c: f64,
+    peak_io_wait_percent: f64,
+    database_growth_bytes: i64,
+    approved: bool,
 }
 
 #[derive(Deserialize)]
@@ -95,39 +113,53 @@ struct CampaignEventResponse {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Serialize)]
+struct CampaignMetricsResponse {
+    pending: i64,
+    running: i64,
+    remaining: i64,
+    throughput_per_hour: Option<f64>,
+    estimated_completion_at: Option<DateTime<Utc>>,
+}
+
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/api/backfills", get(list).post(create))
         .route("/api/backfills/events", get(events))
         .route("/api/backfills/{id}", get(get_one))
+        .route("/api/backfills/{id}/metrics", get(metrics))
+        .route(
+            "/api/backfills/{id}/canary-results",
+            get(canary_results).post(record_canary_result),
+        )
         .route("/api/backfills/{id}/prepare", post(prepare))
         .route("/api/backfills/{id}/actions", post(action))
         .with_state(pool)
 }
 
-async fn list(State(pool): State<PgPool>) -> Result<Json<Vec<CampaignResponse>>, StatusCode> {
+async fn list(State(pool): State<PgPool>) -> Result<Json<Vec<CampaignResponse>>, ApiError> {
     let campaigns = strife_db::list_backfill_campaigns(&pool)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, "campaign list"))?;
     Ok(Json(campaigns.into_iter().map(Into::into).collect()))
 }
 
 async fn get_one(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
-) -> Result<Json<CampaignResponse>, StatusCode> {
+) -> Result<Json<CampaignResponse>, ApiError> {
     strife_db::get_backfill_campaign(&pool, id)
         .await
-        .map_err(internal_error)?
+        .map_err(|error| ApiError::internal(error, ROUTE, id))?
         .map(CampaignResponse::from)
         .map(Json)
-        .ok_or(StatusCode::NOT_FOUND)
+        .ok_or(ApiError::NotFound("Backfill campaign was not found"))
 }
 
 async fn create(
     State(pool): State<PgPool>,
     Json(request): Json<CreateCampaignRequest>,
-) -> Result<(StatusCode, Json<CampaignResponse>), StatusCode> {
+) -> Result<(StatusCode, Json<CampaignResponse>), ApiError> {
     if request.batch_size <= 0
         || request.max_queued <= 0
         || request.max_running <= 0
@@ -139,24 +171,27 @@ async fn create(
             .and_then(serde_json::Value::as_u64)
             .is_none()
     {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(ApiError::Unprocessable(
+            "Backfill campaign configuration is invalid".into(),
+        ));
     }
     let campaign = strife_db::create_backfill_campaign(
         &pool,
         &NewBackfillCampaign {
-            kind: parse_kind(&request.kind).ok_or(StatusCode::UNPROCESSABLE_ENTITY)?,
+            kind: parse_kind(&request.kind)
+                .ok_or_else(|| ApiError::Unprocessable("Unknown backfill kind".into()))?,
             candidate_definition: request.candidate_definition,
             batch_size: request.batch_size,
             max_queued: request.max_queued,
             max_running: request.max_running,
             resource_class: parse_resource_class(&request.resource_class)
-                .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?,
+                .ok_or_else(|| ApiError::Unprocessable("Unknown resource class".into()))?,
             foreground_fairness: request.foreground_fairness,
             created_by_version: env!("CARGO_PKG_VERSION").to_owned(),
         },
     )
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal(error, ROUTE, "campaign create"))?;
     Ok((StatusCode::CREATED, Json(campaign.into())))
 }
 
@@ -164,9 +199,11 @@ async fn prepare(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
     Json(request): Json<PrepareCampaignRequest>,
-) -> Result<Json<CampaignResponse>, StatusCode> {
+) -> Result<Json<CampaignResponse>, ApiError> {
     if request.candidate_count < 0 {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(ApiError::Unprocessable(
+            "Candidate count cannot be negative".into(),
+        ));
     }
     strife_db::prepare_backfill_campaign(
         &pool,
@@ -176,17 +213,17 @@ async fn prepare(
         request.reason.as_deref(),
     )
     .await
-    .map_err(internal_error)?
+    .map_err(|error| ApiError::internal(error, ROUTE, id))?
     .map(CampaignResponse::from)
     .map(Json)
-    .ok_or(StatusCode::CONFLICT)
+    .ok_or_else(|| ApiError::Conflict("Backfill campaign cannot be prepared".into()))
 }
 
 async fn action(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
     Json(request): Json<CampaignActionRequest>,
-) -> Result<Json<CampaignResponse>, StatusCode> {
+) -> Result<Json<CampaignResponse>, ApiError> {
     let target = match request.action.as_str() {
         "resume" => BackfillState::Running,
         "pause" => BackfillState::Paused,
@@ -194,14 +231,122 @@ async fn action(
         "complete" => BackfillState::Completed,
         "cancel" => BackfillState::Cancelled,
         "fail" => BackfillState::Failed,
-        _ => return Err(StatusCode::UNPROCESSABLE_ENTITY),
+        _ => return Err(ApiError::Unprocessable("Unknown campaign action".into())),
     };
     strife_db::transition_backfill_campaign(&pool, id, target, request.reason.as_deref())
         .await
-        .map_err(internal_error)?
+        .map_err(|error| ApiError::internal(error, ROUTE, id))?
         .map(CampaignResponse::from)
         .map(Json)
-        .ok_or(StatusCode::CONFLICT)
+        .ok_or_else(|| ApiError::Conflict("Backfill campaign cannot change state".into()))
+}
+
+async fn metrics(
+    State(pool): State<PgPool>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<CampaignMetricsResponse>, ApiError> {
+    let campaign = strife_db::get_backfill_campaign(&pool, id)
+        .await
+        .map_err(|error| ApiError::internal(error, ROUTE, id))?
+        .ok_or(ApiError::NotFound("Backfill campaign was not found"))?;
+    let measurements = strife_db::get_backfill_campaign_metrics(&pool, id)
+        .await
+        .map_err(|error| ApiError::internal(error, ROUTE, id))?
+        .ok_or(ApiError::NotFound("Backfill campaign was not found"))?;
+    let remaining = campaign
+        .candidate_count
+        .saturating_sub(campaign.completed_count)
+        .saturating_sub(campaign.failed_count)
+        .saturating_sub(campaign.skipped_count)
+        .max(0);
+    let throughput_per_hour = if measurements.completed_last_hour >= 2
+        && measurements.observed_seconds >= 1.0
+    {
+        #[allow(clippy::cast_precision_loss)]
+        Some((measurements.completed_last_hour as f64 * 3_600.0) / measurements.observed_seconds)
+    } else {
+        None
+    };
+    let estimated_completion_at = throughput_per_hour.and_then(|throughput| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let seconds = ((remaining as f64 / throughput) * 3_600.0).round() as i64;
+        Utc::now().checked_add_signed(chrono::Duration::seconds(seconds))
+    });
+    Ok(Json(CampaignMetricsResponse {
+        pending: measurements.pending,
+        running: measurements.running,
+        remaining,
+        throughput_per_hour,
+        estimated_completion_at,
+    }))
+}
+
+async fn canary_results(
+    State(pool): State<PgPool>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<CampaignEventResponse>>, ApiError> {
+    let results = strife_db::list_backfill_canary_results(&pool, id)
+        .await
+        .map_err(|error| ApiError::internal(error, ROUTE, id))?;
+    Ok(Json(results.into_iter().map(Into::into).collect()))
+}
+
+async fn record_canary_result(
+    State(pool): State<PgPool>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<CanaryResultRequest>,
+) -> Result<(StatusCode, Json<CampaignEventResponse>), ApiError> {
+    let measurements = [
+        request.duration_seconds,
+        request.p50_seconds,
+        request.p95_seconds,
+        request.peak_cpu_percent,
+        request.peak_temperature_c,
+        request.peak_io_wait_percent,
+    ];
+    if !matches!(request.stage, 100 | 1_000 | 10_000)
+        || request.processed < 0
+        || request.processed > request.stage
+        || request.failed < 0
+        || request.failed > request.processed
+        || request.peak_memory_bytes < 0
+        || request.database_growth_bytes < 0
+        || measurements
+            .into_iter()
+            .any(|value| !value.is_finite() || value < 0.0)
+    {
+        return Err(ApiError::Unprocessable(
+            "Canary measurements are invalid".into(),
+        ));
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let throughput_per_hour = if request.duration_seconds > 0.0 {
+        request.processed as f64 * 3_600.0 / request.duration_seconds
+    } else {
+        0.0
+    };
+    let details = serde_json::json!({
+        "stage": request.stage,
+        "processed": request.processed,
+        "failed": request.failed,
+        "duration_seconds": request.duration_seconds,
+        "throughput_per_hour": throughput_per_hour,
+        "p50_seconds": request.p50_seconds,
+        "p95_seconds": request.p95_seconds,
+        "peak_cpu_percent": request.peak_cpu_percent,
+        "peak_memory_bytes": request.peak_memory_bytes,
+        "peak_temperature_c": request.peak_temperature_c,
+        "peak_io_wait_percent": request.peak_io_wait_percent,
+        "database_growth_bytes": request.database_growth_bytes,
+        "approved": request.approved,
+    });
+    let result = strife_db::record_backfill_canary_result(&pool, id, &details)
+        .await
+        .map_err(|error| ApiError::internal(error, ROUTE, id))?
+        .ok_or_else(|| {
+            ApiError::Conflict("Pause the campaign before recording canary results".into())
+        })?;
+    Ok((StatusCode::CREATED, Json(result.into())))
 }
 
 async fn events(

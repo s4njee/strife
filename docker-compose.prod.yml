@@ -3,6 +3,7 @@ name: strife
 x-runtime-environment: &runtime-environment
   DATABASE_URL: postgresql://strife:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/strife
   STORAGE_ROOT: /srv/strife/storage
+  IMPORT_WATCH_ROOT: /mnt/ext/watch
   TIKA_URL: http://tika:9998
   WORKER_CONCURRENCY: "2"
   WORKER_POLL_INTERVAL_SECONDS: "5"
@@ -127,6 +128,7 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777
     mem_limit: 512m
+    stop_grace_period: 45s
     depends_on:
       migrate:
         condition: service_completed_successfully

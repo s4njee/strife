@@ -13,12 +13,14 @@ As a project owner, I want the production deployment files committed so that the
 
 **Acceptance Criteria:**
 
-- [ ] `docker-compose.prod.yml`, `deploy/docker/backend.Dockerfile`, `deploy/docker/web.Dockerfile`, `deploy/docker/Caddyfile`, `deploy/orion/strife.service`, `deploy/orion/README.md`, `.dockerignore`, and `scripts/import-icloud.sh` are committed.
-- [ ] The pending `SUM(...)::BIGINT` fix in `crates/api/src/storage_usage.rs` is committed together with the regression test from Story 8.5.
-- [ ] `.env.example` documents every variable the production stack requires, including `POSTGRES_PASSWORD`, `STRIFE_IMAGE_TAG`, and `STRIFE_REVISION`.
-- [ ] Host secret files (`/etc/strife/postgres.env`, `/etc/strife/revision.env`) are documented but not committed, and `.gitignore` prevents accidental inclusion.
-- [ ] `deploy/orion/README.md` records the host layout (`/srv/strife/storage`, `/srv/strife/postgres`, `/srv/strife/import`, `/opt/strife`) and the install, upgrade, and rollback procedures.
-- [ ] A CI job builds both deployment images so a broken Dockerfile fails the build.
+- [x] `docker-compose.prod.yml`, `deploy/docker/backend.Dockerfile`, `deploy/docker/web.Dockerfile`, `deploy/docker/Caddyfile`, `deploy/orion/strife.service`, `deploy/orion/README.md`, `.dockerignore`, and `scripts/import-icloud.sh` are committed.
+- [x] The pending `SUM(...)::BIGINT` fix in `crates/api/src/storage_usage.rs` is committed together with the regression test from Story 8.5.
+- [x] `.env.example` documents every variable the production stack requires, including `POSTGRES_PASSWORD`, `STRIFE_IMAGE_TAG`, and `STRIFE_REVISION`.
+- [x] Host secret files (`/etc/strife/postgres.env`, `/etc/strife/revision.env`) are documented but not committed, and `.gitignore` prevents accidental inclusion.
+- [x] `deploy/orion/README.md` records the host layout (`/srv/strife/storage`, `/srv/strife/postgres`, `/srv/strife/import`, `/opt/strife`) and the install, upgrade, and rollback procedures.
+- [x] A CI job builds both deployment images so a broken Dockerfile fails the build.
+
+**Implementation report:** The production Compose, container, Caddy, Orion systemd, and import assets are version-controlled, with all required runtime variables documented in `.env.example` and host-only secret files excluded by the repository ignore policy. The Orion runbook now specifies the four host paths plus install, migration-first upgrade, readiness verification, and revision-based rollback. CI builds the migration, API, worker, and web images on native x86-64 and ARM64 runners and verifies that the worker image contains Tesseract with English language data. The production Compose configuration also passes interpolation and schema validation with placeholder secrets.
 
 ---
 
@@ -28,13 +30,15 @@ As an operator, I want the API to drain in-flight requests on SIGTERM so that re
 
 **Acceptance Criteria:**
 
-- [ ] `axum::serve(...)` in `crates/api/src/lib.rs` uses `.with_graceful_shutdown(...)` with SIGTERM and Ctrl-C handling matching the pattern already implemented in `crates/worker/src/lib.rs`.
-- [ ] The background task spawned by `spawn_upload_cleanup` observes the same shutdown signal and exits cleanly rather than being aborted mid-sweep.
-- [ ] In-flight chunk uploads and range downloads complete before the process exits, subject to a bounded drain timeout.
-- [ ] The `api` service in `docker-compose.prod.yml` sets a `stop_grace_period` consistent with that drain timeout; today only `worker` sets one (`10m`) and `api` falls back to the 10-second default.
-- [ ] A shutdown log line records how many requests were drained.
-- [ ] Test: a request in flight when SIGTERM is delivered completes with a success status.
-- [ ] Test: restarting the stack during an active multi-chunk upload leaves the session resumable rather than failed.
+- [x] `axum::serve(...)` in `crates/api/src/lib.rs` uses `.with_graceful_shutdown(...)` with SIGTERM and Ctrl-C handling matching the pattern already implemented in `crates/worker/src/lib.rs`.
+- [x] The background task spawned by `spawn_upload_cleanup` observes the same shutdown signal and exits cleanly rather than being aborted mid-sweep.
+- [x] In-flight chunk uploads and range downloads complete before the process exits, subject to a bounded drain timeout.
+- [x] The `api` service in `docker-compose.prod.yml` sets a `stop_grace_period` consistent with that drain timeout; today only `worker` sets one (`10m`) and `api` falls back to the 10-second default.
+- [x] A shutdown log line records how many requests were drained.
+- [x] Test: a request in flight when SIGTERM is delivered completes with a success status.
+- [x] Test: restarting the stack during an active multi-chunk upload leaves the session resumable rather than failed.
+
+**Implementation report:** API shutdown now shares one signal across Axum and upload-session cleanup, accepts SIGTERM or Ctrl-C, and bounds HTTP draining at 30 seconds before joining cleanup for a further five seconds. A response-body guard distinguishes requests active at signal time from fully drained and prematurely dropped bodies, and the final structured log reports all three counts. Production Compose grants the API 45 seconds. Unit coverage holds an in-flight streaming response across shutdown and verifies successful completion; the upload edge-case integration test drops and rebuilds the router between chunks and proves the persisted session remains resumable.
 
 ---
 
@@ -44,11 +48,13 @@ As a developer, I want CI to build and test the deployment architecture so that 
 
 **Acceptance Criteria:**
 
-- [ ] The CI matrix in `.github/workflows/ci.yml` includes `aarch64-unknown-linux-gnu` alongside `x86_64-unknown-linux-gnu`.
-- [ ] The ARM64 job runs clippy, build, and the test suite under the same `-D warnings` gate.
-- [ ] Container images are built for `linux/arm64` in CI, matching the claim already made in Story 7.4.
-- [ ] Checks in `scripts/validate-arm64.sh` that CI now covers are removed or marked CI-covered, leaving only genuinely device-specific steps (OOM sampling, tool availability on the Pi).
-- [ ] Job runtime is documented; if emulation is too slow for every push, the ARM64 job runs on merge to `main` and the split is recorded in `docs/development`.
+- [x] The CI matrix in `.github/workflows/ci.yml` includes `aarch64-unknown-linux-gnu` alongside `x86_64-unknown-linux-gnu`.
+- [x] The ARM64 job runs clippy, build, and the test suite under the same `-D warnings` gate.
+- [x] Container images are built for `linux/arm64` in CI, matching the claim already made in Story 7.4.
+- [x] Checks in `scripts/validate-arm64.sh` that CI now covers are removed or marked CI-covered, leaving only genuinely device-specific steps (OOM sampling, tool availability on the Pi).
+- [x] Job runtime is documented; if emulation is too slow for every push, the ARM64 job runs on merge to `main` and the split is recorded in `docs/development`.
+
+**Implementation report:** CI uses GitHub's native `ubuntu-24.04-arm` runner beside `ubuntu-24.04`, applying the same formatting, SQLx, route-ownership, clippy `-D warnings`, build, test, and frontend gates to both architectures. A second native matrix builds every production image on each architecture, avoiding emulation. `docs/development/arm64-ci.md` records the expected 15–30 minute warm-cache runtime, the runner's preview status, and a main-only fallback if availability becomes unreliable. The device script is reduced to architecture, extractor/OCR tool, memory, and kernel OOM observations.
 
 ---
 
@@ -58,11 +64,13 @@ As a project owner, I want documentation to match what is actually deployed so t
 
 **Acceptance Criteria:**
 
-- [ ] `docs/known-limitations.md` no longer states "Development-oriented Docker Compose; production packaging deferred"; it describes the shipped production stack and its real remaining limits (no TLS, single host, LAN-only).
-- [ ] `README.md` is corrected where it states packaged deployment is a v2 concern (the deployment-direction row and the v1 non-goals section).
-- [ ] `deferred.md` removes or rewrites the now-answered question "What should a production-ready Docker Compose bundle include?" and retains the genuinely open ones (TLS, Kubernetes, native binaries, published images).
-- [ ] `docs/setup.md` documents production deployment alongside the existing development instructions.
-- [ ] An ADR under `docs/decisions/` records the production deployment model (Compose plus Caddy plus systemd on a single host) and why Kubernetes and published registry images remain deferred.
-- [ ] Story 7.8's reconciliation claim is amended to note this drift and its resolution rather than left as-is.
+- [x] `docs/known-limitations.md` no longer states "Development-oriented Docker Compose; production packaging deferred"; it describes the shipped production stack and its real remaining limits (no TLS, single host, LAN-only).
+- [x] `README.md` is corrected where it states packaged deployment is a v2 concern (the deployment-direction row and the v1 non-goals section).
+- [x] `deferred.md` removes or rewrites the now-answered question "What should a production-ready Docker Compose bundle include?" and retains the genuinely open ones (TLS, Kubernetes, native binaries, published images).
+- [x] `docs/setup.md` documents production deployment alongside the existing development instructions.
+- [x] An ADR under `docs/decisions/` records the production deployment model (Compose plus Caddy plus systemd on a single host) and why Kubernetes and published registry images remain deferred.
+- [x] Story 7.8's reconciliation claim is amended to note this drift and its resolution rather than left as-is.
+
+**Implementation report:** The README, setup guide, known limitations, and deferred-decision list now agree that Strife ships a single-host, LAN-only Compose deployment with Caddy and systemd, while TLS productization, Kubernetes, native packages, and published registry images remain open. ADR 0011 records that boundary, the migration and rollback policy, and the reasons for deferring orchestration expansion. Story 7.8 now explicitly records the later documentation drift and this Epic 9 reconciliation.
 
 ---

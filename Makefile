@@ -1,6 +1,6 @@
 WEB_DIR := apps/web
 
-.PHONY: check lint build test format install dev-services dev-services-down api web
+.PHONY: check lint build test format install dev-services dev-services-down api web api-route-coverage-check sqlx-prepare sqlx-check sqlx-inventory-check sqlx-type-guard
 
 check: lint build test
 
@@ -35,3 +35,22 @@ api:
 
 web:
 	npm --prefix $(WEB_DIR) run dev
+
+api-route-coverage-check:
+	python3 scripts/api-route-coverage.py
+	git diff --exit-code -- docs/development/api-route-coverage.md
+
+sqlx-prepare:
+	cargo sqlx migrate run --source crates/db/migrations
+	cargo sqlx prepare --workspace -- --all-targets
+
+sqlx-check:
+	cargo sqlx migrate run --source crates/db/migrations
+	cargo sqlx prepare --check --workspace -- --all-targets
+
+sqlx-inventory-check:
+	python3 scripts/sqlx-runtime-inventory.py
+	git diff --exit-code -- docs/development/sqlx-runtime-queries.md
+
+sqlx-type-guard:
+	sh scripts/verify-sqlx-type-guard.sh

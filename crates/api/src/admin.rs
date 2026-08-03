@@ -46,9 +46,9 @@ async fn reprocess(
                 let engine = strife_db::get_ocr_engine_state(&pool)
                     .await
                     .map_err(|error| ApiError::internal(error, "/api/admin", "admin"))?
-                    .ok_or(ApiError::Internal(
-                        "No OCR engine has reported a version yet",
-                    ))?;
+                    .ok_or_else(|| {
+                        ApiError::Unavailable("No OCR engine has reported a version yet".into())
+                    })?;
                 strife_db::OcrReprocessScope::VersionMismatch(engine.engine_version)
             }
             _ => return Err(ApiError::BadRequest("Unknown reprocess scope".into())),

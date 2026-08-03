@@ -187,7 +187,7 @@ async fn create_upload(
             return Err(if is_unique_violation(&error) {
                 ApiError::NameConflict(NAME_CONFLICT)
             } else {
-                ApiError::Internal(INTERNAL)
+                ApiError::internal_with(error, ROUTE, "upload", INTERNAL)
             });
         }
     };
@@ -269,10 +269,14 @@ async fn finalize_upload(
         .map_err(|error| ApiError::internal_with(error, ROUTE, "upload", INTERNAL))?
         .ok_or(ApiError::NotFound(NOT_FOUND))?;
     if progress.session.state == UploadSessionState::Completed {
-        let node_id = progress
-            .session
-            .completed_node_id
-            .ok_or(ApiError::Internal(INTERNAL))?;
+        let node_id = progress.session.completed_node_id.ok_or_else(|| {
+            ApiError::internal_with(
+                "completed upload has no node id",
+                ROUTE,
+                session_id,
+                INTERNAL,
+            )
+        })?;
         let node = strife_db::get_node_by_id(&state.pool, node_id)
             .await
             .map_err(|error| ApiError::internal_with(error, ROUTE, "upload", INTERNAL))?
@@ -371,7 +375,7 @@ async fn cancel_upload(
             if matches!(error, sqlx::Error::RowNotFound) {
                 ApiError::NotFound(NOT_FOUND)
             } else {
-                ApiError::Internal(INTERNAL)
+                ApiError::internal_with(error, ROUTE, session_id, INTERNAL)
             }
         })?;
     if session.state != UploadSessionState::Cancelled {

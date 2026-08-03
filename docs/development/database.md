@@ -21,11 +21,22 @@ The migration files are embedded into `strife-db` at compile time. Application s
 
 ## Refresh Offline Query Metadata
 
-Compile-time checked SQL queries are cached under `.sqlx/`, allowing CI to compile with no live database. After adding or changing a checked query, start PostgreSQL, apply migrations, then run:
+Compile-time checked SQL queries are cached under `.sqlx/`, allowing CI to compile with no live database. After adding or changing a checked query, start PostgreSQL and run:
 
 ```sh
-cargo sqlx prepare --workspace -- --all-targets
+make sqlx-prepare
 ```
+
+This applies every migration before preparing the cache. Check that the cache
+and the reviewed runtime-query inventory are current with:
+
+```sh
+make sqlx-check
+make sqlx-inventory-check
+```
+
+Runtime queries are exceptions governed by [ADR 0010](../decisions/0010-sqlx-compile-time-query-policy.md)
+and listed individually in [`sqlx-runtime-queries.md`](sqlx-runtime-queries.md).
 
 Validate the cache without a database:
 

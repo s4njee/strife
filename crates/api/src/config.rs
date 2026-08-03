@@ -8,6 +8,7 @@ use axum::http::Uri;
 pub struct Config {
     pub database_url: String,
     pub storage_root: PathBuf,
+    pub import_watch_root: PathBuf,
     pub listen_addr: SocketAddr,
     pub tika_url: String,
     pub upload_session_ttl_hours: u64,
@@ -24,6 +25,8 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         let database_url = required("DATABASE_URL")?;
         let storage_root = PathBuf::from(required("STORAGE_ROOT")?);
+        let import_watch_root =
+            parse_import_watch_root(env::var("IMPORT_WATCH_ROOT").ok().as_deref())?;
         let listen_addr = required("LISTEN_ADDR")?
             .parse()
             .context("LISTEN_ADDR must be a socket address such as 127.0.0.1:3000")?;
@@ -47,6 +50,7 @@ impl Config {
         Ok(Self {
             database_url,
             storage_root,
+            import_watch_root,
             listen_addr,
             tika_url,
             upload_session_ttl_hours,
@@ -54,6 +58,14 @@ impl Config {
             run_migrations,
         })
     }
+}
+
+fn parse_import_watch_root(value: Option<&str>) -> Result<PathBuf> {
+    let value = value.unwrap_or("/mnt/ext/watch");
+    if value.trim().is_empty() {
+        bail!("IMPORT_WATCH_ROOT cannot be empty");
+    }
+    Ok(PathBuf::from(value))
 }
 
 fn parse_bool(name: &str, value: Option<&str>, default: bool) -> Result<bool> {
@@ -100,7 +112,22 @@ fn validate_http_url(name: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_bool, parse_disk_guard_percent, validate_http_url};
+    use std::path::PathBuf;
+
+    use super::{parse_bool, parse_disk_guard_percent, parse_import_watch_root, validate_http_url};
+
+    #[test]
+    fn import_watch_root_defaults_overrides_and_rejects_empty_values() {
+        assert_eq!(
+            parse_import_watch_root(None).expect("default"),
+            PathBuf::from("/mnt/ext/watch")
+        );
+        assert_eq!(
+            parse_import_watch_root(Some("./.data/import")).expect("override"),
+            PathBuf::from("./.data/import")
+        );
+        assert!(parse_import_watch_root(Some("  ")).is_err());
+    }
 
     #[test]
     fn accepts_absolute_http_urls() {

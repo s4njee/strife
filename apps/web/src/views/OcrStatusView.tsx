@@ -9,9 +9,11 @@ import {
 import {
   actOnBackfill,
   createOcrCampaign,
+  getBackfillMetrics,
   getOcrPreflight,
   getOcrStatus,
   listBackfills,
+  listBackfillCanaryResults,
   reprocessOcr,
 } from '../api/client'
 import type {
@@ -26,8 +28,9 @@ import './OcrStatusView.css'
 const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
 
 const BATCH_SIZE = 100
-const MAX_QUEUED = 500
+const MAX_QUEUED = 100
 const MAX_RUNNING = 1
+const INITIAL_CANARY_LIMIT = 100
 
 function formatBytes(bytes: number): string {
   if (bytes < 1000) return `${bytes} B`
@@ -39,6 +42,14 @@ function formatBytes(bytes: number): string {
     unit += 1
   }
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`
+}
+
+function formatThroughput(value: number | null): string {
+  return value === null ? 'measuring throughput' : `${value.toFixed(1)}/hour`
+}
+
+function formatEta(value: string | null): string {
+  return value ? ` · ETA ${new Date(value).toLocaleString()}` : ''
 }
 
 /** Campaign states in which historical work can still be claimed. */
@@ -75,9 +86,25 @@ export function OcrStatusView() {
       (campaign) => campaign.kind === 'ocr' && isActive(campaign),
     )
   }
+  const [campaignMetrics, { refetch: refetchCampaignMetrics }] = createResource(
+    () => (!staticPreview ? ocrCampaign()?.id : undefined),
+    (id) => getBackfillMetrics(id),
+  )
+  const [canaryResults, { refetch: refetchCanaryResults }] = createResource(
+    () => (!staticPreview ? ocrCampaign()?.id : undefined),
+    (id) => listBackfillCanaryResults(id),
+  )
 
   createEffect(() => {
     if (status.error instanceof Error) setNotice(status.error.message)
+  })
+  createEffect(() => {
+    if (staticPreview || !ocrCampaign()?.id) return
+    const timer = window.setInterval(() => {
+      void refetchCampaignMetrics()
+      void refetchCanaryResults()
+    }, 15_000)
+    onCleanup(() => window.clearInterval(timer))
   })
   createEffect(() => {
     if (staticPreview) return
@@ -141,7 +168,7 @@ export function OcrStatusView() {
     if (
       !window.confirm(
         `Create a paused OCR campaign for ${report.candidates} files (${formatBytes(report.total_candidate_bytes)})?\n\n` +
-          `Batch ${BATCH_SIZE} · max ${MAX_QUEUED} queued · ${MAX_RUNNING} running · heavy_cpu.\n\n` +
+          `Canary ${INITIAL_CANARY_LIMIT} · batch ${BATCH_SIZE} · max ${MAX_QUEUED} queued · ${MAX_RUNNING} running · heavy_cpu.\n\n` +
           'The campaign starts paused. Nothing runs until you resume it.',
       )
     )
@@ -156,6 +183,7 @@ export function OcrStatusView() {
           batchSize: BATCH_SIZE,
           maxQueued: MAX_QUEUED,
           maxRunning: MAX_RUNNING,
+          canaryLimit: INITIAL_CANARY_LIMIT,
         })
         await refetchCampaigns()
       }
@@ -194,6 +222,7 @@ export function OcrStatusView() {
       if (!staticPreview) {
         await actOnBackfill(campaign.id, action)
         await refetchCampaigns()
+        await Promise.all([refetchCampaignMetrics(), refetchCanaryResults()])
       }
       setNotice(`Campaign ${action}d.`)
     } catch (error) {
@@ -374,6 +403,36 @@ export function OcrStatusView() {
                       running · {campaign().resource_class} · foreground
                       priority every {campaign().foreground_fairness} claims
                     </p>
+                    <Show when={campaignMetrics()}>
+                      {(metrics) => (
+                        <p class="ocr-campaign__limits">
+                          {metrics().pending} pending · {metrics().running}{' '}
+                          running · {metrics().remaining} remaining ·{' '}
+                          {formatThroughput(metrics().throughput_per_hour)}
+                          {formatEta(metrics().estimated_completion_at)}
+                        </p>
+                      )}
+                    </Show>
+                    <Show when={(canaryResults()?.length ?? 0) > 0}>
+                      <section aria-labelledby="ocr-canary-results-title">
+                        <h4 id="ocr-canary-results-title">Canary results</h4>
+                        <ul class="ocr-campaign__results">
+                          <For each={canaryResults()}>
+                            {(result) => (
+                              <li>
+                                <strong>{result.details.stage} files</strong> ·{' '}
+                                {result.details.throughput_per_hour.toFixed(1)}
+                                /hour · p95{' '}
+                                {result.details.p95_seconds.toFixed(1)}s ·{' '}
+                                {formatBytes(result.details.peak_memory_bytes)}{' '}
+                                peak memory ·{' '}
+                                {result.details.approved ? 'approved' : 'held'}
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </section>
+                    </Show>
                     <Show when={campaign().snapshot_before}>
                       {(snapshot) => (
                         <p class="ocr-campaign__limits">
@@ -576,6 +635,7 @@ const sampleCampaign: BackfillCampaign = {
   kind: 'ocr',
   state: 'paused',
   snapshot_before: '2026-08-03T09:00:00Z',
+  candidate_definition: { canary_limit: 100 },
   cursor_created_at: '2024-02-11T04:12:00Z',
   cursor_node_id: '00000000-0000-0000-0000-0000000000a7',
   batch_size: 100,

@@ -184,7 +184,7 @@ As a project owner, I want `README.md`, `questions.md`, and `deferred.md` reconc
 - [x] `deferred.md` is reviewed and still accurate.
 - [x] Any v1 behavior that deviated from `README.md` is documented with rationale.
 
-**Implementation report:** Marked M0–M7 complete in the product plan, confirmed `questions.md` has no open v1 items, and left `deferred.md` as the v2+ backlog (still accurate). Shipped behavior matches settled decisions; operational docs live under `docs/`.
+**Implementation report:** Marked M0–M7 complete in the product plan and confirmed `questions.md` had no open v1 items. A later production-hardening audit found deployment drift after this report: Compose/systemd packaging and post-v1 OCR/email search had shipped while several plan statements still called them deferred. Epic 9 reconciled those statements, added the production ADR and runbook, and retained only genuinely open packaging, backup, TLS, and multi-host questions in `deferred.md`.
 
 **New files:**
 

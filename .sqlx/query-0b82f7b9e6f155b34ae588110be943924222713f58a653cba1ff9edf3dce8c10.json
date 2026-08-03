@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(max(id), 0) AS \"cursor!\" FROM metadata_events",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cursor!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0b82f7b9e6f155b34ae588110be943924222713f58a653cba1ff9edf3dce8c10"
+}

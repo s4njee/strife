@@ -22,6 +22,7 @@ strife-importer = { path = "../importer" }
 strife-storage = { path = "../storage" }
 tokio.workspace = true
 tokio-util.workspace = true
+tower-http.workspace = true
 strife-media = { path = "../media" }
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -9,7 +9,8 @@ Strife v1 needs predictable watched-folder behavior without destructive surprise
 
 ## Decision
 
-- The sole v1 import source is `/mnt/ext/watch`; its contents map into Strife's root folder while preserving their relative hierarchy.
+- The sole v1 import source defaults to `/mnt/ext/watch` through `IMPORT_WATCH_ROOT`; its contents map into Strife's root folder while preserving their relative hierarchy.
+- Configuration keeps the watch root as its own field rather than coupling it to managed storage. A future multi-source shape can replace it with a list of `{ source_root, destination_folder_id }` mappings without changing storage configuration or import semantics.
 - Scans run only when the user explicitly requests one. There is no polling interval or continuous watcher in v1.
 - A manual scan enqueues a durable background job. The worker records each regular, non-hidden file and immediately imports it before continuing the tree walk; special files are ignored. A file is eligible when its size and modification time remain unchanged while it is streamed into staging; a changed file is returned to `discovered` for a later pass.
 - Import-scan jobs renew their leases while running. If a worker stops, the expired lease returns to the queue and the next attempt safely revisits persisted entries while continuing remaining files.

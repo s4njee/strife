@@ -11,8 +11,8 @@ permissions:
 
 jobs:
   check:
-    name: Check (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    name: Check (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     services:
       postgres:
         image: postgres:17.10-alpine3.24
@@ -32,7 +32,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-unknown-linux-gnu]
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
 
     steps:
       - name: Check out repository
@@ -45,6 +51,24 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
+
+      - name: Install SQLx CLI
+        run: cargo install sqlx-cli --version 0.9.0 --no-default-features --features rustls,postgres --locked
+
+      - name: Apply database migrations
+        run: cargo sqlx migrate run --source crates/db/migrations
+
+      - name: Check SQLx offline metadata
+        run: cargo sqlx prepare --check --workspace -- --all-targets
+
+      - name: Check runtime SQL inventory
+        run: make sqlx-inventory-check
+
+      - name: Prove SQLx rejects a broken result type
+        run: make sqlx-type-guard
+
+      - name: Check API route test ownership
+        run: make api-route-coverage-check
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -86,3 +110,36 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: apps/web
+
+  deployment-images:
+    name: Deployment images (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build migration image
+        run: docker build --target migrate -t strife-migrate:ci -f deploy/docker/backend.Dockerfile .
+
+      - name: Build API image
+        run: docker build --target api -t strife-api:ci -f deploy/docker/backend.Dockerfile .
+
+      - name: Build worker image
+        run: docker build --target worker -t strife-worker:ci -f deploy/docker/backend.Dockerfile .
+
+      - name: Verify worker OCR tools
+        run: |
+          docker run --rm --entrypoint tesseract strife-worker:ci --version
+          docker run --rm --entrypoint sh strife-worker:ci -c 'tesseract --list-langs | tail -n +2 | grep -qx eng'
+
+      - name: Build web image
+        run: docker build -t strife-web:ci -f deploy/docker/web.Dockerfile .

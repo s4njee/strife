@@ -70,6 +70,39 @@ If the Pi OOMs, reduce `WORKER_CONCURRENCY` and `PREVIEW_CONCURRENCY` to 1 and a
 
 ## Jobs table steady state
 
+### Queue claim and lease-reaper indexes
+
+Migration `0028_job_queue_indexes` adds two partial indexes whose size follows
+the live queue rather than retained history:
+
+- `jobs_claim_pending_idx (job_type, origin, priority DESC, created_at, id)`
+  contains only pending work and supports the worker's foreground, repair, and
+  backfill claim lookups.
+- `jobs_expired_lease_idx (lease_expires_at)` contains only leased work and
+  supports the lease reaper's expiry predicate.
+
+The existing `jobs_active_type_target_unique` partial unique index remains the
+idempotency guard for active work.
+
+The following plans were measured on PostgreSQL 17.10 on 2026-08-03 in a
+rollback-only transaction containing 100,000 completed metadata jobs and one
+pending job. The pre-migration baseline already used the broad
+`jobs_claim_origin_idx`; the change makes the hot index much smaller rather
+than inventing a sequential-scan baseline:
+
+| Plan | Selected index | Index size | Buffers | Execution |
+| --- | --- | ---: | ---: | ---: |
+| Before partial index | `jobs_claim_origin_idx` | 7,768 kB | 9 hits | 0.036 ms |
+| After migration | `jobs_claim_pending_idx` | 56 kB | 1 hit, 2 reads | 0.036 ms |
+| Expired lease lookup | `jobs_expired_lease_idx` | 8 kB | 1 hit | 0.011 ms |
+
+The after plan is an `Index Scan using jobs_claim_pending_idx`; the lease query
+is an `Index Scan using jobs_expired_lease_idx`. Timing is noise at one live
+row, while the meaningful result is that 100,000 completed rows occupy the
+broad index but do not enter either hot-set index. Reproduce with the exact
+predicate and ordering from `claim_job_with_resource_lease`, after `ANALYZE
+jobs`, and verify the selected index with `EXPLAIN (ANALYZE, BUFFERS)`.
+
 The jobs table is append-only in practice: every upload, watched-folder import,
 metadata extraction, preview, OCR, email parse, and attachment extraction adds a
 row, and a backfill campaign adds one per candidate. Without a purge it grows for

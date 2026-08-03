@@ -27,7 +27,7 @@ Further reading: [setup](docs/setup.md) · [architecture](docs/architecture.md) 
 
 Strife v1 is a single-user, self-hosted cloud drive for a private home LAN. It provides durable file and folder management, resumable browser uploads, watched-folder imports, rich metadata extraction, and on-demand previews through a SolidJS interface backed by Axum and PostgreSQL.
 
-The first release is intentionally not a complete public cloud service. It assumes a trusted LAN, has no sign-in flow, and does not include OCR, global search, public sharing, production backup automation, or production security hardening. Those subjects are tracked in [`deferred.md`](deferred.md).
+The first release is intentionally not a complete public cloud service. It assumes a trusted LAN, has no sign-in flow, and does not include public sharing, production backup automation, or public-internet security hardening. OCR, document search, and email archive search are shipped as explicitly bounded local processing features; historical work never starts as a deployment side effect.
 
 Development proceeds in small vertical slices. Every milestone must leave the application runnable and testable.
 
@@ -61,7 +61,8 @@ Development proceeds in small vertical slices. Every milestone must leave the ap
 | Interface               | Desktop table view only; no gallery or mobile/tablet layout                                                         |
 | Themes                  | True-black dark theme plus a light theme                                                                            |
 | Browser support         | Current stable desktop browsers only                                                                                |
-| OCR, search, sharing    | Deferred to v2                                                                                                      |
+| OCR and search          | Local OCR, document text, and email archive search; historical work uses explicit paused campaigns                |
+| Sharing                 | Deferred                                                                                                            |
 
 ## 3. v1 Scope
 
@@ -90,8 +91,8 @@ Development proceeds in small vertical slices. Every milestone must leave the ap
 ### Explicitly excluded
 
 - Authentication and account recovery
-- OCR and handwriting recognition
-- Global filename, metadata, document-content, or OCR search
+- Handwriting recognition
+- Global filename and metadata search beyond document text and email archive search
 - Public or private share links
 - Video transcoding
 - Editable file metadata

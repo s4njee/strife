@@ -23,7 +23,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::folders::MoveConflictResponse;
 
@@ -56,6 +56,9 @@ pub enum ApiError {
     /// `Cow` so a fixed message costs no allocation while a formatted one — a
     /// validation failure quoting the offending value — is still expressible.
     BadRequest(Cow<'static, str>),
+    Unprocessable(Cow<'static, str>),
+    Conflict(Cow<'static, str>),
+    Unavailable(Cow<'static, str>),
     NotFound(&'static str),
     NameConflict(&'static str),
     CycleDetected,
@@ -67,6 +70,7 @@ pub enum ApiError {
     UploadIncomplete,
     DiskFull(u64),
     ImportDisabled,
+    PreviewNotSupported,
     /// Range requests need the total size to build `Content-Range`.
     RangeNotSatisfiable(u64),
     /// The cause is already logged by the constructor; this carries only what
@@ -117,7 +121,9 @@ impl ApiError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::BadRequest(_) => "bad_request",
+            Self::BadRequest(_) | Self::Unprocessable(_) => "bad_request",
+            Self::Conflict(_) => "conflict",
+            Self::Unavailable(_) => "service_unavailable",
             Self::NotFound(_) => "not_found",
             Self::NameConflict(_) => "name_conflict",
             Self::CycleDetected => "cycle_detected",
@@ -129,6 +135,7 @@ impl ApiError {
             Self::UploadIncomplete => "upload_incomplete",
             Self::DiskFull(_) => "disk_full",
             Self::ImportDisabled => "source_disabled",
+            Self::PreviewNotSupported => "preview_not_supported",
             Self::RangeNotSatisfiable(_) => "range_not_satisfiable",
             Self::Internal(_) => "internal_error",
         }
@@ -140,8 +147,11 @@ impl ApiError {
             Self::BadRequest(_) | Self::CycleDetected | Self::UploadIncomplete => {
                 StatusCode::BAD_REQUEST
             }
-            Self::NotFound(_) => StatusCode::NOT_FOUND,
-            Self::NameConflict(_)
+            Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::NotFound(_) | Self::PreviewNotSupported => StatusCode::NOT_FOUND,
+            Self::Conflict(_)
+            | Self::NameConflict(_)
             | Self::MoveConflict(_)
             | Self::RangeConflict
             | Self::ImportDisabled
@@ -156,7 +166,10 @@ impl ApiError {
 
     fn message(&self) -> String {
         match self {
-            Self::BadRequest(message) => message.clone().into_owned(),
+            Self::BadRequest(message)
+            | Self::Unprocessable(message)
+            | Self::Conflict(message)
+            | Self::Unavailable(message) => message.clone().into_owned(),
             Self::NotFound(what) | Self::NameConflict(what) | Self::Internal(what) => {
                 (*what).to_owned()
             }
@@ -169,6 +182,7 @@ impl ApiError {
             Self::UploadIncomplete => "The upload has missing bytes".to_owned(),
             Self::DiskFull(_) => "Storage does not have enough safe capacity".to_owned(),
             Self::ImportDisabled => "Import source is disabled".to_owned(),
+            Self::PreviewNotSupported => "A preview is not available for this file type".to_owned(),
             Self::RangeNotSatisfiable(_) => "The requested range is not satisfiable".to_owned(),
         }
     }
@@ -179,6 +193,9 @@ impl IntoResponse for ApiError {
         let status = self.status();
         let code = self.code();
         let message = self.message();
+        if status.is_client_error() {
+            debug!(status = status.as_u16(), code, "request rejected");
+        }
 
         // A range rejection answers with Content-Range rather than a body, which
         // is what a media client reads to correct its request.
@@ -236,6 +253,21 @@ mod tests {
                 "bad_request",
                 StatusCode::BAD_REQUEST,
             ),
+            (
+                ApiError::Unprocessable("x".into()),
+                "bad_request",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                ApiError::Conflict("x".into()),
+                "conflict",
+                StatusCode::CONFLICT,
+            ),
+            (
+                ApiError::Unavailable("x".into()),
+                "service_unavailable",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
             (ApiError::NotFound("x"), "not_found", StatusCode::NOT_FOUND),
             (
                 ApiError::NameConflict("x"),
@@ -282,6 +314,11 @@ mod tests {
                 ApiError::DiskFull(91),
                 "disk_full",
                 StatusCode::INSUFFICIENT_STORAGE,
+            ),
+            (
+                ApiError::PreviewNotSupported,
+                "preview_not_supported",
+                StatusCode::NOT_FOUND,
             ),
             (
                 ApiError::Internal("x"),

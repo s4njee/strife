@@ -3,7 +3,7 @@ use std::{convert::Infallible, time::Duration};
 use axum::{
     Json, Router,
     extract::{Path, Query, RawQuery, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{
         Sse,
         sse::{Event, KeepAlive},
@@ -16,11 +16,16 @@ use sqlx::PgPool;
 use strife_db::{EmailExtractionStatus, EmailSearchCursor, EmailSearchFilters};
 use uuid::Uuid;
 
-use crate::internal_error;
+use crate::error::ApiError;
 
 const DEFAULT_LIMIT: u32 = 25;
 const MAX_LIMIT: u32 = 100;
 const FACET_LIMIT: i64 = 50;
+const ROUTE: &str = "/api/email";
+
+fn bad_request() -> ApiError {
+    ApiError::BadRequest("The email request is invalid".into())
+}
 
 /// Repeatable filters mean the query string cannot go through a plain
 /// `Deserialize`: `serde_urlencoded` keeps only the last value for a repeated
@@ -74,7 +79,7 @@ fn percent_decode(raw: &str) -> String {
 impl SearchQuery {
     /// Parses the raw query string, rejecting unknown fields and excessive
     /// repetition rather than ignoring them.
-    fn parse(raw: Option<&str>) -> Result<Self, StatusCode> {
+    fn parse(raw: Option<&str>) -> Result<Self, ApiError> {
         const MAX_REPEATS: usize = 32;
         let mut query = Self {
             q: None,
@@ -106,34 +111,33 @@ impl SearchQuery {
                 "participant" => query.participant.push(value),
                 "label" => query.label.push(value),
                 "after" => {
-                    query.after = Some(value.parse().map_err(|_| StatusCode::BAD_REQUEST)?);
+                    query.after = Some(value.parse().map_err(|_| bad_request())?);
                 }
                 "before" => {
-                    query.before = Some(value.parse().map_err(|_| StatusCode::BAD_REQUEST)?);
+                    query.before = Some(value.parse().map_err(|_| bad_request())?);
                 }
                 "has_attachment" => query.has_attachment = Some(boolean(&value)),
                 "status" => query.status = Some(value),
                 "thread_id" => {
-                    query.thread_id = Some(value.parse().map_err(|_| StatusCode::BAD_REQUEST)?);
+                    query.thread_id = Some(value.parse().map_err(|_| bad_request())?);
                 }
                 "duplicate_group" => {
-                    query.duplicate_group =
-                        Some(value.parse().map_err(|_| StatusCode::BAD_REQUEST)?);
+                    query.duplicate_group = Some(value.parse().map_err(|_| bad_request())?);
                 }
                 "include_trashed" => query.include_trashed = boolean(&value),
                 "include_duplicates" => query.include_duplicates = boolean(&value),
                 "cursor" => query.cursor = Some(value),
                 "limit" => {
-                    query.limit = Some(value.parse().map_err(|_| StatusCode::BAD_REQUEST)?);
+                    query.limit = Some(value.parse().map_err(|_| bad_request())?);
                 }
-                _ => return Err(StatusCode::BAD_REQUEST),
+                _ => return Err(bad_request()),
             }
         }
         if query.from.len() > MAX_REPEATS
             || query.participant.len() > MAX_REPEATS
             || query.label.len() > MAX_REPEATS
         {
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(bad_request());
         }
         Ok(query)
     }
@@ -339,8 +343,11 @@ pub fn router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
-async fn status(State(pool): State<PgPool>) -> Result<Json<EmailStatusResponse>, StatusCode> {
-    load_status(&pool).await.map(Json).map_err(internal_error)
+async fn status(State(pool): State<PgPool>) -> Result<Json<EmailStatusResponse>, ApiError> {
+    load_status(&pool)
+        .await
+        .map(Json)
+        .map_err(|error| ApiError::internal(error, ROUTE, "status"))
 }
 
 async fn load_status(pool: &PgPool) -> Result<EmailStatusResponse, sqlx::Error> {
@@ -425,11 +432,9 @@ struct ReprocessResponse {
 async fn reprocess(
     State(pool): State<PgPool>,
     Json(request): Json<ReprocessRequest>,
-) -> Result<Json<ReprocessResponse>, StatusCode> {
+) -> Result<Json<ReprocessResponse>, ApiError> {
     let scope = match request.scope.as_str() {
-        "node" => {
-            strife_db::EmailReprocessScope::Node(request.node_id.ok_or(StatusCode::BAD_REQUEST)?)
-        }
+        "node" => strife_db::EmailReprocessScope::Node(request.node_id.ok_or_else(bad_request)?),
         "failed" => strife_db::EmailReprocessScope::Failed,
         "missing" => strife_db::EmailReprocessScope::Missing,
         "version" => strife_db::EmailReprocessScope::VersionMismatch(
@@ -437,12 +442,12 @@ async fn reprocess(
                 .parser_version
                 .unwrap_or_else(|| strife_media::EMAIL_PARSER_VERSION.to_owned()),
         ),
-        _ => return Err(StatusCode::BAD_REQUEST),
+        _ => return Err(bad_request()),
     };
     let enqueued =
         strife_db::enqueue_email_reprocessing(&pool, &scope, request.limit.unwrap_or(50))
             .await
-            .map_err(internal_error)?;
+            .map_err(|error| ApiError::internal(error, ROUTE, "reprocess"))?;
     Ok(Json(ReprocessResponse { enqueued }))
 }
 
@@ -469,7 +474,7 @@ async fn events(
         .and_then(|value| value.parse::<i64>().ok())
     {
         Some(cursor) => cursor,
-        None => sqlx::query_scalar::<_, i64>("SELECT COALESCE(max(id), 0) FROM email_events")
+        None => sqlx::query_scalar!("SELECT COALESCE(max(id), 0) AS \"cursor!\" FROM email_events")
             .fetch_one(&pool)
             .await
             .unwrap_or_default(),
@@ -608,7 +613,7 @@ fn status_name(status: EmailExtractionStatus) -> &'static str {
 async fn search(
     State(pool): State<PgPool>,
     RawQuery(raw): RawQuery,
-) -> Result<Json<SearchResponse>, StatusCode> {
+) -> Result<Json<SearchResponse>, ApiError> {
     let query = SearchQuery::parse(raw.as_deref())?;
     let text = query
         .q
@@ -616,12 +621,12 @@ async fn search(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let status = match query.status.as_deref() {
-        Some(raw) => Some(parse_status(raw).ok_or(StatusCode::BAD_REQUEST)?),
+        Some(raw) => Some(parse_status(raw).ok_or_else(bad_request)?),
         None => None,
     };
     if let (Some(after), Some(before)) = (query.after, query.before) {
         if after >= before {
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(bad_request());
         }
     }
     let filters = EmailSearchFilters {
@@ -640,17 +645,17 @@ async fn search(
     // An entirely unconstrained request would page the whole archive, so a
     // blank query is allowed only alongside at least one structured filter.
     if text.is_none() && filters.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(bad_request());
     }
     let cursor = match query.cursor.as_deref() {
-        Some(raw) => Some(decode_cursor(raw).ok_or(StatusCode::BAD_REQUEST)?),
+        Some(raw) => Some(decode_cursor(raw).ok_or_else(bad_request)?),
         None => None,
     };
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
     let hits = strife_db::search_email(&pool, text, &filters, cursor, limit)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, "search"))?;
     let results: Vec<SearchHit> = hits
         .into_iter()
         .map(|hit| SearchHit {
@@ -679,16 +684,16 @@ async fn search(
     }))
 }
 
-async fn facets(State(pool): State<PgPool>) -> Result<Json<FacetsResponse>, StatusCode> {
+async fn facets(State(pool): State<PgPool>) -> Result<Json<FacetsResponse>, ApiError> {
     let labels = strife_db::email_label_facets(&pool, FACET_LIMIT)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, "facets"))?;
     let correspondents = strife_db::email_correspondent_facets(&pool, FACET_LIMIT)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, "facets"))?;
     let years = strife_db::email_year_facets(&pool)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, "facets"))?;
     let bucket = |facet: strife_db::EmailFacet| FacetBucket {
         value: facet.value,
         count: facet.count,
@@ -704,20 +709,20 @@ async fn message(
     State(pool): State<PgPool>,
     Path(node_id): Path<Uuid>,
     Query(query): Query<MessageQuery>,
-) -> Result<Json<MessageResponse>, StatusCode> {
+) -> Result<Json<MessageResponse>, ApiError> {
     let record = strife_db::get_email_message(&pool, node_id)
         .await
-        .map_err(internal_error)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, node_id))?
+        .ok_or(ApiError::NotFound("Email message was not found"))?;
     let addresses = strife_db::list_email_addresses(&pool, node_id)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, node_id))?;
     let labels = strife_db::list_email_labels(&pool, node_id)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, node_id))?;
     let attachments = strife_db::list_email_attachments(&pool, node_id)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, node_id))?;
     let sanitized = sanitize_body(
         record.body_html.as_deref(),
         node_id,
@@ -734,7 +739,7 @@ async fn message(
         Some(
             strife_db::list_email_headers(&pool, node_id)
                 .await
-                .map_err(internal_error)?
+                .map_err(|error| ApiError::internal(error, ROUTE, node_id))?
                 .into_iter()
                 .map(|header| HeaderResponse {
                     name: header.name,

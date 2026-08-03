@@ -19,7 +19,6 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::error::ApiError;
-use crate::internal_error;
 
 /// Messages preserved verbatim from the ad-hoc handling this replaced.
 const NOT_FOUND: &str = "File was not found";
@@ -55,7 +54,7 @@ async fn preview_request(
         Ok(Some(file)) => file,
         Ok(None) => return status_response(StatusCode::NOT_FOUND),
         Err(error) => {
-            error!(%error, node_id = %id, "failed to load file for preview");
+            error!(%error, route = ROUTE, node_id = %id, "failed to load file for preview");
             return status_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
@@ -76,7 +75,7 @@ async fn thumbnail_request(State(state): State<FileState>, Path(id): Path<Uuid>)
         Ok(Some(file)) => file,
         Ok(None) => return status_response(StatusCode::NOT_FOUND),
         Err(error) => {
-            error!(%error, node_id = %id, "failed to load file for thumbnail");
+            error!(%error, route = ROUTE, node_id = %id, "failed to load file for thumbnail");
             return status_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
@@ -98,11 +97,7 @@ async fn artifact_request(state: &FileState, id: Uuid, kind: ArtifactType, mime:
         || mime == "application/msword"
         || mime.contains("wordprocessingml");
     if !supported {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error":"preview_not_supported"})),
-        )
-            .into_response();
+        return ApiError::PreviewNotSupported.into_response();
     }
     if let Ok(Some(artifact)) = strife_db::get_artifact(&state.pool, id, kind).await {
         if artifact.state == ArtifactState::Ready {
@@ -142,7 +137,7 @@ async fn artifact_request(state: &FileState, id: Uuid, kind: ArtifactType, mime:
     )
     .await;
     if let Err(error) = artifact {
-        error!(%error, node_id = %id, "failed to create generating artifact");
+        error!(%error, route = ROUTE, node_id = %id, "failed to create generating artifact");
         return status_response(StatusCode::INTERNAL_SERVER_ERROR);
     }
     generating_response(state, id).await
@@ -160,12 +155,12 @@ async fn generating_response(state: &FileState, id: Uuid) -> Response {
         {
             Ok(job) => job,
             Err(error) => {
-                error!(%error, node_id = %id, "failed to load pending preview job");
+                error!(%error, route = ROUTE, node_id = %id, "failed to load pending preview job");
                 return status_response(StatusCode::INTERNAL_SERVER_ERROR);
             }
         },
         Err(error) => {
-            error!(%error, node_id = %id, "failed to enqueue preview generation");
+            error!(%error, route = ROUTE, node_id = %id, "failed to enqueue preview generation");
             return status_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
@@ -280,7 +275,7 @@ struct FileTextResponse {
 async fn file_details(
     State(state): State<FileState>,
     Path(node_id): Path<Uuid>,
-) -> Result<Json<FileDetailsResponse>, StatusCode> {
+) -> Result<Json<FileDetailsResponse>, ApiError> {
     let mut details = sqlx::query_as::<_, FileDetailsResponse>(
         r"
         SELECT n.id, n.parent_id, n.name, f.byte_size, f.checksum_sha256,
@@ -297,13 +292,13 @@ async fn file_details(
     .bind(node_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(internal_error)?
-    .ok_or(StatusCode::NOT_FOUND)?;
+    .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?
+    .ok_or(ApiError::NotFound(NOT_FOUND))?;
     details.processing_status = processing_status(&state.pool, node_id).await?;
     Ok(Json(details))
 }
 
-async fn processing_status(pool: &PgPool, node_id: Uuid) -> Result<ProcessingStatus, StatusCode> {
+async fn processing_status(pool: &PgPool, node_id: Uuid) -> Result<ProcessingStatus, ApiError> {
     let (active, failed_jobs, successful, failed_metadata): (i64, i64, i64, i64) =
         sqlx::query_as(
             r"
@@ -322,7 +317,7 @@ async fn processing_status(pool: &PgPool, node_id: Uuid) -> Result<ProcessingSta
         .bind(node_id)
         .fetch_one(pool)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     Ok(if active > 0 {
         ProcessingStatus::Processing
     } else if successful > 0 && failed_metadata > 0 {
@@ -340,40 +335,42 @@ async fn file_metadata(
     State(state): State<FileState>,
     Path(node_id): Path<Uuid>,
     Query(query): Query<MetadataQuery>,
-) -> Result<Json<Vec<MetadataResponse>>, StatusCode> {
+) -> Result<Json<Vec<MetadataResponse>>, ApiError> {
     ensure_active_file(&state.pool, node_id).await?;
-    let records = sqlx::query_as::<_, MetadataResponse>(
-        r"
-        SELECT id, extractor_name, extractor_version, status::text AS status,
+    let records = sqlx::query_as!(
+        MetadataResponse,
+        r#"
+        SELECT id, extractor_name, extractor_version, status::text AS "status!",
             CASE WHEN $2 THEN raw_payload ELSE NULL END AS raw_payload,
             warnings, created_at, updated_at
         FROM metadata_records WHERE node_id = $1 ORDER BY extractor_name
-        ",
+        "#,
+        node_id,
+        query.raw
     )
-    .bind(node_id)
-    .bind(query.raw)
     .fetch_all(&state.pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     Ok(Json(records))
 }
 
 async fn file_streams(
     State(state): State<FileState>,
     Path(node_id): Path<Uuid>,
-) -> Result<Json<Vec<MediaStreamResponse>>, StatusCode> {
+) -> Result<Json<Vec<MediaStreamResponse>>, ApiError> {
     ensure_active_file(&state.pool, node_id).await?;
-    let streams = sqlx::query_as::<_, MediaStreamResponse>(
-        r"
-        SELECT id, stream_index, stream_type::text AS stream_type, codec, width, height,
+    let streams = sqlx::query_as!(
+        MediaStreamResponse,
+        r#"
+        SELECT id, stream_index, stream_type::text AS "stream_type!", codec, width, height,
             duration_ms, bitrate_bps, frame_rate, language, created_at
         FROM media_streams WHERE node_id = $1 ORDER BY stream_index
-        ",
+        "#,
+        node_id
     )
-    .bind(node_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     Ok(Json(streams))
 }
 
@@ -381,19 +378,16 @@ async fn file_text(
     State(state): State<FileState>,
     Path(node_id): Path<Uuid>,
     Query(query): Query<TextQuery>,
-) -> Result<Json<FileTextResponse>, StatusCode> {
+) -> Result<Json<FileTextResponse>, ApiError> {
     ensure_active_file(&state.pool, node_id).await?;
     let record = strife_db::get_document_text(&state.pool, node_id)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     let Some(record) = record else {
-        let active: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM jobs WHERE target_node_id = $1 AND job_type = 'ocr' AND state IN ('pending', 'leased'))",
-        )
-        .bind(node_id)
+        let active: bool = sqlx::query_scalar!("SELECT EXISTS (SELECT 1 FROM jobs WHERE target_node_id = $1 AND job_type = 'ocr' AND state IN ('pending', 'leased')) AS \"exists!\"", node_id)
         .fetch_one(&state.pool)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
         return Ok(Json(FileTextResponse {
             status: if active {
                 "in_progress"
@@ -412,7 +406,8 @@ async fn file_text(
         }));
     };
     let limit = query.limit.unwrap_or(25).clamp(1, 50);
-    let mut pages = sqlx::query_as::<_, TextPageResponse>(
+    let mut pages = sqlx::query_as!(
+        TextPageResponse,
         r"
         SELECT page_number, content, confidence, width, height
         FROM document_text_pages
@@ -420,13 +415,13 @@ async fn file_text(
         ORDER BY page_number
         LIMIT $3
         ",
+        node_id,
+        query.after_page.unwrap_or(0),
+        i64::from(limit.saturating_add(1))
     )
-    .bind(node_id)
-    .bind(query.after_page.unwrap_or(0))
-    .bind(i64::from(limit.saturating_add(1)))
     .fetch_all(&state.pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     let has_more = pages.len() > limit as usize;
     if has_more {
         pages.pop();
@@ -454,18 +449,15 @@ async fn file_text(
     }))
 }
 
-async fn ensure_active_file(pool: &PgPool, node_id: Uuid) -> Result<(), StatusCode> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1 AND kind = 'file' AND lifecycle_state = 'active')",
-    )
-    .bind(node_id)
+async fn ensure_active_file(pool: &PgPool, node_id: Uuid) -> Result<(), ApiError> {
+    let exists: bool = sqlx::query_scalar!("SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1 AND kind = 'file' AND lifecycle_state = 'active') AS \"exists!\"", node_id)
     .fetch_one(pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal_with(error, ROUTE, node_id, INTERNAL))?;
     if exists {
         Ok(())
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err(ApiError::NotFound(NOT_FOUND))
     }
 }
 
@@ -559,9 +551,9 @@ async fn try_serve_original(
             format!("bytes {}-{}/{}", range.start, range.end, total),
         );
     }
-    Ok(response
-        .body(body)
-        .unwrap_or_else(|_| status_response(StatusCode::INTERNAL_SERVER_ERROR)))
+    Ok(response.body(body).unwrap_or_else(|error| {
+        ApiError::internal_with(error, ROUTE, node_id, INTERNAL).into_response()
+    }))
 }
 
 /// Types the browser may render inline in Strife's own origin.
@@ -666,18 +658,15 @@ pub(crate) fn safe_filename(name: &str) -> String {
 }
 
 pub(crate) fn range_not_satisfiable(total: u64) -> Response {
-    Response::builder()
-        .status(StatusCode::RANGE_NOT_SATISFIABLE)
-        .header(header::CONTENT_RANGE, format!("bytes */{total}"))
-        .body(Body::empty())
-        .unwrap_or_else(|_| status_response(StatusCode::INTERNAL_SERVER_ERROR))
+    ApiError::RangeNotSatisfiable(total).into_response()
 }
 
 pub(crate) fn status_response(status: StatusCode) -> Response {
-    Response::builder()
-        .status(status)
-        .body(Body::empty())
-        .unwrap_or_default()
+    match status {
+        StatusCode::NOT_FOUND => ApiError::NotFound(NOT_FOUND),
+        _ => ApiError::Internal(INTERNAL),
+    }
+    .into_response()
 }
 
 #[cfg(test)]

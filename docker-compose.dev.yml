@@ -1,5 +1,10 @@
 name: strife-dev
 
+# The API normally runs on the host in development; keep its explicit Compose
+# runtime default beside the services it connects to.
+x-api-runtime-environment:
+  IMPORT_WATCH_ROOT: ${IMPORT_WATCH_ROOT:-./.data/import}
+
 services:
   postgres:
     image: postgres:17.10-alpine3.24@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193

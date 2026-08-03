@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(SUM(fo.byte_size), 0)::BIGINT AS \"bytes!\"\n        FROM file_objects AS fo\n        JOIN nodes AS n ON n.id = fo.node_id\n        WHERE fo.upload_state = 'finalized'\n          AND n.lifecycle_state = 'active'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "95c7b62f1c26fa7948b877c6b3ab5dc9a5aaa9204a63dc6db416852137d1be01"
+}

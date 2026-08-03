@@ -51,6 +51,7 @@ async fn json_request(
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_events() {
     let Some(pool) = test_pool().await else {
         return;
@@ -117,7 +118,44 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
     assert_eq!(resume_status, StatusCode::OK);
     assert_eq!(resumed["state"], "running");
 
+    let (metrics_status, metrics) = json_request(
+        app.clone(),
+        "GET",
+        &format!("/api/backfills/{id}/metrics"),
+        None,
+    )
+    .await;
+    assert_eq!(metrics_status, StatusCode::OK);
+    assert_eq!(metrics["pending"], 0);
+    assert_eq!(metrics["running"], 0);
+    assert_eq!(metrics["remaining"], 700_000);
+    assert!(metrics["throughput_per_hour"].is_null());
+
+    let canary = json!({
+        "stage": 100,
+        "processed": 100,
+        "failed": 2,
+        "duration_seconds": 3600.0,
+        "p50_seconds": 21.0,
+        "p95_seconds": 42.0,
+        "peak_cpu_percent": 88.0,
+        "peak_memory_bytes": 536_870_912,
+        "peak_temperature_c": 71.0,
+        "peak_io_wait_percent": 4.0,
+        "database_growth_bytes": 1_048_576,
+        "approved": true
+    });
+    let (running_status, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-results"),
+        Some(canary.clone()),
+    )
+    .await;
+    assert_eq!(running_status, StatusCode::CONFLICT);
+
     let response = app
+        .clone()
         .oneshot(
             Request::get(format!("/api/backfills/events?campaign_id={id}"))
                 .header("last-event-id", "0")
@@ -134,6 +172,35 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
         .expect("SSE bytes");
     assert!(String::from_utf8_lossy(&chunk).contains("event: campaign"));
     drop(stream);
+
+    let (pause_status, paused) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/actions"),
+        Some(json!({"action": "pause", "reason": "canary drained"})),
+    )
+    .await;
+    assert_eq!(pause_status, StatusCode::OK);
+    assert_eq!(paused["state"], "paused");
+    let (record_status, recorded) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-results"),
+        Some(canary),
+    )
+    .await;
+    assert_eq!(record_status, StatusCode::CREATED);
+    assert_eq!(recorded["details"]["stage"], 100);
+    assert_eq!(recorded["details"]["throughput_per_hour"], 100.0);
+    let (results_status, results) = json_request(
+        app,
+        "GET",
+        &format!("/api/backfills/{id}/canary-results"),
+        None,
+    )
+    .await;
+    assert_eq!(results_status, StatusCode::OK);
+    assert_eq!(results.as_array().expect("canary results").len(), 1);
 
     sqlx::query("DELETE FROM backfill_campaigns WHERE id = $1")
         .bind(Uuid::parse_str(id).expect("UUID"))

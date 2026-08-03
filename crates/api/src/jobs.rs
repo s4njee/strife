@@ -60,16 +60,17 @@ async fn list_or_count(
         .split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(str::to_owned)
         .collect::<Vec<_>>();
 
-    let count: i64 = sqlx::query_scalar(
-        r"
-        SELECT COUNT(*)
+    let count: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*) AS "count!"
         FROM jobs
         WHERE state::text = ANY($1)
-        ",
+        "#,
+        &states
     )
-    .bind(&states)
     .fetch_one(&pool)
     .await
     .map_err(|error| ApiError::internal(error, "/api/jobs", "job count"))?;

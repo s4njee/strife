@@ -38,44 +38,44 @@ async fn usage(State(state): State<StorageState>) -> Result<Json<StorageUsageRes
         .storage
         .disk_usage()
         .await
-        .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
+        .map_err(|error| ApiError::internal(error, "/api/storage/usage", "disk usage"))?;
 
-    let originals_bytes: i64 = sqlx::query_scalar(
-        r"
-        SELECT COALESCE(SUM(fo.byte_size), 0)::BIGINT
+    let originals_bytes: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COALESCE(SUM(fo.byte_size), 0)::BIGINT AS "bytes!"
         FROM file_objects AS fo
         JOIN nodes AS n ON n.id = fo.node_id
         WHERE fo.upload_state = 'finalized'
           AND n.lifecycle_state = 'active'
-        ",
+        "#,
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
+    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "originals SUM query"))?;
 
-    let trash_bytes: i64 = sqlx::query_scalar(
-        r"
-        SELECT COALESCE(SUM(fo.byte_size), 0)::BIGINT
+    let trash_bytes: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COALESCE(SUM(fo.byte_size), 0)::BIGINT AS "bytes!"
         FROM file_objects AS fo
         JOIN nodes AS n ON n.id = fo.node_id
         WHERE fo.upload_state = 'finalized'
           AND n.lifecycle_state = 'trashed'
-        ",
+        "#,
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
+    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "trash SUM query"))?;
 
-    let artifacts_bytes: i64 = sqlx::query_scalar(
-        r"
-        SELECT COALESCE(SUM(byte_size), 0)::BIGINT
+    let artifacts_bytes: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COALESCE(SUM(byte_size), 0)::BIGINT AS "bytes!"
         FROM derived_artifacts
         WHERE state = 'ready'
-        ",
+        "#,
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "usage"))?;
+    .map_err(|error| ApiError::internal(error, "/api/storage/usage", "artifacts SUM query"))?;
 
     #[allow(clippy::cast_precision_loss)]
     let usage_percent = if disk.total_bytes == 0 {

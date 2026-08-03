@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::internal_error;
+use crate::error::ApiError;
+
+const ROUTE: &str = "/api/ocr";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OcrCountsResponse {
@@ -85,13 +87,11 @@ pub fn router(pool: PgPool) -> Router {
 /// exists so an operator can review the candidate set and its size distribution
 /// before creating a campaign, and so the campaign's frozen `snapshot_before`
 /// and `candidate_count` come from a reviewed report rather than a guess.
-async fn preflight(
-    State(pool): State<PgPool>,
-) -> Result<Json<OcrPreflightResponse>, axum::http::StatusCode> {
+async fn preflight(State(pool): State<PgPool>) -> Result<Json<OcrPreflightResponse>, ApiError> {
     let snapshot_before = chrono::Utc::now();
     let engine = strife_db::get_ocr_engine_state(&pool)
         .await
-        .map_err(internal_error)?;
+        .map_err(|error| ApiError::internal(error, ROUTE, "preflight"))?;
     let supported: Vec<String> = strife_media::supported_ocr_mimes()
         .iter()
         .map(|mime| (*mime).to_owned())
@@ -103,7 +103,7 @@ async fn preflight(
         engine.as_ref().map(|value| value.engine_version.as_str()),
     )
     .await
-    .map_err(internal_error)?;
+    .map_err(|error| ApiError::internal(error, ROUTE, "preflight"))?;
     Ok(Json(OcrPreflightResponse {
         snapshot_before: report.snapshot_before,
         engine_version: report.engine_version,
@@ -129,10 +129,10 @@ async fn preflight(
     }))
 }
 
-async fn status(
-    State(pool): State<PgPool>,
-) -> Result<Json<OcrStatusResponse>, axum::http::StatusCode> {
-    Ok(Json(load_status(&pool).await.map_err(internal_error)?))
+async fn status(State(pool): State<PgPool>) -> Result<Json<OcrStatusResponse>, ApiError> {
+    Ok(Json(load_status(&pool).await.map_err(|error| {
+        ApiError::internal(error, ROUTE, "status")
+    })?))
 }
 
 async fn load_status(pool: &PgPool) -> Result<OcrStatusResponse, sqlx::Error> {
@@ -165,7 +165,7 @@ async fn events(
         .and_then(|value| value.parse::<i64>().ok());
     let cursor = match header_cursor {
         Some(cursor) => cursor,
-        None => sqlx::query_scalar::<_, i64>("SELECT COALESCE(max(id), 0) FROM ocr_events")
+        None => sqlx::query_scalar!("SELECT COALESCE(max(id), 0) AS \"cursor!\" FROM ocr_events")
             .fetch_one(&pool)
             .await
             .unwrap_or_default(),

@@ -34,7 +34,7 @@ These questions are intentionally outside v1. They are not commitments: revisit 
 
 ## Watched-Folder Import
 
-- Should Strife support multiple configurable source-to-destination mappings instead of the fixed `/mnt/ext/watch` to root mapping?
+- Should Strife extend `IMPORT_WATCH_ROOT` into multiple configurable source-to-destination mappings instead of the current single source-to-root mapping?
 - Should imports run on a schedule or continuous watcher instead of only through an explicit manual scan?
 - If automatic scanning is added, what quiet period or consecutive-scan threshold proves that a producer has finished writing a file?
 - Should successful imports optionally copy, archive, or retain their source instead of always moving it into managed storage?
@@ -138,7 +138,7 @@ These questions are intentionally outside v1. They are not commitments: revisit 
 - Approximately how many files should a library contain before performance is considered unacceptable?
 - Should accessibility formally target WCAG 2.2 AA?
 - Which developer and deployment platforms need official support?
-- What release, migration, rollback, and compatibility policy should production packaging follow?
+- Should the shipped Compose/systemd deployment gain published registry images or native OS packages?
 
 ## Future Integrations and Product Directions
 

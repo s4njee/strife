@@ -1,0 +1,143 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, stream_index, stream_type::text AS \"stream_type!\", codec, width, height,\n            duration_ms, bitrate_bps, frame_rate, language, created_at\n        FROM media_streams WHERE node_id = $1 ORDER BY stream_index\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "stream_index",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "stream_index"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "codec",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "codec"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "width",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "width"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "height",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "height"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "duration_ms",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "duration_ms"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "bitrate_bps",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "bitrate_bps"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "frame_rate",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "frame_rate"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "language",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "language"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "media_streams",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "eb43b6720de0d9c07ce26d072661071545be7d9952c348ca3119be13845ea46f"
+}

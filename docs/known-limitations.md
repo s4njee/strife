@@ -14,7 +14,7 @@ User-facing summary of what Strife v1 does **not** include. Deferred work lives 
 - No content deduplication (checksums are for integrity only)
 - Duplicate sibling names are rejected (no auto-rename)
 - No symbolic links or special-file imports
-- Single fixed import inbox (`/mnt/ext/watch` → root); manual scan only
+- Single configurable import inbox (`IMPORT_WATCH_ROOT` → root); manual scan only
 - Trash retention is 30 days; permanent delete is irreversible
 
 ## Media

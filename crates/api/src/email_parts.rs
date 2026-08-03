@@ -34,6 +34,9 @@ use crate::files::{
     is_native_preview_mime, parse_range, range_not_satisfiable, safe_filename, status_response,
 };
 
+const ROUTE: &str = "/api/email/messages/{node_id}/parts/{part_path}";
+const INTERNAL: &str = "The attachment request could not be completed";
+
 #[derive(Clone)]
 struct PartState {
     pool: PgPool,
@@ -58,6 +61,7 @@ pub fn router(pool: PgPool, storage: Arc<dyn StorageBackend>) -> Router {
         .with_state(PartState { pool, storage })
 }
 
+#[allow(clippy::too_many_lines)]
 async fn attachment_part(
     State(state): State<PartState>,
     Path((node_id, part_path)): Path<(Uuid, String)>,
@@ -70,22 +74,23 @@ async fn attachment_part(
         Ok(Some(_)) => {}
         Ok(None) => return status_response(StatusCode::NOT_FOUND),
         Err(error) => {
-            error!(%error, %node_id, "failed to load message for attachment");
+            error!(%error, route = ROUTE, %node_id, "failed to load message for attachment");
             return status_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
 
     // Scoped by node_id: this is the same-message authorization. There is no
     // code path that reaches an artifact of another message from here.
-    let artifact =
-        match strife_db::get_email_attachment_artifact(&state.pool, node_id, &part_path).await {
-            Ok(Some(artifact)) => artifact,
-            Ok(None) => return status_response(StatusCode::NOT_FOUND),
-            Err(error) => {
-                error!(%error, %node_id, %part_path, "failed to load attachment artifact");
-                return status_response(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-        };
+    let artifact = match strife_db::get_email_attachment_artifact(&state.pool, node_id, &part_path)
+        .await
+    {
+        Ok(Some(artifact)) => artifact,
+        Ok(None) => return status_response(StatusCode::NOT_FOUND),
+        Err(error) => {
+            error!(%error, route = ROUTE, %node_id, %part_path, "failed to load attachment artifact");
+            return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     if artifact.state != EmailArtifactState::Ready {
         return rematerialize(&state, node_id, artifact.state).await;
@@ -93,9 +98,12 @@ async fn attachment_part(
     let Some(storage_key) = artifact.storage_key.as_deref() else {
         return rematerialize(&state, node_id, artifact.state).await;
     };
-    let Ok(object_id) = Uuid::parse_str(storage_key) else {
-        error!(%node_id, %part_path, "attachment artifact has an unusable storage key");
-        return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+    let object_id = match Uuid::parse_str(storage_key) {
+        Ok(object_id) => object_id,
+        Err(error) => {
+            error!(%error, route = ROUTE, %node_id, %part_path, "attachment artifact has an unusable storage key");
+            return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
 
     // The manifest supplies the display filename. It is sender-controlled, so it
@@ -106,7 +114,7 @@ async fn attachment_part(
             .find(|attachment| attachment.part_path == part_path)
             .and_then(|attachment| attachment.filename),
         Err(error) => {
-            error!(%error, %node_id, "failed to load attachment manifest");
+            error!(%error, route = ROUTE, %node_id, "failed to load attachment manifest");
             None
         }
     };
@@ -115,8 +123,12 @@ async fn attachment_part(
     let media_type = artifact.media_type.as_str();
     // An inline request is a request, not an instruction.
     let inline = query.inline && is_native_preview_mime(media_type);
-    let Ok(total) = u64::try_from(artifact.byte_size) else {
-        return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+    let total = match u64::try_from(artifact.byte_size) {
+        Ok(total) => total,
+        Err(error) => {
+            error!(%error, route = ROUTE, %node_id, %part_path, "attachment artifact has a negative byte size");
+            return status_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
 
     let requested_range = match headers.get(header::RANGE) {
@@ -173,7 +185,9 @@ async fn attachment_part(
     }
     response
         .body(Body::from_stream(ReaderStream::new(reader)))
-        .unwrap_or_else(|_| status_response(StatusCode::INTERNAL_SERVER_ERROR))
+        .unwrap_or_else(|error| {
+            crate::error::ApiError::internal_with(error, ROUTE, node_id, INTERNAL).into_response()
+        })
 }
 
 /// Reports an artifact that is not servable and schedules a bounded rebuild.
@@ -196,7 +210,7 @@ async fn rematerialize(state: &PartState, node_id: Uuid, current: EmailArtifactS
         if let Err(error) =
             strife_db::enqueue_job(&state.pool, JobType::EmailExtraction, node_id, 0).await
         {
-            error!(%error, %node_id, "failed to enqueue attachment rematerialization");
+            error!(%error, route = ROUTE, %node_id, "failed to enqueue attachment rematerialization");
         }
     }
     (

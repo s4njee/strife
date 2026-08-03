@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(max(id), 0) AS \"cursor!\" FROM ocr_events",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cursor!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "800d3c8777168be93a19a361c04d7c5065dc6fce72c76305767d03ca51e6c0b7"
+}
