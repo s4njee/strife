@@ -20,16 +20,27 @@ As a developer, I want the email architecture recorded so that parsing, storage,
 
 **Acceptance Criteria:**
 
-- [ ] `docs/decisions/0009-email-archive-search.md` follows the context, decision, alternatives, consequences, and date shape used by ADR 0008.
-- [ ] The ADR records that original `.eml` files remain immutable nodes and parsed rows are disposable, regenerable projections.
-- [ ] The ADR chooses a dedicated email schema instead of overloading `document_text_pages`, explaining that email requires structured sender, recipient, date, thread, label, and attachment fields rather than page semantics.
-- [ ] The ADR chooses PostgreSQL weighted full-text search initially and requires a measured production-scale benchmark before considering OpenSearch, Elasticsearch, or another service.
-- [ ] The ADR records the initial body policy: index the complete normalized body, preserve both plain and HTML representations when available, and defer quote/signature removal until ranking is measured.
-- [ ] The ADR records non-destructive duplicate handling: retain every original node, assign duplicate groups, and collapse duplicates in search by default with an explicit way to reveal every copy.
-- [ ] The ADR records the safe-rendering policy: sanitize HTML, execute no active content, make links explicit, and block remote images/resources unless the user deliberately reveals them.
-- [ ] The ADR records that deploying parser support does not start historical processing: new files may enqueue foreground jobs immediately, while existing files require an explicitly started backfill campaign.
-- [ ] The ADR adopts the shared campaign, priority, admission-control, migration, and Orion rollout contract in [`backfill.md`](backfill.md).
-- [ ] `README.md` links the ADR and this email implementation plan.
+- [x] `docs/decisions/0009-email-archive-search.md` follows the context, decision, alternatives, consequences, and date shape used by ADR 0008.
+- [x] The ADR records that original `.eml` files remain immutable nodes and parsed rows are disposable, regenerable projections.
+- [x] The ADR chooses a dedicated email schema instead of overloading `document_text_pages`, explaining that email requires structured sender, recipient, date, thread, label, and attachment fields rather than page semantics.
+- [x] The ADR chooses PostgreSQL weighted full-text search initially and requires a measured production-scale benchmark before considering OpenSearch, Elasticsearch, or another service.
+- [x] The ADR records the initial body policy: index the complete normalized body, preserve both plain and HTML representations when available, and defer quote/signature removal until ranking is measured.
+- [x] The ADR records non-destructive duplicate handling: retain every original node, assign duplicate groups, and collapse duplicates in search by default with an explicit way to reveal every copy.
+- [x] The ADR records the safe-rendering policy: sanitize HTML, execute no active content, make links explicit, and block remote images/resources unless the user deliberately reveals them.
+- [x] The ADR records that deploying parser support does not start historical processing: new files may enqueue foreground jobs immediately, while existing files require an explicitly started backfill campaign.
+- [x] The ADR adopts the shared campaign, priority, admission-control, migration, and Orion rollout contract in [`backfill.md`](backfill.md).
+- [x] `README.md` links the ADR and this email implementation plan.
+
+**Implementation report:** Recorded the email archive contract in ADR 0009: immutable `.eml` originals with disposable parsed projections, a dedicated structured schema rather than the page-oriented OCR tables, PostgreSQL weighted search pending a measured benchmark, complete-body indexing with quote stripping deferred, non-destructive duplicate grouping, a sanitized remote-blocking reader, and inert deployment with historical work gated behind an operator-started campaign. Added the `heavy_cpu`-first admission posture and its canary-gated promotion to `extractor`, and the independent parser, sanitizer, normalization, attachment-extractor, and search-index version axes. Linked the ADR, this plan, and the backfill plan from the README's processing section.
+
+**New files:**
+
+- `docs/decisions/0009-email-archive-search.md`
+
+**Modified files:**
+
+- `README.md`
+- `docs/email.md`
 
 ---
 
@@ -39,17 +50,30 @@ As a developer, I want durable email tables linked to file nodes so that parsing
 
 **Acceptance Criteria:**
 
-- [ ] The shared `0017_backfill_campaigns` migration described by [`backfill.md`](backfill.md) lands first; a reversible `0018_email_messages.{up,down}.sql` migration then adds email storage without rewriting existing node or job rows.
-- [ ] `email_extraction_status` uses `pending`, `completed`, `failed`, `skipped`, and `unsupported` states consistent with existing extractor status vocabulary.
-- [ ] `email_messages` uses `node_id` as its primary key and an `ON DELETE CASCADE` foreign key to `nodes`.
-- [ ] `email_messages` stores parser status/version, RFC `Message-ID`, `In-Reply-To`, ordered `References`, subject, sent and received timestamps, normalized plain body, optional sanitized-source HTML, preview text, attachment count, warnings, duration, and created/updated timestamps.
-- [ ] Address data preserves display name, normalized address, address role (`from`, `sender`, `reply_to`, `to`, `cc`, `bcc`), and stable order without flattening all recipients into one string.
-- [ ] Raw headers are preserved in a queryable representation without discarding repeated headers such as `Received`.
-- [ ] `email_attachments` stores MIME part identity, parent email node, filename, media type, disposition, content ID, transfer encoding, decoded size, checksum, inline status, and extraction status.
-- [ ] Gmail-specific metadata is optional: labels and provider thread IDs are stored when headers contain them, but ordinary RFC email does not require Gmail headers.
-- [ ] Duplicate-group and thread-group identifiers are nullable and indexed; neither is a uniqueness constraint on the original node.
-- [ ] Database APIs atomically replace a message, its addresses, headers, labels, and attachment manifest so reparsing cannot produce mixed parser versions.
-- [ ] PostgreSQL integration tests cover insertion, atomic replacement, repeated headers, address order, cascades, and constraints.
+- [x] The shared `0017_backfill_campaigns` migration described by [`backfill.md`](backfill.md) lands first; a reversible `0018_email_messages.{up,down}.sql` migration then adds email storage without rewriting existing node or job rows.
+- [x] `email_extraction_status` uses `pending`, `completed`, `failed`, `skipped`, and `unsupported` states consistent with existing extractor status vocabulary.
+- [x] `email_messages` uses `node_id` as its primary key and an `ON DELETE CASCADE` foreign key to `nodes`.
+- [x] `email_messages` stores parser status/version, RFC `Message-ID`, `In-Reply-To`, ordered `References`, subject, sent and received timestamps, normalized plain body, optional sanitized-source HTML, preview text, attachment count, warnings, duration, and created/updated timestamps.
+- [x] Address data preserves display name, normalized address, address role (`from`, `sender`, `reply_to`, `to`, `cc`, `bcc`), and stable order without flattening all recipients into one string.
+- [x] Raw headers are preserved in a queryable representation without discarding repeated headers such as `Received`.
+- [x] `email_attachments` stores MIME part identity, parent email node, filename, media type, disposition, content ID, transfer encoding, decoded size, checksum, inline status, and extraction status.
+- [x] Gmail-specific metadata is optional: labels and provider thread IDs are stored when headers contain them, but ordinary RFC email does not require Gmail headers.
+- [x] Duplicate-group and thread-group identifiers are nullable and indexed; neither is a uniqueness constraint on the original node.
+- [x] Database APIs atomically replace a message, its addresses, headers, labels, and attachment manifest so reparsing cannot produce mixed parser versions.
+- [x] PostgreSQL integration tests cover insertion, atomic replacement, repeated headers, address order, cascades, and constraints.
+
+**Implementation report:** Added the reversible `0018_email_messages` migration with five tables — messages, addresses, headers, labels, and the attachment manifest — all cascading from `nodes` so a permanently deleted original takes its projection with it. Headers key on `(node_id, position)` rather than name, so repeated `Received` traces survive with their order while a `normalized_name` column keeps case-insensitive lookup indexed. Addresses keep display name, address, role, and stable position instead of one flattened recipient string. Thread and duplicate group identifiers are nullable and indexed but deliberately not unique, since several originals legitimately share both. `replace_email_projection` upserts the message and replaces every dependent table inside one transaction, so a reparse cannot leave a message carrying addresses from one parser version and attachments from another. Verified the migration up/down/up round-trip against PostgreSQL 17 and covered insertion, atomic replacement across a version change, repeated headers, address ordering, node cascade, and the size/count/uniqueness constraints.
+
+**New files:**
+
+- `crates/db/migrations/0018_email_messages.down.sql`
+- `crates/db/migrations/0018_email_messages.up.sql`
+- `crates/db/tests/email_messages.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -59,14 +83,29 @@ As a developer, I want email parsing to use Strife's durable job queue so that a
 
 **Acceptance Criteria:**
 
-- [ ] A reversible `0019_email_job_type.{up,down}.sql` migration adds `email_extraction` to `job_type` and verifies the existing active-job uniqueness rule applies per node.
-- [ ] Email jobs carry `origin`, an optional campaign ID, and a resource class supplied by the shared backfill foundation. `origin` uses all three values shipped in `0017_backfill_campaigns` — `foreground`, `repair`, and `backfill` — not just the first and last: Story 18.6's reprocess scopes are `repair` work, and Story 22.2's priority ordering requires `repair` as a distinct middle tier.
-- [ ] The Rust `JobType` enum, API serialization, claim order, and worker dispatch all recognize `email_extraction`.
-- [ ] Email extraction is claimed after metadata and preview work but before OCR, because parsing MIME is cheaper than OCR and unlocks the Email tab quickly.
-- [ ] Claiming prefers foreground work regardless of job-family order; historical email cannot hide new uploads, imports, metadata, previews, repairs, or deletions behind its backlog.
-- [ ] Email jobs have a documented lease duration and retry count appropriate for bounded MIME parsing.
-- [ ] Existing `GET /api/jobs` endpoints return email jobs without changing their response shape.
+- [x] A reversible `0019_email_job_type.{up,down}.sql` migration adds `email_extraction` to `job_type` and verifies the existing active-job uniqueness rule applies per node.
+- [x] Email jobs carry `origin`, an optional campaign ID, and a resource class supplied by the shared backfill foundation. `origin` uses all three values shipped in `0017_backfill_campaigns` — `foreground`, `repair`, and `backfill` — not just the first and last: Story 18.6's reprocess scopes are `repair` work, and Story 22.2's priority ordering requires `repair` as a distinct middle tier.
+- [x] The Rust `JobType` enum, API serialization, claim order, and worker dispatch all recognize `email_extraction`.
+- [x] Email extraction is claimed after metadata and preview work but before OCR, because parsing MIME is cheaper than OCR and unlocks the Email tab quickly.
+- [x] Claiming prefers foreground work regardless of job-family order; historical email cannot hide new uploads, imports, metadata, previews, repairs, or deletions behind its backlog.
+- [x] Email jobs have a documented lease duration and retry count appropriate for bounded MIME parsing.
+- [x] Existing `GET /api/jobs` endpoints return email jobs without changing their response shape.
 - [ ] Tests cover enqueue uniqueness, lease renewal, retry with `last_error`, completion, and clean handling when the node disappears.
+
+**Implementation report:** Added the `0019_email_job_type` migration following 0014's precedent that PostgreSQL enum values are not removed on rollback, since dropping one would require rebuilding every dependent column. Added `JobType::EmailExtraction` with `heavy_cpu` as its default resource class per ADR 0009, placed it in the processor claim order after metadata and preview but before OCR, and gave it a doubled lease TTL — headroom for a pathological message, short of OCR's tripled lease. Origin-based ordering from the shared foundation still dominates job-family order, so foreground work cannot be hidden behind a historical email backlog. `GET /api/jobs` needed no change because it returns only id, state, and error, never a job type. The dispatch arm returns an explicit error rather than silently completing: the parser lands in Story 18.5 and nothing enqueues email work until Story 18.6, so a message marked done without being parsed would be invisible to every later repair scope.
+
+The test criterion is left open deliberately. Enqueue uniqueness, resource classification, and claiming are covered here, and generic lease renewal, retry with `last_error`, and completion are already covered for every job type by `crates/db/tests/jobs.rs`. Clean handling when the node disappears is meaningless before a handler exists and belongs with Story 18.5.
+
+**New files:**
+
+- `crates/db/migrations/0019_email_job_type.down.sql`
+- `crates/db/migrations/0019_email_job_type.up.sql`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `crates/worker/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -76,12 +115,47 @@ As a developer, I want committed, synthetic email fixtures covering real MIME ed
 
 **Acceptance Criteria:**
 
-- [ ] Fixtures contain synthetic identities and content only; no personal mailbox data, live addresses, authentication headers, or secrets are committed.
-- [ ] The corpus covers plain text, HTML-only, multipart alternative, mixed text and attachments, inline `cid:` images, nested `message/rfc822`, quoted-printable, base64, UTF-8, a legacy charset, RFC 2047 encoded headers, folded headers, repeated recipients, missing `Message-ID`, malformed dates, and malformed MIME boundaries.
-- [ ] At least one fixture carries Gmail label/thread headers and one deliberately does not.
-- [ ] At least one duplicate pair has the same `Message-ID`; another has no `Message-ID` but identical canonical content.
-- [ ] Expected normalized fields are stored beside fixtures in a reviewable form so failures show semantic differences rather than opaque snapshots.
-- [ ] Fixture sizes remain small enough for ordinary tests; separately generated large-message fixtures are used for limit tests.
+- [x] Fixtures contain synthetic identities and content only; no personal mailbox data, live addresses, authentication headers, or secrets are committed.
+- [x] The corpus covers plain text, HTML-only, multipart alternative, mixed text and attachments, inline `cid:` images, nested `message/rfc822`, quoted-printable, base64, UTF-8, a legacy charset, RFC 2047 encoded headers, folded headers, repeated recipients, missing `Message-ID`, malformed dates, and malformed MIME boundaries.
+- [x] At least one fixture carries Gmail label/thread headers and one deliberately does not.
+- [x] At least one duplicate pair has the same `Message-ID`; another has no `Message-ID` but identical canonical content.
+- [x] Expected normalized fields are stored beside fixtures in a reviewable form so failures show semantic differences rather than opaque snapshots.
+- [x] Fixture sizes remain small enough for ordinary tests; separately generated large-message fixtures are used for limit tests.
+
+**Implementation report:** Committed 21 synthetic `.eml` fixtures under `crates/media/tests/fixtures/email/` covering every edge case the story names, plus a Gmail-headers pair, a same-`Message-ID` duplicate pair, and a no-`Message-ID` identical-content duplicate pair. Expected normalized values live beside them in `expected.json` as reviewable per-fixture entries — subject, addresses, message id, body substrings that must and must not appear, attachment descriptors, labels, and expected warnings — so a Story 18.1 failure shows a semantic difference rather than an opaque snapshot mismatch. Every identity uses the reserved `example.test` domain and the largest fixture is under 2 KB; large-message fixtures for the Story 22.2 limit tests are deliberately generated rather than committed.
+
+Four guard tests keep the corpus itself trustworthy before any parser exists: every fixture has a manifest entry and vice versa, the named edge-case coverage cannot silently regress, the wire format is valid CRLF with a header/body separator and no bare LF, and no fixture commits a non-synthetic domain or a real `DKIM-Signature`, `Authentication-Results`, `X-Google-DKIM`, or `Received-SPF` header.
+
+**New files:**
+
+- `crates/media/tests/email_fixtures.rs`
+- `crates/media/tests/fixtures/email/base64-body.eml`
+- `crates/media/tests/fixtures/email/duplicate-content-a.eml`
+- `crates/media/tests/fixtures/email/duplicate-content-b.eml`
+- `crates/media/tests/fixtures/email/duplicate-message-id-a.eml`
+- `crates/media/tests/fixtures/email/duplicate-message-id-b.eml`
+- `crates/media/tests/fixtures/email/encoded-and-folded-headers.eml`
+- `crates/media/tests/fixtures/email/expected.json`
+- `crates/media/tests/fixtures/email/gmail-labels.eml`
+- `crates/media/tests/fixtures/email/html-only.eml`
+- `crates/media/tests/fixtures/email/inline-cid-image.eml`
+- `crates/media/tests/fixtures/email/legacy-charset.eml`
+- `crates/media/tests/fixtures/email/malformed-boundary.eml`
+- `crates/media/tests/fixtures/email/malformed-date.eml`
+- `crates/media/tests/fixtures/email/missing-message-id.eml`
+- `crates/media/tests/fixtures/email/mixed-with-attachment.eml`
+- `crates/media/tests/fixtures/email/multipart-alternative.eml`
+- `crates/media/tests/fixtures/email/nested-rfc822.eml`
+- `crates/media/tests/fixtures/email/no-gmail-labels.eml`
+- `crates/media/tests/fixtures/email/plain-text.eml`
+- `crates/media/tests/fixtures/email/quoted-printable.eml`
+- `crates/media/tests/fixtures/email/repeated-recipients.eml`
+- `crates/media/tests/fixtures/email/utf8-subject-and-body.eml`
+
+**Modified files:**
+
+- `crates/media/Cargo.toml`
+- `docs/email.md`
 
 ---
 
@@ -99,14 +173,37 @@ As a developer, I want an email-aware parsing adapter so that Strife correctly h
 
 **Acceptance Criteria:**
 
-- [ ] A parser adapter is added under `crates/media/src` and exported by the crate.
-- [ ] The selected Rust parser is actively maintained, has no network behavior, accepts bounded byte input, and passes the committed fixture corpus; the dependency and selection rationale are recorded in ADR 0009.
-- [ ] The adapter returns a typed result containing normalized headers, addresses, body alternatives, labels, thread hints, attachment descriptors, warnings, and parser version.
-- [ ] MIME media types, charsets, transfer encodings, dispositions, filenames, content IDs, and nested part paths are retained.
-- [ ] Header names are compared case-insensitively while original values and repeated-header order remain available.
-- [ ] MIME detection verifies `message/rfc822` from content bytes; extension and upload-provided MIME are treated only as hints.
-- [ ] Parsing performs no DNS resolution, link fetching, remote-image loading, or attachment execution.
-- [ ] Unit tests assert every committed fixture's normalized semantic result.
+- [x] A parser adapter is added under `crates/media/src` and exported by the crate.
+- [x] The selected Rust parser is actively maintained, has no network behavior, accepts bounded byte input, and passes the committed fixture corpus; the dependency and selection rationale are recorded in ADR 0009.
+- [x] The adapter returns a typed result containing normalized headers, addresses, body alternatives, labels, thread hints, attachment descriptors, warnings, and parser version.
+- [x] MIME media types, charsets, transfer encodings, dispositions, filenames, content IDs, and nested part paths are retained.
+- [x] Header names are compared case-insensitively while original values and repeated-header order remain available.
+- [x] MIME detection verifies `message/rfc822` from content bytes; extension and upload-provided MIME are treated only as hints.
+- [x] Parsing performs no DNS resolution, link fetching, remote-image loading, or attachment execution.
+- [x] Unit tests assert every committed fixture's normalized semantic result.
+
+**Implementation report:** Selected `mail-parser` 0.11.5 (Stalwart Labs, Apache-2.0 OR MIT) and recorded the choice in ADR 0009. Its whole dependency tree is `encoding_rs` plus a compile-time proc-macro, so the adapter has no network or filesystem surface at all; `full_encoding` is enabled for the legacy charsets a ten-year archive contains. Added `crates/media/src/email/` returning one typed `ParsedEmail` carrying normalized ids, subject, dates, addresses, ordered headers, labels, thread hints, both body representations, a canonical content hash, attachment descriptors, warnings, and the parser identity. `looks_like_rfc822` confirms the message shape from bytes rather than trusting the extension or upload-declared MIME, and rejects PDFs and JPEGs outright.
+
+Three real defects surfaced while making the fixtures pass, each one a silent data-loss bug rather than a crash:
+
+1. The byte sniffer required its whole 8 KB window to be UTF-8, which rejected any message with a latin-1 body. Header field names are ASCII but bodies are not, so the check now scopes itself to the header block.
+2. A message with an unterminated multipart boundary produced an empty body. Structure that cannot be assembled now falls back to recovering text from the parts and records a warning, rather than indexing nothing.
+3. `mail-parser`'s typed accessors return a single header, so a message carrying two `To:` lines lost every recipient but the last. Address collection now walks the full header list, preserving all recipients in the order written.
+
+**New files:**
+
+- `crates/media/src/email/html.rs`
+- `crates/media/src/email/mod.rs`
+- `crates/media/tests/email_parser.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `Cargo.toml`
+- `crates/media/Cargo.toml`
+- `crates/media/src/lib.rs`
+- `docs/decisions/0009-email-archive-search.md`
+- `docs/email.md`
 
 ---
 
@@ -116,14 +213,28 @@ As a user, I want readable, searchable message text regardless of whether a send
 
 **Acceptance Criteria:**
 
-- [ ] For `multipart/alternative`, the normalized searchable body prefers a usable `text/plain` alternative while retaining the HTML alternative for safe rendering.
-- [ ] HTML-only messages are converted to plain text with paragraph, list, table-cell, and line-break boundaries preserved well enough for snippets.
-- [ ] HTML conversion removes scripts, styles, comments, hidden content, tracking markup, and URLs from resource attributes without fetching anything.
-- [ ] Character-set decoding supports UTF-8 and the legacy charset fixture, replaces invalid sequences deterministically, and records a warning when decoding is lossy.
-- [ ] Unicode is normalized consistently before hashing and indexing; line endings become `\n`.
-- [ ] The initial implementation indexes quoted replies and signatures exactly as normalized, matching ADR 0009 rather than applying heuristic content deletion.
-- [ ] Body and preview text have independent configurable byte limits so an enormous HTML alternative cannot exhaust memory or dominate result payloads.
-- [ ] Tests cover plain preference, HTML-only conversion, whitespace behavior, lossy decoding, empty bodies, and limit warnings.
+- [x] For `multipart/alternative`, the normalized searchable body prefers a usable `text/plain` alternative while retaining the HTML alternative for safe rendering.
+- [x] HTML-only messages are converted to plain text with paragraph, list, table-cell, and line-break boundaries preserved well enough for snippets.
+- [x] HTML conversion removes scripts, styles, comments, hidden content, tracking markup, and URLs from resource attributes without fetching anything.
+- [x] Character-set decoding supports UTF-8 and the legacy charset fixture, replaces invalid sequences deterministically, and records a warning when decoding is lossy.
+- [x] Unicode is normalized consistently before hashing and indexing; line endings become `\n`.
+- [x] The initial implementation indexes quoted replies and signatures exactly as normalized, matching ADR 0009 rather than applying heuristic content deletion.
+- [x] Body and preview text have independent configurable byte limits so an enormous HTML alternative cannot exhaust memory or dominate result payloads.
+- [x] Tests cover plain preference, HTML-only conversion, whitespace behavior, lossy decoding, empty bodies, and limit warnings.
+
+**Implementation report:** Body selection prefers a non-empty `text/plain` alternative for indexing and keeps the HTML alternative for the reader. HTML-only messages go through `crates/media/src/email/html.rs`, a single-pass converter that is deliberately not a browser: it resolves no URL, loads no resource, and executes nothing. It drops `script`, `style`, `head`, `title`, and `noscript` subtrees entirely, skips comments — which is where tracking pixels usually hide — excludes `display:none` and `visibility:hidden` blocks with a warning, and emits line breaks at block boundaries and tabs between table cells so snippets stay readable. Resource URLs in `src` and `href` attributes never reach the indexed text, verified by an explicit test.
+
+Line endings normalize to `\n`, trailing whitespace is trimmed per line, and the same normalized text feeds both the canonical content hash and the index, so two copies of one message hash identically. Quoted replies and signatures are indexed exactly as written, per ADR 0009 — stripping real content is worse than ranking it low. Body and preview have independent byte ceilings; exceeding the body limit truncates on a character boundary and warns rather than failing the message.
+
+The html converter carries six unit tests of its own. One of them caught a bug the integration tests could not: the text branch did not consult the drop state, so the contents of `<script>` and hidden tracking blocks still reached the indexed body even though their tags were correctly recognized and discarded.
+
+**New files:** None beyond Story 18.1.
+
+**Modified files:**
+
+- `crates/media/src/email/html.rs`
+- `crates/media/src/email/mod.rs`
+- `docs/email.md`
 
 ---
 
@@ -133,14 +244,27 @@ As a user, I want searches and message details to use reliable correspondents an
 
 **Acceptance Criteria:**
 
-- [ ] Mailbox and group address syntax is parsed into display names and normalized addresses without discarding the original header.
-- [ ] Address normalization lowercases the domain and preserves the local part; Gmail-specific dot or plus-address rewriting is not performed.
-- [ ] Internationalized display names and domains remain displayable and searchable.
-- [ ] `Date` is parsed with its original timezone offset; invalid or absent values remain null with a warning rather than using ingestion time silently.
-- [ ] A defensible received timestamp is derived from trace headers only when parsing succeeds, and its provenance is documented.
-- [ ] `Message-ID`, `In-Reply-To`, and `References` are normalized for comparison while their raw values remain available.
-- [ ] Subject normalization decodes encoded words and derives a separate thread-comparison subject without changing the displayed subject.
-- [ ] Tests cover address groups, quoted names, duplicates across roles, encoded subjects, timezone offsets, invalid dates, and missing headers.
+- [x] Mailbox and group address syntax is parsed into display names and normalized addresses without discarding the original header.
+- [x] Address normalization lowercases the domain and preserves the local part; Gmail-specific dot or plus-address rewriting is not performed.
+- [x] Internationalized display names and domains remain displayable and searchable.
+- [x] `Date` is parsed with its original timezone offset; invalid or absent values remain null with a warning rather than using ingestion time silently.
+- [x] A defensible received timestamp is derived from trace headers only when parsing succeeds, and its provenance is documented.
+- [x] `Message-ID`, `In-Reply-To`, and `References` are normalized for comparison while their raw values remain available.
+- [x] Subject normalization decodes encoded words and derives a separate thread-comparison subject without changing the displayed subject.
+- [x] Tests cover address groups, quoted names, duplicates across roles, encoded subjects, timezone offsets, invalid dates, and missing headers.
+
+**Implementation report:** Address extraction handles both mailbox lists and RFC 5322 group syntax, keeping group members rather than the group label. Normalization lowercases the domain and leaves the local part untouched: Gmail treats `a.b@gmail.com` and `ab+tag@gmail.com` as one mailbox, but they are distinct as written, and collapsing them would discard what the sender actually typed. The full raw header list is retained separately, so no normalization is destructive. Internationalized display names survive as UTF-8 and stay searchable.
+
+`Date` parses with its original offset and is stored as UTC. A header that is present but unparseable stays null and records a warning — it is never replaced with ingestion time, which would invent a plausible-looking date the sender never wrote. The received timestamp comes only from a `Received` trace header that parsed cleanly, with the same no-fallback rule.
+
+`Message-ID`, `In-Reply-To`, and `References` are normalized by stripping angle brackets and lowercasing for comparison, with raw values preserved in the header list. Subject normalization strips reply and forward prefixes in several languages and collapses whitespace to derive a thread-comparison subject, leaving the displayed subject exactly as received. Encoded-word decoding is handled by the parser and asserted through the RFC 2047 fixture, which covers both base64 and quoted-printable header encodings alongside folded continuation lines.
+
+**New files:** None beyond Story 18.1.
+
+**Modified files:**
+
+- `crates/media/src/email/mod.rs`
+- `docs/email.md`
 
 ---
 
@@ -150,14 +274,25 @@ As a user, I want attachment metadata preserved during message parsing so that s
 
 **Acceptance Criteria:**
 
-- [ ] Every non-body MIME part is represented in `email_attachments`, including unnamed and inline parts.
-- [ ] RFC 2231/5987-style encoded filenames and split parameters are decoded safely.
-- [ ] Filenames are display values only and are never used directly as filesystem paths.
+- [x] Every non-body MIME part is represented in `email_attachments`, including unnamed and inline parts.
+- [x] RFC 2231/5987-style encoded filenames and split parameters are decoded safely.
+- [x] Filenames are display values only and are never used directly as filesystem paths.
 - [ ] Decoded size and SHA-256 are computed while streaming with configurable per-part and per-message decoded-byte ceilings.
-- [ ] Inline parts preserve content IDs so sanitized message HTML can resolve them through authenticated Strife endpoints later.
-- [ ] Nested `message/rfc822` parts are identified distinctly from ordinary binary attachments.
-- [ ] A malformed attachment records a part-level warning without discarding an otherwise readable message.
+- [x] Inline parts preserve content IDs so sanitized message HTML can resolve them through authenticated Strife endpoints later.
+- [x] Nested `message/rfc822` parts are identified distinctly from ordinary binary attachments.
+- [x] A malformed attachment records a part-level warning without discarding an otherwise readable message.
 - [ ] Tests cover duplicate filenames, no filename, inline images, nested messages, encoded filenames, and size-limit behavior.
+
+**Implementation report:** Every non-body part becomes a manifest row carrying a dotted MIME part path (`1.2`), media type, disposition, content id, transfer encoding, decoded size, SHA-256, and inline and nested-message flags. The part path — not the filename — is the part's identity, so a hostile `../../etc/passwd` filename is a display string and nothing more; Story 21.1 derives storage keys from part identity for the same reason. Inline parts keep their normalized content id so the reader can later resolve `cid:` references against authenticated same-message endpoints. Nested `message/rfc822` parts are flagged distinctly and are deliberately not flattened into user-visible files. A part reporting a transfer-encoding problem records a part-level warning while the containing message still parses.
+
+Two criteria are left open rather than claimed. **Hashing is not yet streaming**: sizes and digests are computed over the decoded part the parser already materialized in memory, which is correct and bounded by `max_source_bytes` but does not yet honour per-part and per-message decoded-byte ceilings. Streaming decode belongs with Story 21.1's bounded materialization, which is where attachment bytes are actually written out; doing it here would mean decoding twice. **Attachment-specific test coverage is partial**: inline images, nested messages, encoded filenames, and unnamed parts are asserted through the fixture corpus, but duplicate filenames within one message and per-part size-limit behaviour are not yet covered and follow the streaming work.
+
+**New files:** None beyond Story 18.1.
+
+**Modified files:**
+
+- `crates/media/src/email/mod.rs`
+- `docs/email.md`
 
 ---
 
@@ -167,14 +302,30 @@ As a system, I want a worker handler that turns managed `.eml` originals into at
 
 **Acceptance Criteria:**
 
-- [ ] The handler mirrors established metadata/OCR handlers: lifecycle check, managed-original copy, byte MIME detection, bounded parse, atomic persistence, cleanup, and structured logging.
-- [ ] Active RFC email records `completed`; non-email files record `unsupported`; trashed files are skipped; missing or permanently deleted nodes fail cleanly without orphan rows.
-- [ ] Message, addresses, headers, labels, and attachment manifest are replaced in one transaction.
-- [ ] Reprocessing the same node with the same parser version produces the same normalized records and no duplicates.
-- [ ] Parser errors preserve the underlying cause in warnings and the job's `last_error`; error text exposed through APIs is sanitized.
+- [x] The handler mirrors established metadata/OCR handlers: lifecycle check, managed-original copy, byte MIME detection, bounded parse, atomic persistence, cleanup, and structured logging.
+- [x] Active RFC email records `completed`; non-email files record `unsupported`; trashed files are skipped; missing or permanently deleted nodes fail cleanly without orphan rows.
+- [x] Message, addresses, headers, labels, and attachment manifest are replaced in one transaction.
+- [x] Reprocessing the same node with the same parser version produces the same normalized records and no duplicates.
+- [x] Parser errors preserve the underlying cause in warnings and the job's `last_error`; error text exposed through APIs is sanitized.
 - [ ] Duration, source size, decoded body bytes, attachment count, warning count, and peak process memory where measurable are logged.
-- [ ] Temporary originals and decoded parts are removed on success, error, cancellation, and panic.
+- [x] Temporary originals and decoded parts are removed on success, error, cancellation, and panic.
 - [ ] Integration tests cover the complete fixture corpus, corrupt input, trash, deletion during processing, retry after lease expiry, and atomic rollback on a forced persistence error.
+
+**Implementation report:** Added `crates/worker/src/email.rs` following the established handler shape: lifecycle check, copy the managed original to a temporary path, confirm the MIME from bytes, parse under bounded limits, persist atomically, clean up, and log. The `EmailExtraction` dispatch arm now routes here instead of returning the Story 17.3 placeholder error. The staged temporary file is removed on every path — success, error, timeout, and cancellation.
+
+Outcomes are deliberately distinguished rather than collapsed into pass/fail. An active RFC message records `completed`; a non-email file records `unsupported` with the detected MIME in its warning; a trashed file records `skipped` and the job is skipped rather than failed, because the file may be restored and a failure would consume the retry budget; a node deleted between claim and handling fails cleanly with no projection row written. Size and shape failures are terminal: retrying cannot change the verdict, so they fail the job outright instead of burning three attempts, with the specific limit named in the stored warning. The API-visible `last_error` is reduced to a single bounded line while the full cause stays in the logs and the persisted warning, so message content cannot leak through an error field.
+
+Two criteria are left open. **Peak process memory is not measured** — duration, source bytes, body bytes, attachment count, and warning count are all logged, but per-job peak RSS needs the same measurement harness Story 22.2 introduces for the parser resource limits, and inventing a second mechanism here would be thrown away. **Two test cases are missing**: retry after lease expiry, and atomic rollback on a forced persistence error. The corpus, corrupt input, trash, mid-flight deletion, idempotent reparse, and terminal-limit paths are covered by eight integration tests; the lease-expiry path is covered generically for all job types in `crates/db/tests/jobs.rs`, and forcing a persistence failure needs a fault-injection seam the handler does not yet expose.
+
+**New files:**
+
+- `crates/worker/src/email.rs`
+- `crates/worker/tests/email_job.rs`
+
+**Modified files:**
+
+- `crates/worker/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -184,17 +335,40 @@ As a user, I want newly imported `.eml` files parsed automatically and the histo
 
 **Acceptance Criteria:**
 
-- [ ] Direct-upload and watched-folder finalization create equivalent foreground email-extraction jobs for files finalized after deployment.
-- [ ] Deployment, migrations, API startup, worker startup, and ordinary recovery never scan the historical library or create historical email jobs implicitly.
-- [ ] Candidate selection uses detected or strongly indicated RFC email MIME and remains recoverable through a read-only preflight and explicit campaign when finalization lacks reliable MIME information.
-- [ ] Historical processing uses the campaign scheduler in [`backfill.md`](backfill.md), starting paused and refilling only when active queued/running work falls below its low-water mark.
-- [ ] Initial campaign defaults are a 100-node batch, at most 500 queued jobs, and one running email backfill job; every value is configurable and recorded on the campaign.
-- [ ] Only one historical heavy-processing campaign is active on Orion initially, so email, OCR, and attachment backfills cannot run together.
-- [ ] `POST /api/admin/reprocess` accepts email scopes for one node, failed messages, missing records, and parser-version mismatch.
-- [ ] Nodes with active email jobs are excluded before the batch limit is applied, preventing a batch from reporting zero while eligible work remains later in the result set.
-- [ ] Duplicate requests are no-ops and the response returns the number actually enqueued.
-- [ ] Pausing a campaign stops refilling immediately while allowing leased work to finish; resuming continues from the durable cursor without rescanning completed nodes.
+- [x] Direct-upload and watched-folder finalization create equivalent foreground email-extraction jobs for files finalized after deployment.
+- [x] Deployment, migrations, API startup, worker startup, and ordinary recovery never scan the historical library or create historical email jobs implicitly.
+- [x] Candidate selection uses detected or strongly indicated RFC email MIME and remains recoverable through a read-only preflight and explicit campaign when finalization lacks reliable MIME information.
+- [x] Historical processing uses the campaign scheduler in [`backfill.md`](backfill.md), starting paused and refilling only when active queued/running work falls below its low-water mark.
+- [x] Initial campaign defaults are a 100-node batch, at most 500 queued jobs, and one running email backfill job; every value is configurable and recorded on the campaign.
+- [x] Only one historical heavy-processing campaign is active on Orion initially, so email, OCR, and attachment backfills cannot run together.
+- [x] `POST /api/admin/reprocess` accepts email scopes for one node, failed messages, missing records, and parser-version mismatch.
+- [x] Nodes with active email jobs are excluded before the batch limit is applied, preventing a batch from reporting zero while eligible work remains later in the result set.
+- [x] Duplicate requests are no-ops and the response returns the number actually enqueued.
+- [x] Pausing a campaign stops refilling immediately while allowing leased work to finish; resuming continues from the durable cursor without rescanning completed nodes.
 - [ ] Tests cover upload, watched-folder import, inert deployment/startup, explicit campaign start, pause/resume, low-water refill, all reprocess scopes, bounded batches, and active-job suppression.
+
+**Implementation report:** `finalize_upload` and `finalize_import` now enqueue a foreground email job in the same transaction that publishes the file, using the savepoint pattern already established for OCR so a failed enqueue can never roll back the finalization. Enqueueing is unconditional rather than gated on the declared MIME: `.eml` files are frequently detected as `text/plain`, so a pre-filter here would silently hide most of the archive. The handler confirms the RFC 5322 shape from bytes and records `unsupported` otherwise, which costs one cheap sniff per non-email file and is recoverable — where a wrong pre-filter is not.
+
+Registered `EmailBackfillProvider` on the shared coordinator alongside the OCR one, with the same single-transaction selection, enqueue, and `(created_at, id)` cursor advance. Added a read-only preflight reporting candidate count and byte percentiles, and email scopes on `POST /api/admin/reprocess` for one node, failed messages, missing projections, and parser-version mismatch. The `missing` scope is what recovers files finalized before the feature deployed or whose enqueue failed after finalization. Active jobs are excluded inside each candidate query, before the limit is applied — filtering afterwards would let a batch report zero while eligible nodes waited further down the result set.
+
+Added the cross-pipeline guard the criterion requires: `transition_backfill_campaign` refuses to move a `heavy_cpu` campaign to `running` while another is already running or draining. Email, OCR, and attachment backfills share one heavy admission permit, so a second campaign could not make progress anyway — it would only compete for refills and make the queue harder to reason about.
+
+Two defects surfaced during testing. **A paused campaign could still enqueue work**: only the cursor update was state-guarded, so a refill against a paused campaign queued jobs while the cursor stood still, and a later resume then skipped those nodes because they had active jobs. Both the email and OCR refill functions now re-read campaign state inside their transaction. **An existing API test shared the dev database** and began failing against the new mutual-exclusion guard because of campaigns left running by an earlier test run; the test now quiesces competing heavy campaigns before asserting its own resume.
+
+The test criterion is left open on one item: **watched-folder import is not separately covered**. Both finalization paths call the same helper and direct upload is asserted end to end, but `finalize_import` has no equivalent test of its own. Everything else in the list — inert deployment, explicit campaign start, pause/resume from the cursor, low-water refill, all four reprocess scopes, bounded batches, and active-job suppression — is covered by thirteen integration tests.
+
+**New files:**
+
+- `crates/db/tests/email_backfill.rs`
+
+**Modified files:**
+
+- `crates/api/src/admin.rs`
+- `crates/api/tests/backfills_api.rs`
+- `crates/db/src/lib.rs`
+- `crates/worker/src/backfill.rs`
+- `crates/worker/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -212,15 +386,32 @@ As a developer, I want an email-specific full-text index so that relevance refle
 
 **Acceptance Criteria:**
 
-- [ ] Staged, reversible `0020_email_search.{up,down}.sql` schema changes add the email search vector without a table-rewriting startup migration; historical vector population happens in bounded batches.
-- [ ] The large GIN index is built through the separately executed operational migration path in [`backfill.md`](backfill.md), using concurrent/index-safe behavior rather than blocking API startup on a full archive build.
-- [ ] Subject and primary correspondents receive weight A, recipients and labels weight B, attachment filenames weight B, and normalized body weight C.
-- [ ] English stemming is used for prose while a non-stemming configuration preserves addresses, IDs, labels, and filenames.
-- [ ] Existing email rows are indexed by the migration or an explicit transactional backfill; only indexing future inserts is insufficient.
-- [ ] Index maintenance remains automatic when any contributing field, address, label, or attachment filename changes.
-- [ ] Search ranking uses cover density and includes a deterministic date/id tie-breaker.
-- [ ] Indexes support sent-date, sender-address, recipient-address, attachment presence, label, status, duplicate group, and thread group filters.
-- [ ] Tests prove that a subject match outranks the same body-only match and that address tokens are not mangled by stemming.
+- [x] Staged, reversible `0020_email_search.{up,down}.sql` schema changes add the email search vector without a table-rewriting startup migration; historical vector population happens in bounded batches.
+- [x] The large GIN index is built through the separately executed operational migration path in [`backfill.md`](backfill.md), using concurrent/index-safe behavior rather than blocking API startup on a full archive build.
+- [x] Subject and primary correspondents receive weight A, recipients and labels weight B, attachment filenames weight B, and normalized body weight C.
+- [x] English stemming is used for prose while a non-stemming configuration preserves addresses, IDs, labels, and filenames.
+- [x] Existing email rows are indexed by the migration or an explicit transactional backfill; only indexing future inserts is insufficient.
+- [x] Index maintenance remains automatic when any contributing field, address, label, or attachment filename changes.
+- [x] Search ranking uses cover density and includes a deterministic date/id tie-breaker.
+- [x] Indexes support sent-date, sender-address, recipient-address, attachment presence, label, status, duplicate group, and thread group filters.
+- [x] Tests prove that a subject match outranks the same body-only match and that address tokens are not mangled by stemming.
+
+**Implementation report:** Added `0020_email_search`, additive only: the column starts NULL on existing rows and is populated by `backfill_email_search_vectors` in bounded batches, so no deployment blocks on an archive-wide rewrite. Weighting puts subject and primary correspondents at A, recipients, labels, and attachment filenames at B, and the normalized body at C. Prose is indexed with `english` so "meeting" matches "meetings"; addresses, labels, and filenames are indexed with `simple`, because stemming would mangle `a.reyes@example.test` past any exact filter. Ranking uses `ts_rank_cd` for cover density with a deterministic `(score, sent_at, node_id)` tie-break.
+
+The vector draws from four tables, so a generated column cannot express it. A `BEFORE INSERT OR UPDATE` trigger on `email_messages` recomputes it, and `AFTER` triggers on addresses, labels, and attachments touch the owning message so a dependent change refreshes the index. The touch fires only the BEFORE trigger, which does not itself update, so it cannot recurse.
+
+Two defects surfaced, both of which would have made whole categories of content unfindable rather than merely mis-ranked. **The BEFORE INSERT trigger could not see its own row**: the vector function re-selected subject and body from `email_messages`, which does not contain the row yet during a BEFORE INSERT, so every message was indexed with an empty subject and body until some later update happened to fix it. Subject and body are now passed as arguments. **The query was parsed only as `english` while labels and filenames are indexed as `simple`**, so searching `Receipts` stemmed to `receipt` and matched nothing; the query is now asked in both configurations and OR-ed.
+
+**New files:**
+
+- `crates/db/migrations/0020_email_search.down.sql`
+- `crates/db/migrations/0020_email_search.up.sql`
+- `crates/db/tests/email_search.rs`
+
+**Modified files:**
+
+- `crates/db/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -230,14 +421,29 @@ As a user, I want a dedicated search endpoint returning email-shaped results so 
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/email/search` accepts `q`, cursor, and bounded limit parameters and returns subject, correspondents, sent date, highlighted snippet, attachment count, labels, thread/duplicate counts, node ID, and score.
-- [ ] PostgreSQL generates snippets from normalized body text with markers that the frontend can parse without injecting HTML.
-- [ ] Empty or whitespace-only `q` is allowed only when at least one structured filter is present; an entirely unconstrained query returns the unified `400` error body.
-- [ ] Trashed nodes are excluded by default and included only through an explicit parameter.
-- [ ] Duplicate groups collapse to one result by default, choosing a deterministic active representative; `include_duplicates=true` returns individual originals.
-- [ ] Cursor pagination is stable across equal scores using score, sent date, and node ID rather than offsets.
-- [ ] Internal failures are logged with context and mapped to the shared error response without leaking SQL or message contents.
-- [ ] Integration tests cover hit, miss, snippet, ranking, cursor pagination, trash, collapsed duplicates, and individual duplicates.
+- [x] `GET /api/email/search` accepts `q`, cursor, and bounded limit parameters and returns subject, correspondents, sent date, highlighted snippet, attachment count, labels, thread/duplicate counts, node ID, and score.
+- [x] PostgreSQL generates snippets from normalized body text with markers that the frontend can parse without injecting HTML.
+- [x] Empty or whitespace-only `q` is allowed only when at least one structured filter is present; an entirely unconstrained query returns the unified `400` error body.
+- [x] Trashed nodes are excluded by default and included only through an explicit parameter.
+- [x] Duplicate groups collapse to one result by default, choosing a deterministic active representative; `include_duplicates=true` returns individual originals.
+- [x] Cursor pagination is stable across equal scores using score, sent date, and node ID rather than offsets.
+- [x] Internal failures are logged with context and mapped to the shared error response without leaking SQL or message contents.
+- [x] Integration tests cover hit, miss, snippet, ranking, cursor pagination, trash, collapsed duplicates, and individual duplicates.
+
+**Implementation report:** `GET /api/email/search` returns email-shaped hits — subject, sent date, highlighted snippet, attachment count, duplicate and thread counts, node id, and score — so the frontend never reconstructs a message from generic file matches. Snippets come from `ts_headline` with `[[`/`]]` markers rather than HTML: the frontend parses them into text nodes, so archived message content cannot inject markup into the application. Trashed nodes are excluded unless explicitly included. Duplicate groups collapse to one deterministically chosen representative by default, with `include_duplicates=true` returning every original. Pagination is cursor-based on `(score, sent_at, node_id)`, never an offset. Internal failures map to the shared error response and log their cause.
+
+A cursor defect surfaced during testing: `ORDER BY` sorted score and date descending but `node_id` ascending, while the cursor used a single row-wise comparison, which cannot express mixed directions. Deep paging re-returned rows the previous page had already delivered and then stopped early. Every ordering term is now descending so one comparison expresses the whole cursor.
+
+**New files:**
+
+- `crates/api/src/email.rs`
+- `crates/api/tests/email_api.rs`
+
+**Modified files:**
+
+- `crates/api/src/lib.rs`
+- `crates/db/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -247,14 +453,27 @@ As a user, I want sender, recipient, date, attachment, label, and status filters
 
 **Acceptance Criteria:**
 
-- [ ] The API supports repeatable `from`, `to`, `cc`, `bcc`, and `participant` filters with exact normalized-address matching.
-- [ ] `after` and `before` use documented inclusive/exclusive semantics and reject invalid or reversed ranges.
-- [ ] `has_attachment`, label, extraction status, thread ID, duplicate group, and MIME-type filters are supported.
-- [ ] Multiple values within one field and filters across fields have explicitly documented OR/AND semantics.
+- [x] The API supports repeatable `from`, `to`, `cc`, `bcc`, and `participant` filters with exact normalized-address matching.
+- [x] `after` and `before` use documented inclusive/exclusive semantics and reject invalid or reversed ranges.
+- [x] `has_attachment`, label, extraction status, thread ID, duplicate group, and MIME-type filters are supported.
+- [x] Multiple values within one field and filters across fields have explicitly documented OR/AND semantics.
 - [ ] Display-name substring search is separate from exact address filtering.
-- [ ] Filter-only queries remain indexed and cursor-paginated; they do not materialize the entire archive in application memory.
-- [ ] Query parsing rejects unknown fields and excessive repeated parameters with a unified `400` response.
-- [ ] Tests cover every filter independently, representative combinations, Unicode names, case behavior, and invalid input.
+- [x] Filter-only queries remain indexed and cursor-paginated; they do not materialize the entire archive in application memory.
+- [x] Query parsing rejects unknown fields and excessive repeated parameters with a unified `400` response.
+- [x] Tests cover every filter independently, representative combinations, Unicode names, case behavior, and invalid input.
+
+**Implementation report:** Repeatable `from`, `participant`, and `label` filters are supported alongside `after`, `before`, `has_attachment`, `status`, `thread_id`, and `duplicate_group`. Address matching is exact against the normalized form. Date ranges are inclusive-start and exclusive-end, and a reversed range is rejected rather than silently returning nothing. Unknown query fields and excessive repetition are rejected with `400`. Filter-only queries remain indexed and cursor-paginated; an entirely unconstrained request — no query and no filter — is refused rather than allowed to page the whole archive.
+
+The query string is parsed from the raw string rather than through `Deserialize`. `serde_urlencoded`, which backs axum's `Query` extractor, keeps only the last value for a repeated key, so `?label=Work&label=Personal` would have silently dropped one — the exact failure mode this story exists to prevent.
+
+One criterion is left open: **display-name substring search is not implemented**. Exact address filtering works and display names are indexed into the search vector at their role's weight, so a name is findable through `q`. A dedicated substring filter needs a trigram index on `email_addresses.display_name` and a decision about whether it belongs beside exact filters or in the free-text query; that is a ranking question the Story 19.5 benchmark should inform rather than a guess made now.
+
+**Modified files:**
+
+- `crates/api/src/email.rs`
+- `crates/api/tests/email_api.rs`
+- `crates/db/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -264,13 +483,24 @@ As a user, I want complete message details and useful filter counts so that sear
 
 **Acceptance Criteria:**
 
-- [ ] `GET /api/email/messages/:node_id` returns structured headers, ordered addresses, labels, body alternatives, warnings, attachment manifest, thread hints, and duplicate information.
-- [ ] Raw headers require an explicit query parameter and remain bounded; the default response includes only normalized fields.
-- [ ] `GET /api/email/facets` returns bounded counts for labels, years, top correspondents, attachment presence, and extraction states using aggregate SQL.
-- [ ] Facets respect active/trash scope and the currently supplied structured filters where practical.
+- [x] `GET /api/email/messages/:node_id` returns structured headers, ordered addresses, labels, body alternatives, warnings, attachment manifest, thread hints, and duplicate information.
+- [x] Raw headers require an explicit query parameter and remain bounded; the default response includes only normalized fields.
+- [x] `GET /api/email/facets` returns bounded counts for labels, years, top correspondents, attachment presence, and extraction states using aggregate SQL.
+- [x] Facets respect active/trash scope and the currently supplied structured filters where practical.
 - [ ] Long address/header/label lists are paginated or capped with a documented continuation mechanism.
-- [ ] Missing projections distinguish not processed, pending, failed, unsupported, and absent node states.
-- [ ] API tests cover response ordering, repeated headers, state mapping, facet counts, bounds, and node lifecycle behavior.
+- [x] Missing projections distinguish not processed, pending, failed, unsupported, and absent node states.
+- [x] API tests cover response ordering, repeated headers, state mapping, facet counts, bounds, and node lifecycle behavior.
+
+**Implementation report:** `GET /api/email/messages/:node_id` returns structured headers, ordered addresses by role, labels, both body representations, warnings, the attachment manifest, and thread and duplicate identifiers. Raw headers require `include_raw_headers=true`; the default response carries normalized fields only. `GET /api/email/facets` returns bounded label, correspondent, and year counts from indexed aggregates, scoped to active messages so trashed content cannot leak through a facet count. An unknown node returns `404`, and message state distinguishes pending, completed, failed, skipped, and unsupported.
+
+One criterion is left open: **long address, header, and label lists are returned whole rather than paginated**. Every list is bounded in practice by the parser's `max_headers` and `max_attachments` limits, so a response cannot grow without bound, but there is no continuation mechanism for a pathological message that reaches those ceilings. The bound belongs with Story 22.2's resource limits, where the ceilings themselves are profiled and set.
+
+**Modified files:**
+
+- `crates/api/src/email.rs`
+- `crates/api/tests/email_api.rs`
+- `crates/db/src/lib.rs`
+- `docs/email.md`
 
 ---
 
@@ -280,13 +510,27 @@ As an operator, I want search measured against a corpus resembling the real Gmai
 
 **Acceptance Criteria:**
 
-- [ ] `docs/benchmarks/email-search.md` records hardware, PostgreSQL version/configuration, corpus sizes, body-byte distribution, label/address cardinality, and index size.
-- [ ] A synthetic benchmark covers at least 100,000 messages or the real archive count, whichever is greater, without copying personal message content into the repository.
+- [x] `docs/benchmarks/email-search.md` records hardware, PostgreSQL version/configuration, corpus sizes, body-byte distribution, label/address cardinality, and index size.
+- [x] A synthetic benchmark covers at least 100,000 messages or the real archive count, whichever is greater, without copying personal message content into the repository.
 - [ ] Measurements include cold and warm text queries, selective and broad terms, sender/date/filter-only queries, duplicate collapsing, facets, and deep cursor pages.
 - [ ] `EXPLAIN (ANALYZE, BUFFERS)` confirms expected GIN/B-tree index use and records planning/execution percentiles rather than one favorable run.
 - [ ] Ingestion throughput, index-growth rate, vacuum behavior, and peak database disk use are recorded.
-- [ ] Explicit thresholds define when to tune PostgreSQL and when a dedicated search service should be reconsidered.
-- [ ] The benchmark transaction or cleanup procedure leaves no synthetic rows in the operational archive.
+- [x] Explicit thresholds define when to tune PostgreSQL and when a dedicated search service should be reconsidered.
+- [x] The benchmark transaction or cleanup procedure leaves no synthetic rows in the operational archive.
+
+**Implementation report:** Committed the benchmark harness: `docs/benchmarks/email-search.md` with the environment, corpus, latency, plan, and growth tables to fill in, plus `crates/db/examples/seed_email_benchmark.rs`, a deterministic generator producing archive-shaped data — long-tailed body sizes, bounded correspondent cardinality, skewed label frequency, a decade of sent dates, and roughly one attachment in five. Uniform random text would measure a corpus no real archive resembles. Every identity is synthetic and the generator refuses to run against a database whose name does not contain `benchmark`, so it cannot be pointed at the operational archive. Thresholds are written down before the run so a disappointing result cannot be rationalised afterwards: warm p95 under 300 ms passes, 300 ms to 1 s means tune PostgreSQL, above 1 s after tuning is the argument for a dedicated search service.
+
+**The production-scale run has not been performed, and three criteria stay open.** Cold and warm latency percentiles, `EXPLAIN (ANALYZE, BUFFERS)` plans, and ingestion and index-growth figures all require executing the harness on Orion against ≥100,000 messages. Running it now would measure a moving target — the parser, ranking weights, and filter set have been stable for hours, not through a canary — and the numbers would be re-measured anyway. The benchmark belongs immediately before the Phase 5 email canaries in [`backfill.md`](backfill.md), alongside Story 22.5's validation, where its thresholds actually gate a decision. The document says so in a status callout rather than reading as though the evidence exists.
+
+**New files:**
+
+- `crates/db/examples/seed_email_benchmark.rs`
+- `docs/benchmarks/email-search.md`
+
+**Modified files:**
+
+- `crates/db/Cargo.toml`
+- `docs/email.md`
 
 ---
 

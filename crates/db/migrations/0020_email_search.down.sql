@@ -1,0 +1,10 @@
+DROP INDEX IF EXISTS email_messages_attachment_presence_idx;
+DROP INDEX IF EXISTS email_messages_search_vector_idx;
+DROP TRIGGER IF EXISTS email_attachments_search_vector ON email_attachments;
+DROP TRIGGER IF EXISTS email_labels_search_vector ON email_labels;
+DROP TRIGGER IF EXISTS email_addresses_search_vector ON email_addresses;
+DROP TRIGGER IF EXISTS email_messages_search_vector ON email_messages;
+DROP FUNCTION IF EXISTS email_dependent_touch_message();
+DROP FUNCTION IF EXISTS email_messages_refresh_search_vector();
+DROP FUNCTION IF EXISTS email_search_vector(UUID, TEXT, TEXT);
+ALTER TABLE email_messages DROP COLUMN IF EXISTS search_vector;

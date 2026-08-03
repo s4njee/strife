@@ -1,0 +1,9 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Legacy charset
+Date: Wed, 11 Apr 2018 09:00:00 +0000
+Message-ID: <latin-010@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="ISO-8859-1"
+
+Café naïve résumé in latin-1 bytes.

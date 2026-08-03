@@ -1,0 +1,22 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Inline logo
+Date: Fri, 6 Apr 2018 10:05:00 +0000
+Message-ID: <inline-005@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="rel-boundary"
+
+--rel-boundary
+Content-Type: text/html; charset="utf-8"
+
+<html><body><p>Logo below.</p><img src="cid:logo-part@example.test"></body></html>
+
+--rel-boundary
+Content-Type: image/png
+Content-ID: <logo-part@example.test>
+Content-Disposition: inline; filename="logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=
+
+--rel-boundary--

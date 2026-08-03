@@ -1,0 +1,10 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: HTML only message
+Date: Tue, 3 Apr 2018 11:00:00 +0000
+Message-ID: <html-002@example.test>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html><body><p>First paragraph.</p><ul><li>Alpha</li><li>Beta</li></ul>
+<p>Second&nbsp;paragraph.</p></body></html>

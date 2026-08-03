@@ -1,0 +1,11 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+To: Cleo Fixture <cleo@example.test>
+Cc: Bob Fixture <bob@example.test>
+Subject: Repeated recipient headers
+Date: Fri, 13 Apr 2018 10:30:00 +0000
+Message-ID: <rep-012@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+The same address appears in more than one role.

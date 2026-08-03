@@ -14,7 +14,9 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+anyhow.workspace = true
+strife-media = { path = "../media" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

@@ -55,6 +55,19 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
     let Some(pool) = test_pool().await else {
         return;
     };
+    // Only one heavy campaign may run at a time, and this suite shares its
+    // database. Quiesce any campaign left running by another test before
+    // asserting that this one can be resumed.
+    sqlx::query(
+        r"
+        UPDATE backfill_campaigns SET state = 'paused', paused_at = now()
+        WHERE resource_class = 'heavy_cpu' AND state IN ('running', 'draining')
+        ",
+    )
+    .execute(&pool)
+    .await
+    .expect("quiesce competing heavy campaigns");
+
     let app = strife_api::backfills::router(pool.clone());
     let (invalid_status, _) = json_request(
         app.clone(),

@@ -1,0 +1,11 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Message with Gmail context
+Date: Mon, 16 Apr 2018 11:11:00 +0000
+Message-ID: <gmail-015@example.test>
+X-Gmail-Labels: Inbox,Important,Work/Reports
+X-GM-THRID: 1598765432109876543
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+This export carries Gmail label and thread headers.

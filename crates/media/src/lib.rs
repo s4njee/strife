@@ -4,6 +4,7 @@ use std::{path::Path, process::Command};
 
 use anyhow::Result;
 
+mod email;
 mod exif;
 mod ffprobe;
 mod ocr;
@@ -12,13 +13,19 @@ mod process;
 mod thumbnail;
 mod tika;
 
+pub use email::{
+    EMAIL_PARSER_NAME, EMAIL_PARSER_VERSION, EmailAddressKind, EmailParseLimits, ParsedAddress,
+    ParsedAttachment, ParsedEmail, ParsedHeader, html_to_text, is_rfc822_mime, looks_like_rfc822,
+    normalize_address, normalize_message_id, normalize_subject, parse_email,
+};
 pub use exif::{ExifResult, extract_exif, extract_exif_with_limits};
 pub use ffprobe::{
     FfprobeResult, StreamInfo, StreamType, extract_ffprobe, extract_ffprobe_with_limits,
 };
 pub use ocr::{
-    NormalizedOcrInput, NormalizedOcrPage, OcrNormalizationLimits, OcrPage, OcrResult, extract_ocr,
-    is_supported_ocr_mime, normalize_ocr_input, verify_tesseract,
+    NormalizedOcrInput, NormalizedOcrPage, OcrNormalizationLimits, OcrPage, OcrResult,
+    SUPPORTED_OCR_MIMES, extract_ocr, is_supported_ocr_mime, normalize_ocr_input,
+    supported_ocr_mimes, verify_tesseract,
 };
 pub use office::convert_office_to_pdf;
 pub use thumbnail::{ThumbnailResult, generate_image_preview, generate_thumbnail};

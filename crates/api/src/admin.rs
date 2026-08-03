@@ -57,6 +57,28 @@ async fn reprocess(
             enqueued,
         }));
     }
+    if query.extractor == "email" {
+        let scope = match query.scope.as_deref() {
+            Some("node") => {
+                strife_db::EmailReprocessScope::Node(query.node_id.ok_or(StatusCode::BAD_REQUEST)?)
+            }
+            Some("failed") => strife_db::EmailReprocessScope::Failed,
+            // Files finalized before the feature deployed, or whose enqueue
+            // failed after finalization, have no projection at all.
+            Some("missing") => strife_db::EmailReprocessScope::Missing,
+            Some("version") => strife_db::EmailReprocessScope::VersionMismatch(
+                strife_media::EMAIL_PARSER_VERSION.to_owned(),
+            ),
+            _ => return Err(StatusCode::BAD_REQUEST),
+        };
+        let enqueued = strife_db::enqueue_email_reprocessing(&pool, &scope, 100)
+            .await
+            .map_err(internal_error)?;
+        return Ok(Json(ReprocessResponse {
+            extractor: query.extractor,
+            enqueued,
+        }));
+    }
     let current_version = match query.extractor.as_str() {
         "exiftool" | "ffprobe" | "tika" => "adapter-v1",
         _ => return Err(StatusCode::BAD_REQUEST),

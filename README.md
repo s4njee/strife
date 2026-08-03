@@ -295,6 +295,15 @@ The post-v1 OCR contract uses explicit, English-first Tesseract jobs, stores
 embedded and recognized text in PostgreSQL, and disables implicit Tika OCR so a
 scanned PDF is not processed twice; see [ADR 0008](docs/decisions/0008-ocr-and-document-text.md).
 
+The post-v1 email contract parses archived `.eml` files into a dedicated
+structured schema, keeps each original immutable, ranks subject and
+correspondents above body text in PostgreSQL full-text search, and renders
+message HTML only through a sanitized, remote-blocking reader; see
+[ADR 0009](docs/decisions/0009-email-archive-search.md) and the implementation
+plan in [docs/email.md](docs/email.md). Historical archive processing is an
+explicit operator-started campaign, never a deployment side effect; see
+[docs/backfill.md](docs/backfill.md).
+
 ## 11. Preview Pipeline
 
 Previews are requested on demand, generated asynchronously when necessary, then cached as derived artifacts.

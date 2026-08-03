@@ -198,6 +198,64 @@ export interface OcrEvent {
   created_at: string
 }
 
+export interface OcrPreflightFamily {
+  detected_mime: string
+  candidates: number
+  total_bytes: number
+  p50_bytes: number
+  p95_bytes: number
+  max_bytes: number
+}
+
+/** Read-only projection of historical OCR work. Never enqueues anything. */
+export interface OcrPreflight {
+  snapshot_before: string
+  engine_version: string | null
+  candidates: number
+  already_completed: number
+  already_skipped: number
+  already_failed: number
+  already_unsupported: number
+  awaiting_metadata: number
+  total_candidate_bytes: number
+  families: OcrPreflightFamily[]
+}
+
+export type BackfillState =
+  | 'draft'
+  | 'paused'
+  | 'running'
+  | 'draining'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+
+export interface BackfillCampaign {
+  id: string
+  kind: 'email' | 'ocr' | 'attachment_text' | 'attachment_ocr'
+  state: BackfillState
+  snapshot_before: string | null
+  cursor_created_at: string | null
+  cursor_node_id: string | null
+  batch_size: number
+  max_queued: number
+  max_running: number
+  resource_class: string
+  foreground_fairness: number
+  candidate_count: number
+  enqueued_count: number
+  completed_count: number
+  failed_count: number
+  skipped_count: number
+  created_by_version: string
+  last_error: string | null
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  paused_at: string | null
+  completed_at: string | null
+}
+
 export interface DocumentTextPage {
   page_number: number
   content: string

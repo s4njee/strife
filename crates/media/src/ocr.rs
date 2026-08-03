@@ -62,15 +62,39 @@ impl Drop for NormalizedOcrInput {
     }
 }
 
+/// The complete initial OCR input matrix, in candidate-report order.
+///
+/// Historical campaign selection needs the set itself, not just a predicate,
+/// so that candidates can be chosen with an indexed `detected_mime = ANY(...)`
+/// rather than by testing every node in the library.
+pub const SUPPORTED_OCR_MIMES: &[&str] = &[
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/tiff",
+    "image/webp",
+    "image/x-canon-cr2",
+    "image/x-canon-cr3",
+    "image/x-nikon-nef",
+    "image/x-sony-arw",
+    "image/x-adobe-dng",
+    "image/x-panasonic-rw2",
+    "image/x-fuji-raf",
+    "image/x-olympus-orf",
+    "image/x-pentax-pef",
+    "image/x-dcraw",
+];
+
+/// Returns the initial OCR input matrix.
+#[must_use]
+pub fn supported_ocr_mimes() -> &'static [&'static str] {
+    SUPPORTED_OCR_MIMES
+}
+
 /// Returns whether a detected MIME type belongs to the initial OCR input matrix.
 #[must_use]
 pub fn is_supported_ocr_mime(mime: &str) -> bool {
-    mime == "application/pdf"
-        || matches!(
-            mime,
-            "image/jpeg" | "image/png" | "image/tiff" | "image/webp"
-        )
-        || is_raw_mime(mime)
+    SUPPORTED_OCR_MIMES.contains(&mime)
 }
 
 /// Rasterizes a supported OCR input into ordered PNG pages under a managed temporary path.
@@ -423,9 +447,27 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        OcrNormalizationLimits, extract_ocr, is_supported_ocr_mime, normalize_ocr_input,
-        verify_tesseract,
+        OcrNormalizationLimits, SUPPORTED_OCR_MIMES, extract_ocr, is_raw_mime,
+        is_supported_ocr_mime, normalize_ocr_input, verify_tesseract,
     };
+
+    #[test]
+    fn every_raw_mime_is_a_supported_ocr_input() {
+        // `normalize_ocr_input` routes on `is_raw_mime`, while historical
+        // campaign selection filters on `SUPPORTED_OCR_MIMES`. A RAW format
+        // added to only one of them would be silently unreachable by backfill.
+        for mime in SUPPORTED_OCR_MIMES {
+            assert!(is_supported_ocr_mime(mime), "{mime} must be supported");
+        }
+        let raw_in_matrix = SUPPORTED_OCR_MIMES
+            .iter()
+            .filter(|mime| is_raw_mime(mime))
+            .count();
+        assert_eq!(
+            raw_in_matrix, 10,
+            "RAW formats in the OCR matrix drifted from the normalizer's router"
+        );
+    }
 
     #[tokio::test]
     async fn extracts_typed_text_confidence_dimensions_and_version() {

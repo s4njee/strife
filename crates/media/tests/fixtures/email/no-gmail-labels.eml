@@ -1,0 +1,9 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Ordinary RFC message
+Date: Tue, 17 Apr 2018 11:11:00 +0000
+Message-ID: <nogmail-016@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+No Gmail headers: provider label and thread fields must stay null.

@@ -1,0 +1,9 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Broken date header
+Date: Not A Real Date
+Message-ID: <baddate-013@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+The Date header cannot be parsed and must stay null with a warning.

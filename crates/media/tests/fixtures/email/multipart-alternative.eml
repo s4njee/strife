@@ -1,0 +1,19 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Alternative parts
+Date: Wed, 4 Apr 2018 08:15:00 +0000
+Message-ID: <alt-003@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="alt-boundary"
+
+--alt-boundary
+Content-Type: text/plain; charset="utf-8"
+
+Plain alternative preferred for search.
+
+--alt-boundary
+Content-Type: text/html; charset="utf-8"
+
+<html><body><p>HTML alternative retained for reading.</p></body></html>
+
+--alt-boundary--

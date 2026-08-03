@@ -1,5 +1,6 @@
 import type {
   ApiReadiness,
+  BackfillCampaign,
   CreatedUploadSession,
   DependencyStatus,
   FavoriteItem,
@@ -18,6 +19,7 @@ import type {
   ReadinessResponse,
   UploadSession,
   FileText,
+  OcrPreflight,
   OcrStatus,
   TextSearchResponse,
 } from './types'
@@ -48,6 +50,89 @@ export async function reprocessOcr(options: {
   if (typeof body.enqueued !== 'number')
     throw new ApiClientError('OCR reprocessing response was invalid.')
   return body.enqueued
+}
+
+export async function getOcrPreflight(
+  signal?: AbortSignal,
+): Promise<OcrPreflight> {
+  const response = await fetch('/api/ocr/preflight', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`OCR preflight failed (${response.status}).`)
+  return (await response.json()) as OcrPreflight
+}
+
+export async function listBackfills(
+  signal?: AbortSignal,
+): Promise<BackfillCampaign[]> {
+  const response = await fetch('/api/backfills', {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Campaign list failed (${response.status}).`)
+  return (await response.json()) as BackfillCampaign[]
+}
+
+/**
+ * Creates a draft campaign and immediately prepares it into `paused`.
+ *
+ * Creation never starts historical work: the caller must explicitly resume the
+ * returned campaign. `snapshot_before` and `candidate_count` come from a
+ * reviewed preflight so the campaign cannot silently enlarge itself later.
+ */
+export async function createOcrCampaign(preflight: {
+  candidateCount: number
+  snapshotBefore: string
+  batchSize: number
+  maxQueued: number
+  maxRunning: number
+}): Promise<BackfillCampaign> {
+  const created = await fetch('/api/backfills', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      kind: 'ocr',
+      candidate_definition: { version: 1, source: 'ocr-preflight' },
+      batch_size: preflight.batchSize,
+      max_queued: preflight.maxQueued,
+      max_running: preflight.maxRunning,
+      resource_class: 'heavy_cpu',
+    }),
+  })
+  if (!created.ok)
+    throw new ApiClientError(`Campaign creation failed (${created.status}).`)
+  const draft = (await created.json()) as BackfillCampaign
+
+  const prepared = await fetch(`/api/backfills/${draft.id}/prepare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      candidate_count: preflight.candidateCount,
+      snapshot_before: preflight.snapshotBefore,
+      reason: 'prepared from OCR preflight',
+    }),
+  })
+  if (!prepared.ok)
+    throw new ApiClientError(`Campaign prepare failed (${prepared.status}).`)
+  return (await prepared.json()) as BackfillCampaign
+}
+
+export async function actOnBackfill(
+  id: string,
+  action: 'resume' | 'pause' | 'drain' | 'complete' | 'cancel',
+  reason?: string,
+): Promise<BackfillCampaign> {
+  const response = await fetch(`/api/backfills/${id}/actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ action, reason }),
+  })
+  if (!response.ok)
+    throw new ApiClientError(`Campaign ${action} failed (${response.status}).`)
+  return (await response.json()) as BackfillCampaign
 }
 
 export async function getFileText(

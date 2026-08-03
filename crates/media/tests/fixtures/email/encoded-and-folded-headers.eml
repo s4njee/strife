@@ -1,0 +1,11 @@
+From: =?utf-8?B?w4RwZmVsIEZpeHR1cmU=?= <apfel@example.test>
+To: Bob Fixture <bob@example.test>,
+ Cleo Fixture <cleo@example.test>,
+ Dana Fixture <dana@example.test>
+Subject: =?utf-8?Q?Encoded_=C3=BCmlaut_subject?=
+Date: Thu, 12 Apr 2018 15:00:00 +0000
+Message-ID: <enc-011@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Header decoding and folding coverage.

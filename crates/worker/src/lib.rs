@@ -17,12 +17,16 @@ use tracing_subscriber::EnvFilter;
 
 mod backfill;
 mod deletion;
+mod email;
 mod imports;
 mod metadata;
 mod ocr;
 
-pub use backfill::{BackfillCandidateProvider, BackfillCoordinator};
+pub use backfill::{
+    BackfillCandidateProvider, BackfillCoordinator, EmailBackfillProvider, OcrBackfillProvider,
+};
 pub use deletion::DeletionService;
+pub use email::{EmailHandler, EmailSettings};
 pub use imports::ImportHandler;
 pub use metadata::MetadataHandler;
 pub use ocr::{OcrHandler, OcrSettings};
@@ -153,6 +157,7 @@ pub struct WorkerHandler {
     deletion: DeletionService,
     imports: Option<ImportHandler>,
     ocr: OcrHandler,
+    email: EmailHandler,
 }
 
 impl WorkerHandler {
@@ -173,6 +178,7 @@ impl WorkerHandler {
                 preview_concurrency,
             ),
             deletion: DeletionService::new(pool.clone(), storage.clone()),
+            email: EmailHandler::new(pool.clone(), storage.clone()),
             ocr: OcrHandler::new(pool, storage, tika_url, 20),
             imports: None,
         }
@@ -182,6 +188,13 @@ impl WorkerHandler {
     #[must_use]
     pub fn with_embedded_text_minimum(mut self, minimum_chars: usize) -> Self {
         self.ocr.set_minimum_embedded_text_chars(minimum_chars);
+        self
+    }
+
+    /// Applies the global email parsing limits and per-file timeout.
+    #[must_use]
+    pub fn with_email_settings(mut self, settings: EmailSettings) -> Self {
+        self.email.set_settings(settings);
         self
     }
 
@@ -229,6 +242,7 @@ impl JobHandler for WorkerHandler {
                     .await
             }
             JobType::Ocr => self.ocr.handle(job).await,
+            JobType::EmailExtraction => self.email.handle(job).await,
         }
     }
 }
@@ -401,19 +415,26 @@ async fn claim_next_job(
     Ok(None)
 }
 
-const PROCESSOR_CLAIM_ORDER: [JobType; 5] = [
+// Email parsing is claimed after metadata and preview work but before OCR:
+// parsing MIME is cheaper than OCR and unlocks the Email tab sooner. Origin
+// still dominates this ordering — foreground work outranks every job family.
+const PROCESSOR_CLAIM_ORDER: [JobType; 6] = [
     JobType::PermanentDeletion,
     JobType::TrashCleanup,
     JobType::MetadataExtraction,
     JobType::PreviewGeneration,
+    JobType::EmailExtraction,
     JobType::Ocr,
 ];
 
 fn lease_ttl_for(job_type: JobType, base_ttl: ChronoDuration) -> ChronoDuration {
-    if job_type == JobType::Ocr {
-        base_ttl * 3
-    } else {
-        base_ttl
+    match job_type {
+        // OCR rasterizes and recognizes whole documents.
+        JobType::Ocr => base_ttl * 3,
+        // MIME parsing is bounded but a pathological message can still take
+        // well beyond the base lease, so it gets headroom short of OCR's.
+        JobType::EmailExtraction => base_ttl * 2,
+        _ => base_ttl,
     }
 }
 

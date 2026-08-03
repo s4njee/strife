@@ -1,0 +1,27 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Fwd: original message
+Date: Sat, 7 Apr 2018 16:20:00 +0000
+Message-ID: <nested-006@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fwd-boundary"
+
+--fwd-boundary
+Content-Type: text/plain; charset="utf-8"
+
+Forwarding the note below.
+
+--fwd-boundary
+Content-Type: message/rfc822
+Content-Disposition: attachment
+
+From: Cleo Fixture <cleo@example.test>
+To: Ada Fixture <ada@example.test>
+Subject: Original note
+Date: Sat, 7 Apr 2018 09:00:00 +0000
+Message-ID: <nested-inner-006@example.test>
+Content-Type: text/plain; charset="utf-8"
+
+Inner message body.
+
+--fwd-boundary--

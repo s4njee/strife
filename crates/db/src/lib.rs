@@ -196,6 +196,7 @@ pub enum JobType {
     PermanentDeletion,
     ImportScan,
     Ocr,
+    EmailExtraction,
 }
 
 /// Lifecycle state of a durable background job.
@@ -786,6 +787,1230 @@ pub async fn get_ocr_status_counts(pool: &PgPool) -> Result<OcrStatusCounts, sql
     .await
 }
 
+/// Lifecycle of one email parsing attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "email_extraction_status", rename_all = "snake_case")]
+pub enum EmailExtractionStatus {
+    Pending,
+    Completed,
+    Failed,
+    Skipped,
+    Unsupported,
+}
+
+/// RFC role an address was written under.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "email_address_role", rename_all = "snake_case")]
+pub enum EmailAddressRole {
+    From,
+    Sender,
+    ReplyTo,
+    To,
+    Cc,
+    Bcc,
+}
+
+/// Parsed projection of one `.eml` node.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct EmailMessageRecord {
+    pub node_id: Uuid,
+    pub status: EmailExtractionStatus,
+    pub parser_name: String,
+    pub parser_version: String,
+    pub message_id: Option<String>,
+    pub normalized_message_id: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub reference_ids: Vec<String>,
+    pub subject: Option<String>,
+    pub normalized_subject: Option<String>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub received_at: Option<DateTime<Utc>>,
+    pub body_text: String,
+    pub body_html: Option<String>,
+    pub preview_text: String,
+    pub content_hash: Option<String>,
+    pub thread_group_id: Option<Uuid>,
+    pub duplicate_group_id: Option<Uuid>,
+    pub provider_thread_id: Option<String>,
+    pub attachment_count: i32,
+    pub warnings: Vec<String>,
+    pub duration_ms: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct EmailAddressRecord {
+    pub id: i64,
+    pub node_id: Uuid,
+    pub role: EmailAddressRole,
+    pub position: i32,
+    pub display_name: Option<String>,
+    pub address: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct EmailHeaderRecord {
+    pub id: i64,
+    pub node_id: Uuid,
+    pub position: i32,
+    pub name: String,
+    pub normalized_name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct EmailAttachmentRecord {
+    pub id: i64,
+    pub node_id: Uuid,
+    pub part_path: String,
+    pub position: i32,
+    pub filename: Option<String>,
+    pub media_type: String,
+    pub disposition: Option<String>,
+    pub content_id: Option<String>,
+    pub transfer_encoding: Option<String>,
+    pub decoded_size: Option<i64>,
+    pub checksum_sha256: Option<String>,
+    pub is_inline: bool,
+    pub is_message: bool,
+    pub extraction_status: EmailExtractionStatus,
+    pub warnings: Vec<String>,
+}
+
+/// Message-level values persisted by one parsing attempt.
+pub struct UpsertEmailMessage<'a> {
+    pub node_id: Uuid,
+    pub status: EmailExtractionStatus,
+    pub parser_name: &'a str,
+    pub parser_version: &'a str,
+    pub message_id: Option<&'a str>,
+    pub normalized_message_id: Option<&'a str>,
+    pub in_reply_to: Option<&'a str>,
+    pub reference_ids: &'a [String],
+    pub subject: Option<&'a str>,
+    pub normalized_subject: Option<&'a str>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub received_at: Option<DateTime<Utc>>,
+    pub body_text: &'a str,
+    pub body_html: Option<&'a str>,
+    pub preview_text: &'a str,
+    pub content_hash: Option<&'a str>,
+    pub provider_thread_id: Option<&'a str>,
+    pub warnings: &'a [String],
+    pub duration_ms: Option<i64>,
+}
+
+pub struct EmailAddressInput<'a> {
+    pub role: EmailAddressRole,
+    pub display_name: Option<&'a str>,
+    pub address: &'a str,
+}
+
+pub struct EmailHeaderInput<'a> {
+    pub name: &'a str,
+    pub value: &'a str,
+}
+
+pub struct EmailAttachmentInput<'a> {
+    pub part_path: &'a str,
+    pub filename: Option<&'a str>,
+    pub media_type: &'a str,
+    pub disposition: Option<&'a str>,
+    pub content_id: Option<&'a str>,
+    pub transfer_encoding: Option<&'a str>,
+    pub decoded_size: Option<i64>,
+    pub checksum_sha256: Option<&'a str>,
+    pub is_inline: bool,
+    pub is_message: bool,
+    pub warnings: &'a [String],
+}
+
+/// Everything one parse produces, replaced together or not at all.
+pub struct EmailProjection<'a> {
+    pub message: UpsertEmailMessage<'a>,
+    pub addresses: &'a [EmailAddressInput<'a>],
+    pub headers: &'a [EmailHeaderInput<'a>],
+    pub labels: &'a [String],
+    pub attachments: &'a [EmailAttachmentInput<'a>],
+}
+
+/// Atomically replaces a message and all of its dependent rows.
+///
+/// Reparsing must never leave a message carrying addresses from one parser
+/// version and attachments from another, so the delete-and-insert of every
+/// dependent table shares the message upsert's transaction.
+///
+/// # Errors
+///
+/// Returns a database error when the replacement transaction cannot commit.
+pub async fn replace_email_projection(
+    pool: &PgPool,
+    projection: &EmailProjection<'_>,
+) -> Result<EmailMessageRecord, sqlx::Error> {
+    let input = &projection.message;
+    let mut transaction = pool.begin().await?;
+    let message = sqlx::query_as::<_, EmailMessageRecord>(
+        r"
+        INSERT INTO email_messages (
+            node_id, status, parser_name, parser_version, message_id,
+            normalized_message_id, in_reply_to, reference_ids, subject,
+            normalized_subject, sent_at, received_at, body_text, body_html,
+            preview_text, content_hash, provider_thread_id, attachment_count,
+            warnings, duration_ms
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                $15, $16, $17, $18, $19, $20)
+        ON CONFLICT (node_id) DO UPDATE SET
+            status = EXCLUDED.status,
+            parser_name = EXCLUDED.parser_name,
+            parser_version = EXCLUDED.parser_version,
+            message_id = EXCLUDED.message_id,
+            normalized_message_id = EXCLUDED.normalized_message_id,
+            in_reply_to = EXCLUDED.in_reply_to,
+            reference_ids = EXCLUDED.reference_ids,
+            subject = EXCLUDED.subject,
+            normalized_subject = EXCLUDED.normalized_subject,
+            sent_at = EXCLUDED.sent_at,
+            received_at = EXCLUDED.received_at,
+            body_text = EXCLUDED.body_text,
+            body_html = EXCLUDED.body_html,
+            preview_text = EXCLUDED.preview_text,
+            content_hash = EXCLUDED.content_hash,
+            provider_thread_id = EXCLUDED.provider_thread_id,
+            attachment_count = EXCLUDED.attachment_count,
+            warnings = EXCLUDED.warnings,
+            duration_ms = EXCLUDED.duration_ms,
+            updated_at = now()
+        RETURNING *
+        ",
+    )
+    .bind(input.node_id)
+    .bind(input.status)
+    .bind(input.parser_name)
+    .bind(input.parser_version)
+    .bind(input.message_id)
+    .bind(input.normalized_message_id)
+    .bind(input.in_reply_to)
+    .bind(input.reference_ids)
+    .bind(input.subject)
+    .bind(input.normalized_subject)
+    .bind(input.sent_at)
+    .bind(input.received_at)
+    .bind(input.body_text)
+    .bind(input.body_html)
+    .bind(input.preview_text)
+    .bind(input.content_hash)
+    .bind(input.provider_thread_id)
+    .bind(i32::try_from(projection.attachments.len()).unwrap_or(i32::MAX))
+    .bind(input.warnings)
+    .bind(input.duration_ms)
+    .fetch_one(&mut *transaction)
+    .await?;
+
+    replace_email_dependents(&mut transaction, input.node_id, projection).await?;
+    transaction.commit().await?;
+    Ok(message)
+}
+
+/// Deletes and reinserts every row that depends on a message, in one caller
+/// transaction so a reparse cannot mix parser versions across tables.
+async fn replace_email_dependents(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+    projection: &EmailProjection<'_>,
+) -> Result<(), sqlx::Error> {
+    for table in [
+        "DELETE FROM email_addresses WHERE node_id = $1",
+        "DELETE FROM email_headers WHERE node_id = $1",
+        "DELETE FROM email_labels WHERE node_id = $1",
+        "DELETE FROM email_attachments WHERE node_id = $1",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(table))
+            .bind(node_id)
+            .execute(&mut **transaction)
+            .await?;
+    }
+
+    for (position, address) in projection.addresses.iter().enumerate() {
+        sqlx::query(
+            r"
+            INSERT INTO email_addresses (node_id, role, position, display_name, address)
+            VALUES ($1, $2, $3, $4, $5)
+            ",
+        )
+        .bind(node_id)
+        .bind(address.role)
+        .bind(i32::try_from(position).unwrap_or(i32::MAX))
+        .bind(address.display_name)
+        .bind(address.address)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    for (position, header) in projection.headers.iter().enumerate() {
+        sqlx::query(
+            r"
+            INSERT INTO email_headers (node_id, position, name, normalized_name, value)
+            VALUES ($1, $2, $3, lower($3), $4)
+            ",
+        )
+        .bind(node_id)
+        .bind(i32::try_from(position).unwrap_or(i32::MAX))
+        .bind(header.name)
+        .bind(header.value)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    for label in projection.labels {
+        sqlx::query(
+            "INSERT INTO email_labels (node_id, label) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(node_id)
+        .bind(label)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    for (position, attachment) in projection.attachments.iter().enumerate() {
+        sqlx::query(
+            r"
+            INSERT INTO email_attachments (
+                node_id, part_path, position, filename, media_type, disposition,
+                content_id, transfer_encoding, decoded_size, checksum_sha256,
+                is_inline, is_message, warnings
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ",
+        )
+        .bind(node_id)
+        .bind(attachment.part_path)
+        .bind(i32::try_from(position).unwrap_or(i32::MAX))
+        .bind(attachment.filename)
+        .bind(attachment.media_type)
+        .bind(attachment.disposition)
+        .bind(attachment.content_id)
+        .bind(attachment.transfer_encoding)
+        .bind(attachment.decoded_size)
+        .bind(attachment.checksum_sha256)
+        .bind(attachment.is_inline)
+        .bind(attachment.is_message)
+        .bind(attachment.warnings)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Fetches one parsed message.
+///
+/// # Errors
+///
+/// Returns a database error when the message cannot be queried.
+pub async fn get_email_message(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Option<EmailMessageRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM email_messages WHERE node_id = $1")
+        .bind(node_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Lists a message's addresses in stable role and position order.
+///
+/// # Errors
+///
+/// Returns a database error when addresses cannot be queried.
+pub async fn list_email_addresses(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Vec<EmailAddressRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM email_addresses WHERE node_id = $1 ORDER BY position, id")
+        .bind(node_id)
+        .fetch_all(pool)
+        .await
+}
+
+/// Lists a message's headers in original order, repeats preserved.
+///
+/// # Errors
+///
+/// Returns a database error when headers cannot be queried.
+pub async fn list_email_headers(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Vec<EmailHeaderRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM email_headers WHERE node_id = $1 ORDER BY position")
+        .bind(node_id)
+        .fetch_all(pool)
+        .await
+}
+
+/// Lists a message's Gmail labels alphabetically.
+///
+/// # Errors
+///
+/// Returns a database error when labels cannot be queried.
+pub async fn list_email_labels(pool: &PgPool, node_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT label FROM email_labels WHERE node_id = $1 ORDER BY label")
+        .bind(node_id)
+        .fetch_all(pool)
+        .await
+}
+
+/// Lists a message's attachment manifest in part order.
+///
+/// # Errors
+///
+/// Returns a database error when attachments cannot be queried.
+pub async fn list_email_attachments(
+    pool: &PgPool,
+    node_id: Uuid,
+) -> Result<Vec<EmailAttachmentRecord>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM email_attachments WHERE node_id = $1 ORDER BY position, id")
+        .bind(node_id)
+        .fetch_all(pool)
+        .await
+}
+
+/// One ranked email search hit.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct EmailSearchResult {
+    pub node_id: Uuid,
+    pub subject: Option<String>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub snippet: String,
+    pub attachment_count: i32,
+    pub duplicate_count: i64,
+    pub thread_count: i64,
+    pub score: f32,
+}
+
+/// Structured narrowing applied alongside (or instead of) a text query.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EmailSearchFilters {
+    pub from: Vec<String>,
+    pub participant: Vec<String>,
+    pub labels: Vec<String>,
+    pub after: Option<DateTime<Utc>>,
+    pub before: Option<DateTime<Utc>>,
+    pub has_attachment: Option<bool>,
+    pub status: Option<EmailExtractionStatus>,
+    pub thread_group_id: Option<Uuid>,
+    pub duplicate_group_id: Option<Uuid>,
+    pub include_trashed: bool,
+    pub include_duplicates: bool,
+}
+
+impl EmailSearchFilters {
+    /// Whether any structured narrowing is present.
+    ///
+    /// An entirely unconstrained request — no query and no filter — must be
+    /// rejected rather than allowed to page the whole archive.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.from.is_empty()
+            && self.participant.is_empty()
+            && self.labels.is_empty()
+            && self.after.is_none()
+            && self.before.is_none()
+            && self.has_attachment.is_none()
+            && self.status.is_none()
+            && self.thread_group_id.is_none()
+            && self.duplicate_group_id.is_none()
+    }
+}
+
+/// Stable position in a result page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EmailSearchCursor {
+    pub score: f32,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub node_id: Uuid,
+}
+
+/// Populates missing search vectors in one bounded batch.
+///
+/// Returns the number of rows updated. Migration adds the column empty and
+/// this runs afterwards, so no deployment blocks on an archive-wide rewrite.
+///
+/// # Errors
+///
+/// Returns a database error when the batch cannot be updated.
+pub async fn backfill_email_search_vectors(pool: &PgPool, limit: u32) -> Result<u64, sqlx::Error> {
+    let limit = i64::from(limit.clamp(1, 10_000));
+    let updated = sqlx::query(
+        r"
+        UPDATE email_messages SET updated_at = updated_at
+        WHERE node_id IN (
+            SELECT node_id FROM email_messages
+            WHERE search_vector IS NULL
+            ORDER BY node_id
+            LIMIT $1
+        )
+        ",
+    )
+    .bind(limit)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected())
+}
+
+/// Counts messages still awaiting a search vector.
+///
+/// # Errors
+///
+/// Returns a database error when the count cannot be read.
+pub async fn count_email_messages_without_search_vector(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) FROM email_messages WHERE search_vector IS NULL")
+        .fetch_one(pool)
+        .await
+}
+
+/// Runs a weighted, filtered, cursor-paginated email search.
+///
+/// Ranking uses cover density (`ts_rank_cd`) so proximity matters, with a
+/// deterministic `(score, sent_at, node_id)` tie-break that keeps deep paging
+/// stable across equal scores.
+///
+/// # Errors
+///
+/// Returns a database error when the search query cannot run.
+#[allow(clippy::too_many_lines)]
+pub async fn search_email(
+    pool: &PgPool,
+    query: Option<&str>,
+    filters: &EmailSearchFilters,
+    cursor: Option<EmailSearchCursor>,
+    limit: u32,
+) -> Result<Vec<EmailSearchResult>, sqlx::Error> {
+    let limit = i64::from(limit.clamp(1, 100));
+    sqlx::query_as::<_, EmailSearchResult>(
+        r"
+        WITH matched AS (
+            SELECT e.node_id,
+                   e.subject,
+                   e.sent_at,
+                   e.attachment_count,
+                   e.duplicate_group_id,
+                   e.thread_group_id,
+                   CASE
+                       WHEN $1::text IS NULL THEN 0::real
+                       ELSE ts_rank_cd(e.search_vector,
+                                       websearch_to_tsquery('english', $1)
+                                       || websearch_to_tsquery('simple', $1))
+                   END AS score,
+                   CASE
+                       WHEN $1::text IS NULL THEN left(e.preview_text, 240)
+                       ELSE ts_headline('english', e.body_text,
+                                        websearch_to_tsquery('english', $1),
+                                        'StartSel=[[,StopSel=]],MaxFragments=2,MaxWords=28,MinWords=8')
+                   END AS snippet
+            FROM email_messages e
+            JOIN nodes n ON n.id = e.node_id
+            -- Prose is indexed stemmed while addresses, labels, and filenames
+            -- are indexed verbatim, so the query is asked in both
+            -- configurations. Asking only in english stems a label such as
+            -- Receipts to receipt, which then matches nothing.
+            WHERE ($1::text IS NULL
+                   OR e.search_vector @@ (websearch_to_tsquery('english', $1)
+                                          || websearch_to_tsquery('simple', $1)))
+              AND ($2::boolean OR n.lifecycle_state = 'active')
+              AND ($3::text[] IS NULL OR EXISTS (
+                    SELECT 1 FROM email_addresses a
+                    WHERE a.node_id = e.node_id AND a.address = ANY($3)
+                      AND a.role IN ('from', 'sender', 'reply_to')))
+              AND ($4::text[] IS NULL OR EXISTS (
+                    SELECT 1 FROM email_addresses a
+                    WHERE a.node_id = e.node_id AND a.address = ANY($4)))
+              AND ($5::text[] IS NULL OR EXISTS (
+                    SELECT 1 FROM email_labels l
+                    WHERE l.node_id = e.node_id AND l.label = ANY($5)))
+              AND ($6::timestamptz IS NULL OR e.sent_at >= $6)
+              AND ($7::timestamptz IS NULL OR e.sent_at < $7)
+              AND ($8::boolean IS NULL
+                   OR ($8 AND e.attachment_count > 0)
+                   OR (NOT $8 AND e.attachment_count = 0))
+              AND ($9::email_extraction_status IS NULL OR e.status = $9)
+              AND ($10::uuid IS NULL OR e.thread_group_id = $10)
+              AND ($11::uuid IS NULL OR e.duplicate_group_id = $11)
+        ),
+        counted AS (
+            SELECT m.*,
+                   CASE WHEN m.duplicate_group_id IS NULL THEN 1
+                        ELSE count(*) OVER (PARTITION BY m.duplicate_group_id)
+                   END AS duplicate_count,
+                   CASE WHEN m.thread_group_id IS NULL THEN 1
+                        ELSE count(*) OVER (PARTITION BY m.thread_group_id)
+                   END AS thread_count,
+                   -- Collapsing picks a deterministic representative so the
+                   -- same copy is chosen on every run.
+                   row_number() OVER (
+                       PARTITION BY coalesce(m.duplicate_group_id, m.node_id)
+                       ORDER BY m.score DESC, m.sent_at DESC NULLS LAST, m.node_id
+                   ) AS duplicate_rank
+            FROM matched m
+        )
+        SELECT node_id, subject, sent_at, snippet, attachment_count,
+               duplicate_count, thread_count, score
+        FROM counted
+        WHERE ($12::boolean OR duplicate_rank = 1)
+          -- Every ordering term is descending so one row-wise comparison can
+          -- express the whole cursor. Mixing a descending score with an
+          -- ascending id would make this test the wrong side of the tie and
+          -- return rows the previous page already delivered.
+          AND ($13::real IS NULL
+               OR (score, coalesce(sent_at, '-infinity'::timestamptz), node_id)
+                   < ($13, coalesce($14::timestamptz, '-infinity'::timestamptz), $15::uuid))
+        ORDER BY score DESC, sent_at DESC NULLS LAST, node_id DESC
+        LIMIT $16
+        ",
+    )
+    .bind(query)
+    .bind(filters.include_trashed)
+    .bind(none_if_empty(&filters.from))
+    .bind(none_if_empty(&filters.participant))
+    .bind(none_if_empty(&filters.labels))
+    .bind(filters.after)
+    .bind(filters.before)
+    .bind(filters.has_attachment)
+    .bind(filters.status)
+    .bind(filters.thread_group_id)
+    .bind(filters.duplicate_group_id)
+    .bind(filters.include_duplicates)
+    .bind(cursor.map(|value| value.score))
+    .bind(cursor.and_then(|value| value.sent_at))
+    .bind(cursor.map(|value| value.node_id))
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+fn none_if_empty(values: &[String]) -> Option<&[String]> {
+    (!values.is_empty()).then_some(values)
+}
+
+/// One facet bucket.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct EmailFacet {
+    pub value: String,
+    pub count: i64,
+}
+
+/// Bounded label facets over active messages.
+///
+/// # Errors
+///
+/// Returns a database error when the aggregate cannot run.
+pub async fn email_label_facets(pool: &PgPool, limit: i64) -> Result<Vec<EmailFacet>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        SELECT l.label AS value, count(*) AS count
+        FROM email_labels l
+        JOIN nodes n ON n.id = l.node_id AND n.lifecycle_state = 'active'
+        GROUP BY l.label
+        ORDER BY count DESC, l.label
+        LIMIT $1
+        ",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Bounded correspondent facets over active messages.
+///
+/// # Errors
+///
+/// Returns a database error when the aggregate cannot run.
+pub async fn email_correspondent_facets(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<EmailFacet>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        SELECT a.address AS value, count(*) AS count
+        FROM email_addresses a
+        JOIN nodes n ON n.id = a.node_id AND n.lifecycle_state = 'active'
+        WHERE a.role IN ('from', 'sender', 'reply_to')
+        GROUP BY a.address
+        ORDER BY count DESC, a.address
+        LIMIT $1
+        ",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Message counts per calendar year, newest first.
+///
+/// # Errors
+///
+/// Returns a database error when the aggregate cannot run.
+pub async fn email_year_facets(pool: &PgPool) -> Result<Vec<EmailFacet>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+        SELECT to_char(date_trunc('year', e.sent_at), 'YYYY') AS value,
+               count(*) AS count
+        FROM email_messages e
+        JOIN nodes n ON n.id = e.node_id AND n.lifecycle_state = 'active'
+        WHERE e.sent_at IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1 DESC
+        ",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Read-only projection of the historical email workload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmailPreflightReport {
+    pub snapshot_before: DateTime<Utc>,
+    pub parser_version: Option<String>,
+    pub candidates: i64,
+    pub already_completed: i64,
+    pub already_failed: i64,
+    pub already_skipped: i64,
+    pub already_unsupported: i64,
+    pub total_candidate_bytes: i64,
+    pub p50_bytes: i64,
+    pub p95_bytes: i64,
+    pub max_bytes: i64,
+}
+
+/// Email scopes accepted by bounded manual reprocessing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EmailReprocessScope {
+    Node(Uuid),
+    Failed,
+    Missing,
+    VersionMismatch(String),
+}
+
+// A historical email candidate is an active finalized file with no email
+// projection, or one produced by a different parser version. Unlike OCR,
+// candidacy does not require `node_metadata`: `.eml` files are frequently
+// detected as `text/plain`, so filtering on detected MIME here would hide most
+// of the archive. The handler confirms the RFC 5322 shape from bytes and
+// records `unsupported` for anything else, which costs one cheap sniff per
+// non-email file and is recoverable, where a wrong pre-filter is silent.
+
+/// Builds the read-only email preflight report for a snapshot boundary.
+///
+/// # Errors
+///
+/// Returns a database error when an aggregate query cannot run.
+pub async fn email_preflight_report(
+    pool: &PgPool,
+    snapshot_before: DateTime<Utc>,
+    parser_version: Option<&str>,
+) -> Result<EmailPreflightReport, sqlx::Error> {
+    let sizes = sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(
+        r"
+        SELECT count(*) AS candidates,
+               COALESCE(sum(f.byte_size), 0)::bigint AS total_bytes,
+               COALESCE(percentile_disc(0.5) WITHIN GROUP (ORDER BY f.byte_size), 0)::bigint
+                   AS p50_bytes,
+               COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY f.byte_size), 0)::bigint
+                   AS p95_bytes,
+               COALESCE(max(f.byte_size), 0)::bigint AS max_bytes
+        FROM nodes n
+        JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+        LEFT JOIN email_messages e ON e.node_id = n.id
+        WHERE n.kind = 'file' AND n.lifecycle_state = 'active'
+          AND n.created_at < $1
+          AND (e.node_id IS NULL OR e.parser_version IS DISTINCT FROM $2)
+        ",
+    )
+    .bind(snapshot_before)
+    .bind(parser_version)
+    .fetch_one(pool)
+    .await?;
+
+    let outcomes = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        r"
+        SELECT
+            count(*) FILTER (WHERE status = 'completed') AS completed,
+            count(*) FILTER (WHERE status = 'failed') AS failed,
+            count(*) FILTER (WHERE status = 'skipped') AS skipped,
+            count(*) FILTER (WHERE status = 'unsupported') AS unsupported
+        FROM email_messages
+        ",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(EmailPreflightReport {
+        snapshot_before,
+        parser_version: parser_version.map(ToOwned::to_owned),
+        candidates: sizes.0,
+        already_completed: outcomes.0,
+        already_failed: outcomes.1,
+        already_skipped: outcomes.2,
+        already_unsupported: outcomes.3,
+        total_candidate_bytes: sizes.1,
+        p50_bytes: sizes.2,
+        p95_bytes: sizes.3,
+        max_bytes: sizes.4,
+    })
+}
+
+/// Enqueues one bounded historical email batch and advances the cursor.
+///
+/// Selection, enqueue, cursor advance, and the aggregate count share one
+/// transaction, so an interrupted refill can neither skip nor repeat a file.
+///
+/// # Errors
+///
+/// Returns a database error when the bounded refill transaction cannot commit.
+pub async fn enqueue_email_backfill_batch(
+    pool: &PgPool,
+    campaign: &BackfillCampaignRecord,
+    parser_version: Option<&str>,
+    allowance: i64,
+) -> Result<(u64, bool), sqlx::Error> {
+    let Some(snapshot_before) = campaign.snapshot_before else {
+        return Ok((0, false));
+    };
+    if allowance <= 0 {
+        return Ok((0, false));
+    }
+    let mut transaction = pool.begin().await?;
+    // The campaign state is re-read inside the transaction. Only the cursor
+    // update was previously guarded, so a paused campaign could still enqueue
+    // work while its cursor stood still — leaving those nodes with active jobs
+    // that a later resume would skip. The scheduler only calls this for running
+    // campaigns, but the function must be safe for any caller.
+    let state = sqlx::query_scalar::<_, BackfillState>(
+        "SELECT state FROM backfill_campaigns WHERE id = $1 FOR UPDATE",
+    )
+    .bind(campaign.id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if state != Some(BackfillState::Running) {
+        transaction.commit().await?;
+        return Ok((0, false));
+    }
+    let candidates = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
+        r"
+        SELECT n.id, n.created_at
+        FROM nodes n
+        JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+        LEFT JOIN email_messages e ON e.node_id = n.id
+        WHERE n.kind = 'file' AND n.lifecycle_state = 'active'
+          AND n.created_at < $1
+          AND (e.node_id IS NULL OR e.parser_version IS DISTINCT FROM $2)
+          AND ($3::timestamptz IS NULL OR (n.created_at, n.id) > ($3, $4))
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.target_node_id = n.id AND j.job_type = 'email_extraction'
+                AND j.state IN ('pending', 'leased')
+          )
+        ORDER BY n.created_at, n.id
+        LIMIT $5
+        ",
+    )
+    .bind(snapshot_before)
+    .bind(parser_version)
+    .bind(campaign.cursor_created_at)
+    .bind(campaign.cursor_node_id)
+    .bind(allowance)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    let exhausted = i64::try_from(candidates.len()).unwrap_or(i64::MAX) < allowance;
+    let Some(&(last_id, last_created_at)) = candidates.last() else {
+        transaction.commit().await?;
+        return Ok((0, true));
+    };
+
+    let mut enqueued = 0u64;
+    for (node_id, _) in &candidates {
+        let inserted = sqlx::query(
+            r"
+            INSERT INTO jobs
+                (id, job_type, target_node_id, priority, origin, campaign_id, resource_class)
+            VALUES ($1, 'email_extraction', $2, -100, 'backfill', $3, 'heavy_cpu')
+            ON CONFLICT DO NOTHING
+            ",
+        )
+        .bind(Uuid::new_v4())
+        .bind(node_id)
+        .bind(campaign.id)
+        .execute(&mut *transaction)
+        .await?;
+        enqueued += inserted.rows_affected();
+    }
+
+    sqlx::query(
+        r"
+        UPDATE backfill_campaigns
+        SET enqueued_count = enqueued_count + $2, cursor_created_at = $3,
+            cursor_node_id = $4, updated_at = now()
+        WHERE id = $1 AND state = 'running'
+        ",
+    )
+    .bind(campaign.id)
+    .bind(i64::try_from(enqueued).unwrap_or(i64::MAX))
+    .bind(last_created_at)
+    .bind(last_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok((enqueued, exhausted))
+}
+
+/// Enqueues a bounded set of manual email jobs, ignoring already-active work.
+///
+/// # Errors
+///
+/// Returns a database error when candidates or the queue cannot be accessed.
+pub async fn enqueue_email_reprocessing(
+    pool: &PgPool,
+    scope: &EmailReprocessScope,
+    limit: u32,
+) -> Result<u64, sqlx::Error> {
+    let limit = i64::from(limit.clamp(1, 100));
+    // Active work is excluded inside each candidate query, before the limit is
+    // applied. Filtering afterwards would let a batch report zero while
+    // eligible nodes waited further down the result set.
+    let node_ids = match scope {
+        EmailReprocessScope::Node(node_id) => {
+            sqlx::query_scalar::<_, Uuid>(
+                r"
+                SELECT n.id FROM nodes n
+                JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+                WHERE n.id = $1 AND n.kind = 'file' AND n.lifecycle_state = 'active'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs j
+                      WHERE j.target_node_id = n.id AND j.job_type = 'email_extraction'
+                        AND j.state IN ('pending', 'leased')
+                  )
+                LIMIT 1
+                ",
+            )
+            .bind(node_id)
+            .fetch_all(pool)
+            .await?
+        }
+        EmailReprocessScope::Failed => {
+            sqlx::query_scalar::<_, Uuid>(
+                r"
+                SELECT n.id FROM nodes n
+                JOIN email_messages e ON e.node_id = n.id
+                WHERE n.lifecycle_state = 'active' AND e.status = 'failed'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs j
+                      WHERE j.target_node_id = n.id AND j.job_type = 'email_extraction'
+                        AND j.state IN ('pending', 'leased')
+                  )
+                ORDER BY e.updated_at, n.id
+                LIMIT $1
+                ",
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        EmailReprocessScope::Missing => {
+            sqlx::query_scalar::<_, Uuid>(
+                r"
+                SELECT n.id FROM nodes n
+                JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+                LEFT JOIN email_messages e ON e.node_id = n.id
+                WHERE n.kind = 'file' AND n.lifecycle_state = 'active' AND e.node_id IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs j
+                      WHERE j.target_node_id = n.id AND j.job_type = 'email_extraction'
+                        AND j.state IN ('pending', 'leased')
+                  )
+                ORDER BY n.created_at, n.id
+                LIMIT $1
+                ",
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        EmailReprocessScope::VersionMismatch(version) => {
+            sqlx::query_scalar::<_, Uuid>(
+                r"
+                SELECT n.id FROM nodes n
+                JOIN email_messages e ON e.node_id = n.id
+                WHERE n.lifecycle_state = 'active' AND e.parser_version <> $1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs j
+                      WHERE j.target_node_id = n.id AND j.job_type = 'email_extraction'
+                        AND j.state IN ('pending', 'leased')
+                  )
+                ORDER BY e.updated_at, n.id
+                LIMIT $2
+                ",
+            )
+            .bind(version)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let mut enqueued = 0;
+    for node_id in node_ids {
+        if enqueue_job_with_context(
+            pool,
+            JobType::EmailExtraction,
+            node_id,
+            -50,
+            JobOrigin::Repair,
+            None,
+            JobResourceClass::HeavyCpu,
+        )
+        .await?
+        .is_some()
+        {
+            enqueued += 1;
+        }
+    }
+    Ok(enqueued)
+}
+
+/// One MIME family bucket in the read-only OCR preflight report.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct OcrPreflightFamily {
+    pub detected_mime: String,
+    pub candidates: i64,
+    pub total_bytes: i64,
+    pub p50_bytes: i64,
+    pub p95_bytes: i64,
+    pub max_bytes: i64,
+}
+
+/// Read-only projection of the historical OCR workload.
+///
+/// Every field is derived from indexed aggregates over already-extracted
+/// metadata. Nothing here opens a managed original or enqueues a job.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OcrPreflightReport {
+    pub snapshot_before: DateTime<Utc>,
+    pub engine_version: Option<String>,
+    pub candidates: i64,
+    pub already_completed: i64,
+    pub already_skipped: i64,
+    pub already_failed: i64,
+    pub already_unsupported: i64,
+    pub awaiting_metadata: i64,
+    pub total_candidate_bytes: i64,
+    pub families: Vec<OcrPreflightFamily>,
+}
+
+// A node is a historical OCR candidate when it is an active finalized file
+// whose detected MIME is an OCR input and which has no document text for the
+// current engine version. Files whose metadata job has not yet run have no
+// `detected_mime` and are deliberately excluded: they are counted separately as
+// `awaiting_metadata` rather than guessed at from their filename. The predicate
+// is repeated verbatim in the two queries below because sqlx only accepts
+// `&'static str`; the duplication is covered by `ocr_backfill_candidates.rs`.
+
+/// Builds the read-only OCR preflight report for a snapshot boundary.
+///
+/// # Errors
+///
+/// Returns a database error when an aggregate query cannot run.
+pub async fn ocr_preflight_report(
+    pool: &PgPool,
+    supported_mimes: &[String],
+    snapshot_before: DateTime<Utc>,
+    engine_version: Option<&str>,
+) -> Result<OcrPreflightReport, sqlx::Error> {
+    let families = sqlx::query_as::<_, OcrPreflightFamily>(
+        r"
+        SELECT m.detected_mime,
+               count(*) AS candidates,
+               COALESCE(sum(f.byte_size), 0)::bigint AS total_bytes,
+               COALESCE(percentile_disc(0.5) WITHIN GROUP (ORDER BY f.byte_size), 0)::bigint
+                   AS p50_bytes,
+               COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY f.byte_size), 0)::bigint
+                   AS p95_bytes,
+               COALESCE(max(f.byte_size), 0)::bigint AS max_bytes
+        FROM nodes n
+        JOIN file_objects f ON f.node_id = n.id
+        JOIN node_metadata m ON m.node_id = n.id
+        LEFT JOIN document_text d ON d.node_id = n.id
+        WHERE n.kind = 'file'
+          AND n.lifecycle_state = 'active'
+          AND f.upload_state = 'finalized'
+          AND m.detected_mime = ANY($1)
+          AND n.created_at < $2
+          AND (d.node_id IS NULL
+               OR (d.engine_version IS DISTINCT FROM $3 AND d.status <> 'skipped'))
+        GROUP BY m.detected_mime
+        ORDER BY candidates DESC, m.detected_mime
+        ",
+    )
+    .bind(supported_mimes)
+    .bind(snapshot_before)
+    .bind(engine_version)
+    .fetch_all(pool)
+    .await?;
+
+    let outcomes = sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(
+        r"
+        SELECT
+            (SELECT count(*) FROM document_text
+             WHERE status = 'completed' AND source = 'ocr') AS already_completed,
+            (SELECT count(*) FROM document_text
+             WHERE status = 'skipped'
+                OR (status = 'completed' AND source = 'embedded')) AS already_skipped,
+            (SELECT count(*) FROM document_text WHERE status = 'failed') AS already_failed,
+            (SELECT count(*) FROM document_text WHERE status = 'unsupported')
+                AS already_unsupported,
+            (SELECT count(*)
+             FROM nodes n
+             JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
+             LEFT JOIN node_metadata m ON m.node_id = n.id
+             WHERE n.kind = 'file' AND n.lifecycle_state = 'active'
+               AND n.created_at < $1 AND m.node_id IS NULL) AS awaiting_metadata
+        ",
+    )
+    .bind(snapshot_before)
+    .fetch_one(pool)
+    .await?;
+
+    let candidates = families.iter().map(|family| family.candidates).sum();
+    let total_candidate_bytes = families.iter().map(|family| family.total_bytes).sum();
+    Ok(OcrPreflightReport {
+        snapshot_before,
+        engine_version: engine_version.map(ToOwned::to_owned),
+        candidates,
+        already_completed: outcomes.0,
+        already_skipped: outcomes.1,
+        already_failed: outcomes.2,
+        already_unsupported: outcomes.3,
+        awaiting_metadata: outcomes.4,
+        total_candidate_bytes,
+        families,
+    })
+}
+
+/// Enqueues one bounded historical OCR batch and advances the campaign cursor.
+///
+/// Candidate ordering, the enqueue, the cursor advance, and the aggregate count
+/// share one transaction, so an interrupted refill either advances fully or not
+/// at all and can never skip a candidate. Returns the number enqueued and
+/// whether the campaign has reached the end of its candidate set.
+///
+/// # Errors
+///
+/// Returns a database error when the bounded refill transaction cannot commit.
+pub async fn enqueue_ocr_backfill_batch(
+    pool: &PgPool,
+    campaign: &BackfillCampaignRecord,
+    supported_mimes: &[String],
+    engine_version: Option<&str>,
+    allowance: i64,
+) -> Result<(u64, bool), sqlx::Error> {
+    let Some(snapshot_before) = campaign.snapshot_before else {
+        // An unprepared campaign has no frozen boundary and must not enumerate.
+        return Ok((0, false));
+    };
+    if allowance <= 0 {
+        return Ok((0, false));
+    }
+    let mut transaction = pool.begin().await?;
+    // The campaign state is re-read inside the transaction. Only the cursor
+    // update was previously guarded, so a paused campaign could still enqueue
+    // work while its cursor stood still — leaving those nodes with active jobs
+    // that a later resume would skip. The scheduler only calls this for running
+    // campaigns, but the function must be safe for any caller.
+    let state = sqlx::query_scalar::<_, BackfillState>(
+        "SELECT state FROM backfill_campaigns WHERE id = $1 FOR UPDATE",
+    )
+    .bind(campaign.id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if state != Some(BackfillState::Running) {
+        transaction.commit().await?;
+        return Ok((0, false));
+    }
+    let candidates = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
+        r"
+        SELECT n.id, n.created_at
+        FROM nodes n
+        JOIN file_objects f ON f.node_id = n.id
+        JOIN node_metadata m ON m.node_id = n.id
+        LEFT JOIN document_text d ON d.node_id = n.id
+        WHERE n.kind = 'file'
+          AND n.lifecycle_state = 'active'
+          AND f.upload_state = 'finalized'
+          AND m.detected_mime = ANY($1)
+          AND n.created_at < $2
+          AND (d.node_id IS NULL
+               OR (d.engine_version IS DISTINCT FROM $3 AND d.status <> 'skipped'))
+          AND ($4::timestamptz IS NULL OR (n.created_at, n.id) > ($4, $5))
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.target_node_id = n.id AND j.job_type = 'ocr'
+                AND j.state IN ('pending', 'leased')
+          )
+        ORDER BY n.created_at, n.id
+        LIMIT $6
+        ",
+    )
+    .bind(supported_mimes)
+    .bind(snapshot_before)
+    .bind(engine_version)
+    .bind(campaign.cursor_created_at)
+    .bind(campaign.cursor_node_id)
+    .bind(allowance)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    let exhausted = i64::try_from(candidates.len()).unwrap_or(i64::MAX) < allowance;
+    let Some(&(last_id, last_created_at)) = candidates.last() else {
+        transaction.commit().await?;
+        return Ok((0, true));
+    };
+
+    let mut enqueued = 0u64;
+    for (node_id, _) in &candidates {
+        let inserted = sqlx::query(
+            r"
+            INSERT INTO jobs
+                (id, job_type, target_node_id, priority, origin, campaign_id, resource_class)
+            VALUES ($1, 'ocr', $2, -100, 'backfill', $3, 'heavy_cpu')
+            ON CONFLICT DO NOTHING
+            ",
+        )
+        .bind(Uuid::new_v4())
+        .bind(node_id)
+        .bind(campaign.id)
+        .execute(&mut *transaction)
+        .await?;
+        enqueued += inserted.rows_affected();
+    }
+
+    sqlx::query(
+        r"
+        UPDATE backfill_campaigns
+        SET enqueued_count = enqueued_count + $2, cursor_created_at = $3,
+            cursor_node_id = $4, updated_at = now()
+        WHERE id = $1 AND state = 'running'
+        ",
+    )
+    .bind(campaign.id)
+    .bind(i64::try_from(enqueued).unwrap_or(i64::MAX))
+    .bind(last_created_at)
+    .bind(last_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok((enqueued, exhausted))
+}
+
 /// One durable background job.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct JobRecord {
@@ -1033,6 +2258,26 @@ pub async fn transition_backfill_campaign(
         transaction.commit().await?;
         return Ok(None);
     }
+    if target == BackfillState::Running {
+        // Email, OCR, and attachment backfills share one `heavy_cpu` admission
+        // permit, so a second active heavy campaign could not make progress
+        // anyway — it would only compete for refills and make the queue harder
+        // to reason about. Refuse the transition outright instead.
+        let competing = sqlx::query_scalar::<_, i64>(
+            r"
+            SELECT count(*) FROM backfill_campaigns
+            WHERE id <> $1 AND resource_class = 'heavy_cpu'
+              AND state IN ('running', 'draining')
+            ",
+        )
+        .bind(id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if competing > 0 {
+            transaction.commit().await?;
+            return Ok(None);
+        }
+    }
     let _campaign = sqlx::query_as::<_, BackfillCampaignRecord>(
         r"
         UPDATE backfill_campaigns
@@ -1242,7 +2487,10 @@ pub const fn default_resource_class(job_type: JobType) -> JobResourceClass {
     match job_type {
         JobType::MetadataExtraction => JobResourceClass::Extractor,
         JobType::PreviewGeneration => JobResourceClass::Preview,
-        JobType::Ocr => JobResourceClass::HeavyCpu,
+        // Email parsing starts under the shared heavy permit even though MIME
+        // parsing is cheaper than OCR. ADR 0009 gates promotion to `Extractor`
+        // on the 10,000-message canary in email.md Story 22.5.
+        JobType::Ocr | JobType::EmailExtraction => JobResourceClass::HeavyCpu,
         JobType::ImportScan => JobResourceClass::HeavyIo,
         JobType::TrashCleanup | JobType::PermanentDeletion => JobResourceClass::Light,
     }
@@ -2352,6 +3600,7 @@ pub async fn finalize_import(
     .await?;
     enqueue_metadata_job(&mut transaction, node.id).await?;
     enqueue_ocr_job_best_effort(&mut transaction, node.id).await;
+    enqueue_email_job_best_effort(&mut transaction, node.id).await;
     sqlx::query(
         r"
         UPDATE import_entries
@@ -3110,6 +4359,7 @@ pub async fn finalize_upload(
     .await?;
     enqueue_metadata_job(&mut transaction, node.id).await?;
     enqueue_ocr_job_best_effort(&mut transaction, node.id).await;
+    enqueue_email_job_best_effort(&mut transaction, node.id).await;
     complete_upload_session(&mut transaction, session_id, node.id, checksum_sha256).await?;
     transaction.commit().await?;
     Ok(node)
@@ -3230,6 +4480,46 @@ async fn enqueue_metadata_job(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+/// Enqueues a foreground email-extraction job alongside finalization.
+///
+/// Enqueueing is unconditional for every finalized file rather than gated on
+/// the declared MIME: the type is only reliably known after byte inspection,
+/// which the handler performs. A non-email file is recorded `unsupported` there
+/// and costs one cheap sniff. The savepoint means a failed enqueue can never
+/// roll back the finalization itself — the file stays published, and the
+/// missing job is recoverable through the reprocess scopes.
+async fn enqueue_email_job_best_effort(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: Uuid,
+) {
+    if sqlx::query("SAVEPOINT enqueue_email_job")
+        .execute(&mut **transaction)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let inserted = sqlx::query(
+        r"
+        INSERT INTO jobs (id, job_type, target_node_id, priority, max_attempts)
+        VALUES ($1, 'email_extraction', $2, -5, 3)
+        ON CONFLICT DO NOTHING
+        ",
+    )
+    .bind(Uuid::new_v4())
+    .bind(node_id)
+    .execute(&mut **transaction)
+    .await;
+    if inserted.is_err() {
+        let _ = sqlx::query("ROLLBACK TO SAVEPOINT enqueue_email_job")
+            .execute(&mut **transaction)
+            .await;
+    }
+    let _ = sqlx::query("RELEASE SAVEPOINT enqueue_email_job")
+        .execute(&mut **transaction)
+        .await;
 }
 
 async fn enqueue_ocr_job_best_effort(

@@ -6,12 +6,49 @@ import {
   onCleanup,
   Show,
 } from 'solid-js'
-import { getOcrStatus, reprocessOcr } from '../api/client'
-import type { OcrEvent, OcrStatus } from '../api/types'
+import {
+  actOnBackfill,
+  createOcrCampaign,
+  getOcrPreflight,
+  getOcrStatus,
+  listBackfills,
+  reprocessOcr,
+} from '../api/client'
+import type {
+  BackfillCampaign,
+  OcrEvent,
+  OcrPreflight,
+  OcrStatus,
+} from '../api/types'
 import './ImportStatusView.css'
 import './OcrStatusView.css'
 
 const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
+
+const BATCH_SIZE = 100
+const MAX_QUEUED = 500
+const MAX_RUNNING = 1
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1000
+  let unit = 0
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000
+    unit += 1
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`
+}
+
+/** Campaign states in which historical work can still be claimed. */
+function isActive(campaign: BackfillCampaign): boolean {
+  return (
+    campaign.state === 'running' ||
+    campaign.state === 'paused' ||
+    campaign.state === 'draining'
+  )
+}
 
 export function OcrStatusView() {
   const [notice, setNotice] = createSignal<string>()
@@ -27,6 +64,17 @@ export function OcrStatusView() {
     () => getOcrStatus(),
   )
   const current = () => (staticPreview ? sampleStatus : status())
+  const [preflight, setPreflight] = createSignal<OcrPreflight>()
+  const [campaigns, { refetch: refetchCampaigns }] = createResource(
+    () => !staticPreview,
+    () => listBackfills(),
+  )
+  const ocrCampaign = (): BackfillCampaign | undefined => {
+    if (staticPreview) return sampleCampaign
+    return campaigns()?.find(
+      (campaign) => campaign.kind === 'ocr' && isActive(campaign),
+    )
+  }
 
   createEffect(() => {
     if (status.error instanceof Error) setNotice(status.error.message)
@@ -65,6 +113,92 @@ export function OcrStatusView() {
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : 'OCR reprocessing failed.',
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runPreflight = async () => {
+    setBusy(true)
+    setNotice(undefined)
+    try {
+      const report = staticPreview ? samplePreflight : await getOcrPreflight()
+      setPreflight(report)
+      setNotice(
+        `Preflight found ${report.candidates} candidate${report.candidates === 1 ? '' : 's'} (${formatBytes(report.total_candidate_bytes)}). No work was queued.`,
+      )
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Preflight failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const startCampaign = async () => {
+    const report = preflight()
+    if (!report) return
+    if (
+      !window.confirm(
+        `Create a paused OCR campaign for ${report.candidates} files (${formatBytes(report.total_candidate_bytes)})?\n\n` +
+          `Batch ${BATCH_SIZE} · max ${MAX_QUEUED} queued · ${MAX_RUNNING} running · heavy_cpu.\n\n` +
+          'The campaign starts paused. Nothing runs until you resume it.',
+      )
+    )
+      return
+    setBusy(true)
+    setNotice(undefined)
+    try {
+      if (!staticPreview) {
+        await createOcrCampaign({
+          candidateCount: report.candidates,
+          snapshotBefore: report.snapshot_before,
+          batchSize: BATCH_SIZE,
+          maxQueued: MAX_QUEUED,
+          maxRunning: MAX_RUNNING,
+        })
+        await refetchCampaigns()
+      }
+      setNotice('Campaign created and paused. Resume it to begin processing.')
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : 'Campaign creation failed.',
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const campaignAction = async (
+    campaign: BackfillCampaign,
+    action: 'resume' | 'pause' | 'cancel',
+  ) => {
+    if (
+      action === 'cancel' &&
+      !window.confirm(
+        'Cancel this campaign? Queued historical work is dropped. Completed OCR text is kept and leased jobs finish.',
+      )
+    )
+      return
+    if (
+      action === 'resume' &&
+      !window.confirm(
+        `Resume historical OCR for ${campaign.candidate_count} files?\n\n` +
+          'This starts sustained CPU work. Foreground uploads keep priority.',
+      )
+    )
+      return
+    setBusy(true)
+    setNotice(undefined)
+    try {
+      if (!staticPreview) {
+        await actOnBackfill(campaign.id, action)
+        await refetchCampaigns()
+      }
+      setNotice(`Campaign ${action}d.`)
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : `Campaign ${action} failed.`,
       )
     } finally {
       setBusy(false)
@@ -122,6 +256,177 @@ export function OcrStatusView() {
               <Count label="Skipped" value={data().counts.skipped} />
               <Count label="Unsupported" value={data().counts.unsupported} />
             </dl>
+            <section class="ocr-campaign" aria-labelledby="ocr-campaign-title">
+              <div class="import-console__heading">
+                <h3 id="ocr-campaign-title">Historical backfill</h3>
+                <span
+                  class={`ocr-campaign__state is-${ocrCampaign()?.state ?? 'none'}`}
+                >
+                  {ocrCampaign()?.state ?? 'no campaign'}
+                </span>
+              </div>
+
+              <Show
+                when={ocrCampaign()}
+                fallback={
+                  <div class="ocr-campaign__setup">
+                    <p>
+                      New uploads are OCR'd automatically. Files already in the
+                      library are only processed through an explicit campaign.
+                    </p>
+                    <Show when={preflight()}>
+                      {(report) => (
+                        <dl class="import-source__counts ocr-campaign__counts">
+                          <Count
+                            label="Candidates"
+                            value={report().candidates}
+                          />
+                          <Count
+                            label="Awaiting metadata"
+                            value={report().awaiting_metadata}
+                          />
+                          <Count
+                            label="Already done"
+                            value={report().already_completed}
+                          />
+                          <Count
+                            label="Already failed"
+                            value={report().already_failed}
+                            error
+                          />
+                        </dl>
+                      )}
+                    </Show>
+                    <Show when={preflight()}>
+                      {(report) => (
+                        <Show when={report().families.length > 0}>
+                          <table class="ocr-campaign__families">
+                            <caption class="sr-only">
+                              Candidate files by detected type
+                            </caption>
+                            <thead>
+                              <tr>
+                                <th scope="col">Type</th>
+                                <th scope="col">Files</th>
+                                <th scope="col">Total</th>
+                                <th scope="col">p50</th>
+                                <th scope="col">p95</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <For each={report().families}>
+                                {(family) => (
+                                  <tr>
+                                    <td>{family.detected_mime}</td>
+                                    <td>{family.candidates}</td>
+                                    <td>{formatBytes(family.total_bytes)}</td>
+                                    <td>{formatBytes(family.p50_bytes)}</td>
+                                    <td>{formatBytes(family.p95_bytes)}</td>
+                                  </tr>
+                                )}
+                              </For>
+                            </tbody>
+                          </table>
+                        </Show>
+                      )}
+                    </Show>
+                    <div class="folder-toolbar">
+                      <button
+                        type="button"
+                        disabled={busy()}
+                        onClick={() => void runPreflight()}
+                      >
+                        Run preflight
+                      </button>
+                      <button
+                        class="btn--primary"
+                        type="button"
+                        disabled={busy() || !preflight()}
+                        onClick={() => void startCampaign()}
+                      >
+                        Create paused campaign
+                      </button>
+                    </div>
+                  </div>
+                }
+              >
+                {(campaign) => (
+                  <div class="ocr-campaign__active">
+                    <dl class="import-source__counts ocr-campaign__counts">
+                      <Count
+                        label="Candidates"
+                        value={campaign().candidate_count}
+                      />
+                      <Count label="Queued" value={campaign().enqueued_count} />
+                      <Count
+                        label="Completed"
+                        value={campaign().completed_count}
+                      />
+                      <Count
+                        label="Failed"
+                        value={campaign().failed_count}
+                        error
+                      />
+                    </dl>
+                    <p class="ocr-campaign__limits">
+                      Batch {campaign().batch_size} · max{' '}
+                      {campaign().max_queued} queued · {campaign().max_running}{' '}
+                      running · {campaign().resource_class} · foreground
+                      priority every {campaign().foreground_fairness} claims
+                    </p>
+                    <Show when={campaign().snapshot_before}>
+                      {(snapshot) => (
+                        <p class="ocr-campaign__limits">
+                          Snapshot{' '}
+                          <time dateTime={snapshot()}>
+                            {new Date(snapshot()).toLocaleString()}
+                          </time>
+                          . Files added after this stay foreground work.
+                        </p>
+                      )}
+                    </Show>
+                    <Show when={campaign().last_error}>
+                      {(error) => <p class="ocr-console__warning">{error()}</p>}
+                    </Show>
+                    <div class="folder-toolbar">
+                      <Show when={campaign().state === 'paused'}>
+                        <button
+                          class="btn--primary"
+                          type="button"
+                          disabled={busy()}
+                          onClick={() =>
+                            void campaignAction(campaign(), 'resume')
+                          }
+                        >
+                          Resume
+                        </button>
+                      </Show>
+                      <Show when={campaign().state === 'running'}>
+                        <button
+                          type="button"
+                          disabled={busy()}
+                          onClick={() =>
+                            void campaignAction(campaign(), 'pause')
+                          }
+                        >
+                          Pause
+                        </button>
+                      </Show>
+                      <button
+                        type="button"
+                        disabled={busy()}
+                        onClick={() =>
+                          void campaignAction(campaign(), 'cancel')
+                        }
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </Show>
+            </section>
+
             <section class="import-console" aria-labelledby="ocr-console-title">
               <div class="import-console__heading">
                 <h3 id="ocr-console-title">OCR activity</h3>
@@ -226,6 +531,70 @@ const sampleStatus: OcrStatus = {
   engine_name: 'tesseract',
   engine_version: 'tesseract 5.5.0',
   language: 'eng',
+}
+
+const samplePreflight: OcrPreflight = {
+  snapshot_before: '2026-08-03T09:00:00Z',
+  engine_version: 'tesseract 5.5.0',
+  candidates: 691_402,
+  already_completed: 842,
+  already_skipped: 319,
+  already_failed: 2,
+  already_unsupported: 7,
+  awaiting_metadata: 118,
+  total_candidate_bytes: 2_140_000_000_000,
+  families: [
+    {
+      detected_mime: 'application/pdf',
+      candidates: 402_118,
+      total_bytes: 1_480_000_000_000,
+      p50_bytes: 1_800_000,
+      p95_bytes: 24_000_000,
+      max_bytes: 512_000_000,
+    },
+    {
+      detected_mime: 'image/jpeg',
+      candidates: 264_902,
+      total_bytes: 610_000_000_000,
+      p50_bytes: 2_200_000,
+      p95_bytes: 9_400_000,
+      max_bytes: 88_000_000,
+    },
+    {
+      detected_mime: 'image/tiff',
+      candidates: 24_382,
+      total_bytes: 50_000_000_000,
+      p50_bytes: 1_400_000,
+      p95_bytes: 12_000_000,
+      max_bytes: 240_000_000,
+    },
+  ],
+}
+
+const sampleCampaign: BackfillCampaign = {
+  id: '00000000-0000-0000-0000-0000000000c1',
+  kind: 'ocr',
+  state: 'paused',
+  snapshot_before: '2026-08-03T09:00:00Z',
+  cursor_created_at: '2024-02-11T04:12:00Z',
+  cursor_node_id: '00000000-0000-0000-0000-0000000000a7',
+  batch_size: 100,
+  max_queued: 500,
+  max_running: 1,
+  resource_class: 'heavy_cpu',
+  foreground_fairness: 20,
+  candidate_count: 691_402,
+  enqueued_count: 1_200,
+  completed_count: 1_142,
+  failed_count: 3,
+  skipped_count: 55,
+  created_by_version: '0.1.0',
+  last_error: null,
+  created_at: '2026-08-03T09:00:00Z',
+  updated_at: '2026-08-03T09:42:00Z',
+  started_at: '2026-08-03T09:05:00Z',
+  paused_at: '2026-08-03T09:42:00Z',
+  completed_at: null,
 }
 
 const sampleEntries: OcrEvent[] = [

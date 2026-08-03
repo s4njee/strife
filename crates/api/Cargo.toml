@@ -22,13 +22,13 @@ strife-importer = { path = "../importer" }
 strife-storage = { path = "../storage" }
 tokio.workspace = true
 tokio-util.workspace = true
+strife-media = { path = "../media" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
-strife-media = { path = "../media" }
 strife-worker = { path = "../worker" }
 tower.workspace = true
 

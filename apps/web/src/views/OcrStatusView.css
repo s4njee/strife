@@ -20,8 +20,107 @@
   white-space: normal;
 }
 
+/* Historical backfill controls: a surface panel, not a terminal console. */
+.ocr-campaign {
+  margin-top: var(--space-5);
+  overflow: hidden;
+  border: 1px solid var(--color-border-structural);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-panel);
+}
+
+.ocr-campaign .import-console__heading {
+  border-bottom: 1px solid var(--color-border-row);
+  color: var(--color-text-primary);
+  background: transparent;
+}
+
+.ocr-campaign__state {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-label);
+  text-transform: uppercase;
+}
+
+.ocr-campaign__state.is-running {
+  color: var(--color-accent);
+}
+
+.ocr-campaign__state.is-paused,
+.ocr-campaign__state.is-draining {
+  color: var(--color-warning);
+}
+
+.ocr-campaign__counts {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.ocr-campaign__setup,
+.ocr-campaign__active {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.ocr-campaign__setup > p {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-md);
+}
+
+.ocr-campaign__limits {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.ocr-campaign__families {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.ocr-campaign__families th,
+.ocr-campaign__families td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-row);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ocr-campaign__families th:first-child,
+.ocr-campaign__families td:first-child {
+  text-align: left;
+  font-family: var(--font-mono);
+}
+
+.ocr-campaign__families th {
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-label);
+  text-transform: uppercase;
+}
+
+.ocr-campaign__families td {
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.ocr-campaign .folder-toolbar {
+  margin-left: 0;
+  justify-content: flex-start;
+}
+
 @media (max-width: 72rem) {
   .ocr-view__counts {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ocr-campaign__counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

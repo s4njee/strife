@@ -1,0 +1,8 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Duplicate by content
+Date: Thu, 19 Apr 2018 09:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Identical canonical content with no Message-ID to group on.

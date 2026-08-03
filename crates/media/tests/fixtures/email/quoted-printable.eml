@@ -1,0 +1,11 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Quoted printable body
+Date: Sun, 8 Apr 2018 07:00:00 +0000
+Message-ID: <qp-007@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Caf=C3=A9 receipts are attached to the following=20message. Soft line breaks=
+ must not appear in the decoded text.

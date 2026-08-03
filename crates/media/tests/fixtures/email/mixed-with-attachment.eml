@@ -1,0 +1,22 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Cc: Cleo Fixture <cleo@example.test>
+Subject: Report attached
+Date: Thu, 5 Apr 2018 14:45:00 +0000
+Message-ID: <mixed-004@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mix-boundary"
+
+--mix-boundary
+Content-Type: text/plain; charset="utf-8"
+
+The quarterly report is attached.
+
+--mix-boundary
+Content-Type: application/pdf; name="report.pdf"
+Content-Disposition: attachment; filename="report.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJfixture only, not a real PDF=
+
+--mix-boundary--

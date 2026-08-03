@@ -47,11 +47,86 @@ struct OcrEventResponse {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OcrPreflightFamilyResponse {
+    pub detected_mime: String,
+    pub candidates: i64,
+    pub total_bytes: i64,
+    pub p50_bytes: i64,
+    pub p95_bytes: i64,
+    pub max_bytes: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OcrPreflightResponse {
+    pub snapshot_before: chrono::DateTime<chrono::Utc>,
+    pub engine_version: Option<String>,
+    pub candidates: i64,
+    pub already_completed: i64,
+    pub already_skipped: i64,
+    pub already_failed: i64,
+    pub already_unsupported: i64,
+    pub awaiting_metadata: i64,
+    pub total_candidate_bytes: i64,
+    pub families: Vec<OcrPreflightFamilyResponse>,
+}
+
 pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/api/ocr/status", get(status))
+        .route("/api/ocr/preflight", get(preflight))
         .route("/api/ocr/events", get(events))
         .with_state(pool)
+}
+
+/// Read-only historical OCR projection.
+///
+/// This endpoint never enqueues work and never opens a managed original. It
+/// exists so an operator can review the candidate set and its size distribution
+/// before creating a campaign, and so the campaign's frozen `snapshot_before`
+/// and `candidate_count` come from a reviewed report rather than a guess.
+async fn preflight(
+    State(pool): State<PgPool>,
+) -> Result<Json<OcrPreflightResponse>, axum::http::StatusCode> {
+    let snapshot_before = chrono::Utc::now();
+    let engine = strife_db::get_ocr_engine_state(&pool)
+        .await
+        .map_err(internal_error)?;
+    let supported: Vec<String> = strife_media::supported_ocr_mimes()
+        .iter()
+        .map(|mime| (*mime).to_owned())
+        .collect();
+    let report = strife_db::ocr_preflight_report(
+        &pool,
+        &supported,
+        snapshot_before,
+        engine.as_ref().map(|value| value.engine_version.as_str()),
+    )
+    .await
+    .map_err(internal_error)?;
+    Ok(Json(OcrPreflightResponse {
+        snapshot_before: report.snapshot_before,
+        engine_version: report.engine_version,
+        candidates: report.candidates,
+        already_completed: report.already_completed,
+        already_skipped: report.already_skipped,
+        already_failed: report.already_failed,
+        already_unsupported: report.already_unsupported,
+        awaiting_metadata: report.awaiting_metadata,
+        total_candidate_bytes: report.total_candidate_bytes,
+        families: report
+            .families
+            .into_iter()
+            .map(|family| OcrPreflightFamilyResponse {
+                detected_mime: family.detected_mime,
+                candidates: family.candidates,
+                total_bytes: family.total_bytes,
+                p50_bytes: family.p50_bytes,
+                p95_bytes: family.p95_bytes,
+                max_bytes: family.max_bytes,
+            })
+            .collect(),
+    }))
 }
 
 async fn status(

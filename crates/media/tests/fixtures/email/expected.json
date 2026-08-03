@@ -1,0 +1,203 @@
+{
+  "_comment": [
+    "Expected normalized parser output for the committed email fixtures.",
+    "Every identity and address here is synthetic and uses the reserved",
+    "example.test domain; no mailbox data, live address, authentication",
+    "header, or secret is committed. Story 18.1 asserts each fixture against",
+    "the entry below so a parser upgrade shows a semantic diff rather than an",
+    "opaque snapshot mismatch. Fields absent from an entry are not asserted."
+  ],
+  "fixtures": {
+    "plain-text.eml": {
+      "covers": ["text/plain body"],
+      "subject": "Plain text message",
+      "message_id": "plain-001@example.test",
+      "sent_at": "2018-04-02T09:30:00Z",
+      "from": ["ada@example.test"],
+      "to": ["bob@example.test"],
+      "body_contains": ["This is a plain text body.", "two paragraphs"],
+      "attachment_count": 0
+    },
+    "html-only.eml": {
+      "covers": ["HTML-only body", "HTML to text conversion"],
+      "subject": "HTML only message",
+      "message_id": "html-002@example.test",
+      "body_contains": ["First paragraph.", "Alpha", "Beta", "Second"],
+      "body_excludes": ["<p>", "<li>", "&nbsp;"],
+      "has_html_alternative": true,
+      "attachment_count": 0
+    },
+    "multipart-alternative.eml": {
+      "covers": ["multipart/alternative", "plain preferred for search"],
+      "subject": "Alternative parts",
+      "message_id": "alt-003@example.test",
+      "body_contains": ["Plain alternative preferred for search."],
+      "body_excludes": ["HTML alternative retained"],
+      "has_html_alternative": true,
+      "attachment_count": 0
+    },
+    "mixed-with-attachment.eml": {
+      "covers": ["multipart/mixed", "base64 attachment", "cc recipients"],
+      "subject": "Report attached",
+      "message_id": "mixed-004@example.test",
+      "cc": ["cleo@example.test"],
+      "body_contains": ["quarterly report is attached"],
+      "attachment_count": 1,
+      "attachments": [
+        {
+          "filename": "report.pdf",
+          "media_type": "application/pdf",
+          "disposition": "attachment",
+          "is_inline": false,
+          "is_message": false
+        }
+      ]
+    },
+    "inline-cid-image.eml": {
+      "covers": ["multipart/related", "inline cid: reference"],
+      "subject": "Inline logo",
+      "message_id": "inline-005@example.test",
+      "attachment_count": 1,
+      "attachments": [
+        {
+          "filename": "logo.png",
+          "media_type": "image/png",
+          "content_id": "logo-part@example.test",
+          "is_inline": true,
+          "is_message": false
+        }
+      ]
+    },
+    "nested-rfc822.eml": {
+      "covers": ["nested message/rfc822"],
+      "subject": "Fwd: original message",
+      "message_id": "nested-006@example.test",
+      "attachment_count": 1,
+      "attachments": [
+        {
+          "media_type": "message/rfc822",
+          "is_message": true,
+          "is_inline": false
+        }
+      ]
+    },
+    "quoted-printable.eml": {
+      "covers": ["quoted-printable decoding", "soft line breaks"],
+      "subject": "Quoted printable body",
+      "message_id": "qp-007@example.test",
+      "body_contains": ["Café receipts", "following message"],
+      "body_excludes": ["=C3=A9", "=20", "="],
+      "attachment_count": 0
+    },
+    "base64-body.eml": {
+      "covers": ["base64 body decoding"],
+      "subject": "Base64 body",
+      "message_id": "b64-008@example.test",
+      "body_contains": ["This body was base64 encoded."],
+      "attachment_count": 0
+    },
+    "utf8-subject-and-body.eml": {
+      "covers": ["UTF-8 subject", "non-Latin body"],
+      "subject": "Über naïve café — résumé",
+      "message_id": "utf8-009@example.test",
+      "body_contains": ["Grüße aus München", "日本語のテキスト"],
+      "attachment_count": 0
+    },
+    "legacy-charset.eml": {
+      "covers": ["ISO-8859-1 decoding"],
+      "subject": "Legacy charset",
+      "message_id": "latin-010@example.test",
+      "body_contains": ["Café naïve résumé"],
+      "attachment_count": 0
+    },
+    "encoded-and-folded-headers.eml": {
+      "covers": [
+        "RFC 2047 encoded words",
+        "base64 and quoted-printable headers",
+        "folded header continuation"
+      ],
+      "subject": "Encoded ümlaut subject",
+      "message_id": "enc-011@example.test",
+      "from": ["apfel@example.test"],
+      "from_display_names": ["Äpfel Fixture"],
+      "to": [
+        "bob@example.test",
+        "cleo@example.test",
+        "dana@example.test"
+      ],
+      "attachment_count": 0
+    },
+    "repeated-recipients.eml": {
+      "covers": ["repeated To header", "same address across roles"],
+      "subject": "Repeated recipient headers",
+      "message_id": "rep-012@example.test",
+      "to": ["bob@example.test", "cleo@example.test"],
+      "cc": ["bob@example.test"],
+      "attachment_count": 0
+    },
+    "missing-message-id.eml": {
+      "covers": ["absent Message-ID"],
+      "subject": "No message id",
+      "message_id": null,
+      "normalized_message_id": null,
+      "attachment_count": 0
+    },
+    "malformed-date.eml": {
+      "covers": ["unparseable Date header"],
+      "subject": "Broken date header",
+      "message_id": "baddate-013@example.test",
+      "sent_at": null,
+      "expect_warning": true,
+      "warning_contains": "date",
+      "attachment_count": 0
+    },
+    "malformed-boundary.eml": {
+      "covers": ["missing closing MIME boundary"],
+      "subject": "Broken MIME boundary",
+      "message_id": "badmime-014@example.test",
+      "body_contains": ["closing boundary is missing"],
+      "expect_warning": true,
+      "status": "completed"
+    },
+    "gmail-labels.eml": {
+      "covers": ["X-Gmail-Labels", "X-GM-THRID"],
+      "subject": "Message with Gmail context",
+      "message_id": "gmail-015@example.test",
+      "labels": ["Important", "Inbox", "Work/Reports"],
+      "provider_thread_id": "1598765432109876543",
+      "attachment_count": 0
+    },
+    "no-gmail-labels.eml": {
+      "covers": ["ordinary RFC message without Gmail headers"],
+      "subject": "Ordinary RFC message",
+      "message_id": "nogmail-016@example.test",
+      "labels": [],
+      "provider_thread_id": null,
+      "attachment_count": 0
+    },
+    "duplicate-message-id-a.eml": {
+      "covers": ["duplicate pair by Message-ID"],
+      "message_id": "dup-017@example.test",
+      "duplicate_pair": "duplicate-message-id-b.eml",
+      "duplicate_reason": "message_id"
+    },
+    "duplicate-message-id-b.eml": {
+      "covers": ["duplicate pair by Message-ID"],
+      "message_id": "dup-017@example.test",
+      "duplicate_pair": "duplicate-message-id-a.eml",
+      "duplicate_reason": "message_id"
+    },
+    "duplicate-content-a.eml": {
+      "covers": ["duplicate pair by canonical content, no Message-ID"],
+      "message_id": null,
+      "duplicate_pair": "duplicate-content-b.eml",
+      "duplicate_reason": "content_hash"
+    },
+    "duplicate-content-b.eml": {
+      "covers": ["duplicate pair by canonical content, no Message-ID"],
+      "message_id": null,
+      "duplicate_pair": "duplicate-content-a.eml",
+      "duplicate_reason": "content_hash"
+    }
+  }
+}

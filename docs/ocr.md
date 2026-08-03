@@ -595,17 +595,41 @@ As an operator, I want historical OCR admitted through an explicit bounded campa
 **Acceptance Criteria:**
 
 - [x] OCR deployment, migrations, API startup, worker startup, and recovery do not automatically enqueue historical nodes; files finalized after deployment continue to receive foreground OCR jobs.
-- [ ] OCR adopts the shared `backfill_campaigns`, job origin/campaign fields, durable cursor, scheduler, priority policy, and renewable resource leases specified by [`backfill.md`](backfill.md).
-- [ ] A read-only preflight reports OCR candidates by MIME family, file/page/size percentiles where discoverable without OCR, current text state, projected work, and estimated storage without enqueueing jobs.
-- [ ] A historical OCR campaign starts paused and records candidate snapshot criteria, batch size, maximum queued/running work, resource class, cursor, counts, timestamps, and initiating version.
-- [ ] Initial Orion defaults are 100 candidates per refill, at most 500 queued OCR jobs, one running OCR backfill job, and one shared `HEAVY_CPU` permit across OCR, email, and attachment backfills.
-- [ ] Foreground jobs outrank repair work, which outranks historical OCR; a fairness budget allows slow backfill progress without hiding new uploads, imports, metadata, previews, or deletions.
-- [ ] Pausing stops refills while leased work finishes; resuming continues from the durable cursor; cancelling prevents new claims without deleting completed OCR text.
+- [x] OCR adopts the shared `backfill_campaigns`, job origin/campaign fields, durable cursor, scheduler, priority policy, and renewable resource leases specified by [`backfill.md`](backfill.md).
+- [x] A read-only preflight reports OCR candidates by MIME family, file/page/size percentiles where discoverable without OCR, current text state, projected work, and estimated storage without enqueueing jobs.
+- [x] A historical OCR campaign starts paused and records candidate snapshot criteria, batch size, maximum queued/running work, resource class, cursor, counts, timestamps, and initiating version.
+- [x] Initial Orion defaults are 100 candidates per refill, at most 500 queued OCR jobs, one running OCR backfill job, and one shared `HEAVY_CPU` permit across OCR, email, and attachment backfills.
+- [x] Foreground jobs outrank repair work, which outranks historical OCR; a fairness budget allows slow backfill progress without hiding new uploads, imports, metadata, previews, or deletions.
+- [x] Pausing stops refills while leased work finishes; resuming continues from the durable cursor; cancelling prevents new claims without deleting completed OCR text.
 - [ ] The OCR page distinguishes foreground activity from campaigns and exposes candidate count, state, progress, throughput, ETA, limits, start/pause/resume/cancel controls, and canary results.
 - [ ] Email body parsing completes before the full ordinary OCR campaign begins, and email attachment OCR uses the same OCR/shared-heavy permit after ordinary OCR unless an operator explicitly changes the documented sequence.
 - [ ] Tests cover inert deployment/startup, foreground processing while paused, canary limits, low-water refill, cross-pipeline mutual exclusion, priority/fairness, pause/resume/cancel, restart recovery, and multi-worker resource-lease enforcement.
 
-**Implementation progress:** The shared migration/deployment foundation is complete through `0017_backfill_campaigns`: production migrations are one-shot, ordinary startup can disable migrations, new OCR remains foreground work, repair OCR is classified separately, and generic campaigns, events/SSE, priority fairness, renewable resource slots, pause/resume/cancel controls, and a disabled-by-default coordinator contract are present. Story 16.6 remains open because no OCR preflight or candidate provider is registered, cursor advancement and refill are not yet implemented for OCR, and the OCR page/canary/restart coverage is still outstanding. This intermediate state is intentionally inert and cannot scan or enqueue historical OCR files.
+**Implementation progress:** Registered the OCR adapter on the shared coordinator and implemented historical candidate selection end to end. Candidate selection, enqueue, and `(created_at, id)` cursor advance share one transaction, so an interrupted refill can neither skip nor repeat a file. Candidates are active finalized files whose extracted `detected_mime` is an OCR input and whose document text is absent or from a different engine version; files still awaiting metadata are counted separately rather than guessed at from their filename. Added a read-only preflight endpoint reporting candidates and byte percentiles per MIME family, and OCR page controls for preflight, paused campaign creation from a reviewed report, resume, pause, and cancel. Two safety guards are enforced in code: an unprepared campaign has no frozen snapshot and refuses to enumerate, and a worker with no verified Tesseract refuses to refill rather than treating every file as a version mismatch and enqueueing the whole library.
+
+Story 16.6 remains open on three criteria. The OCR page shows candidate count, state, progress, and limits but not throughput, ETA, or canary results. The email-ordering criterion cannot be satisfied until [`email.md`](email.md) Epic 18 exists; it is a deployment-sequencing constraint recorded in [`backfill.md`](backfill.md) Phases 6–7, not code. Test coverage is partial: inert draft/paused/unverified-engine startup, low-water refill, cursor advance, exhaustion-to-draining, active-job exclusion, snapshot boundary, and job classification are covered here, while cross-pipeline mutual exclusion, priority/fairness, and multi-worker resource-lease enforcement remain covered only by the Story 16.6 foundation tests in `crates/db/tests/backfills.rs`. Restart recovery mid-campaign and foreground throughput while a campaign is paused are still uncovered.
+
+**New files:**
+
+- `crates/db/tests/ocr_backfill_candidates.rs`
+- `crates/worker/tests/ocr_backfill.rs`
+
+**Modified files:**
+
+- `Cargo.lock`
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/views/OcrStatusView.css`
+- `apps/web/src/views/OcrStatusView.tsx`
+- `crates/api/Cargo.toml`
+- `crates/api/src/ocr.rs`
+- `crates/db/Cargo.toml`
+- `crates/db/src/lib.rs`
+- `crates/media/src/lib.rs`
+- `crates/media/src/ocr.rs`
+- `crates/worker/src/backfill.rs`
+- `crates/worker/src/lib.rs`
+- `docs/ocr.md`
 
 ---
 

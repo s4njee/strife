@@ -1,0 +1,10 @@
+From: Ada Fixture <ada@example.test>
+To: Bob Fixture <bob@example.test>
+Subject: Base64 body
+Date: Mon, 9 Apr 2018 12:00:00 +0000
+Message-ID: <b64-008@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: base64
+
+VGhpcyBib2R5IHdhcyBiYXNlNjQgZW5jb2RlZC4K
