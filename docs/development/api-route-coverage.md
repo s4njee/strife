@@ -9,15 +9,16 @@ fails when a registered method/path has no explicit test owner.
 | `POST /api/admin/email/repair/campaign` | `admin.rs:18` | `email_api.rs` |
 | `GET /api/admin/email/versions` | `admin.rs:16` | `email_api.rs` |
 | `POST /api/admin/reprocess` | `admin.rs:15` | `ocr_api.rs`, `error_contract.rs` |
-| `GET /api/backfills` | `backfills.rs:127` | `backfills_api.rs` |
-| `POST /api/backfills` | `backfills.rs:127` | `backfills_api.rs` |
-| `GET /api/backfills/events` | `backfills.rs:128` | `backfills_api.rs` |
-| `GET /api/backfills/{id}` | `backfills.rs:129` | `backfills_api.rs` |
-| `POST /api/backfills/{id}/actions` | `backfills.rs:136` | `backfills_api.rs` |
-| `GET /api/backfills/{id}/canary-results` | `backfills.rs:131` | `backfills_api.rs` |
-| `POST /api/backfills/{id}/canary-results` | `backfills.rs:131` | `backfills_api.rs` |
-| `GET /api/backfills/{id}/metrics` | `backfills.rs:130` | `backfills_api.rs` |
-| `POST /api/backfills/{id}/prepare` | `backfills.rs:135` | `backfills_api.rs` |
+| `GET /api/backfills` | `backfills.rs:133` | `backfills_api.rs` |
+| `POST /api/backfills` | `backfills.rs:133` | `backfills_api.rs` |
+| `GET /api/backfills/events` | `backfills.rs:134` | `backfills_api.rs` |
+| `GET /api/backfills/{id}` | `backfills.rs:135` | `backfills_api.rs` |
+| `POST /api/backfills/{id}/actions` | `backfills.rs:146` | `backfills_api.rs` |
+| `GET /api/backfills/{id}/canary-results` | `backfills.rs:137` | `backfills_api.rs` |
+| `POST /api/backfills/{id}/canary-results` | `backfills.rs:137` | `backfills_api.rs` |
+| `POST /api/backfills/{id}/canary-stage` | `backfills.rs:141` | `backfills_api.rs` |
+| `GET /api/backfills/{id}/metrics` | `backfills.rs:136` | `backfills_api.rs` |
+| `POST /api/backfills/{id}/prepare` | `backfills.rs:145` | `backfills_api.rs` |
 | `GET /api/email/events` | `email.rs:338` | `email_api.rs` |
 | `GET /api/email/facets` | `email.rs:341` | `email_api.rs` |
 | `GET /api/email/messages/{node_id}` | `email.rs:342` | `email_api.rs` |
@@ -73,4 +74,4 @@ fails when a registered method/path has no explicit test owner.
 | `GET /health` | `health.rs:109` | `health_api.rs`, `health.rs unit tests` |
 | `GET /ready` | `health.rs:110` | `health_api.rs`, `health.rs unit tests` |
 
-**Total:** 67 registered method/path pairs.
+**Total:** 68 registered method/path pairs.

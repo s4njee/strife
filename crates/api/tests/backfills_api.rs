@@ -50,6 +50,23 @@ async fn json_request(
     (status, value)
 }
 
+fn approved_canary(stage: i64) -> Value {
+    json!({
+        "stage": stage,
+        "processed": stage,
+        "failed": 2,
+        "duration_seconds": 3600.0,
+        "p50_seconds": 21.0,
+        "p95_seconds": 42.0,
+        "peak_cpu_percent": 88.0,
+        "peak_memory_bytes": 536_870_912,
+        "peak_temperature_c": 71.0,
+        "peak_io_wait_percent": 4.0,
+        "database_growth_bytes": 1_048_576,
+        "approved": true
+    })
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_events() {
@@ -86,7 +103,11 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
         Some(json!({
             "kind": "ocr",
             "resource_class": "heavy_cpu",
-            "candidate_definition": {"version": 1, "engine": "tesseract"}
+            "candidate_definition": {
+                "version": 1,
+                "engine": "tesseract",
+                "canary_limit": 100
+            }
         })),
     )
     .await;
@@ -131,20 +152,7 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
     assert_eq!(metrics["remaining"], 700_000);
     assert!(metrics["throughput_per_hour"].is_null());
 
-    let canary = json!({
-        "stage": 100,
-        "processed": 100,
-        "failed": 2,
-        "duration_seconds": 3600.0,
-        "p50_seconds": 21.0,
-        "p95_seconds": 42.0,
-        "peak_cpu_percent": 88.0,
-        "peak_memory_bytes": 536_870_912,
-        "peak_temperature_c": 71.0,
-        "peak_io_wait_percent": 4.0,
-        "database_growth_bytes": 1_048_576,
-        "approved": true
-    });
+    let canary = approved_canary(100);
     let (running_status, _) = json_request(
         app.clone(),
         "POST",
@@ -182,6 +190,22 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
     .await;
     assert_eq!(pause_status, StatusCode::OK);
     assert_eq!(paused["state"], "paused");
+    sqlx::query(
+        "UPDATE backfill_campaigns SET enqueued_count = 100, completed_count = 98, \
+         failed_count = 2 WHERE id = $1",
+    )
+    .bind(Uuid::parse_str(id).expect("UUID"))
+    .execute(&pool)
+    .await
+    .expect("simulate drained canary outcomes");
+    let (unapproved_status, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-stage"),
+        Some(json!({"next_stage": "1000", "reason": "reviewed metrics"})),
+    )
+    .await;
+    assert_eq!(unapproved_status, StatusCode::CONFLICT);
     let (record_status, recorded) = json_request(
         app.clone(),
         "POST",
@@ -192,6 +216,100 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
     assert_eq!(record_status, StatusCode::CREATED);
     assert_eq!(recorded["details"]["stage"], 100);
     assert_eq!(recorded["details"]["throughput_per_hour"], 100.0);
+    let (skip_status, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-stage"),
+        Some(json!({"next_stage": "10000", "reason": "skip a stage"})),
+    )
+    .await;
+    assert_eq!(skip_status, StatusCode::CONFLICT);
+    let active_job = Uuid::new_v4();
+    sqlx::query(
+        r"
+        INSERT INTO jobs
+            (id, job_type, target_node_id, priority, origin, campaign_id, resource_class)
+        VALUES ($1, 'ocr', $2, -100, 'backfill', $3, 'heavy_cpu')
+        ",
+    )
+    .bind(active_job)
+    .bind(strife_db::ROOT_NODE_ID)
+    .bind(Uuid::parse_str(id).expect("UUID"))
+    .execute(&pool)
+    .await
+    .expect("seed active campaign job");
+    let (active_status, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-stage"),
+        Some(json!({"next_stage": "1000", "reason": "job still active"})),
+    )
+    .await;
+    assert_eq!(active_status, StatusCode::CONFLICT);
+    sqlx::query("DELETE FROM jobs WHERE id = $1")
+        .bind(active_job)
+        .execute(&pool)
+        .await
+        .expect("remove active campaign job");
+    let (advance_status, advanced) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-stage"),
+        Some(json!({"next_stage": "1000", "reason": "metrics approved"})),
+    )
+    .await;
+    assert_eq!(advance_status, StatusCode::OK);
+    assert_eq!(advanced["candidate_definition"]["canary_limit"], 1_000);
+    sqlx::query(
+        "UPDATE backfill_campaigns SET enqueued_count = 1000, completed_count = 998, \
+         failed_count = 2 WHERE id = $1",
+    )
+    .bind(Uuid::parse_str(id).expect("UUID"))
+    .execute(&pool)
+    .await
+    .expect("simulate 1000-file canary outcomes");
+    let (record_status, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-results"),
+        Some(approved_canary(1_000)),
+    )
+    .await;
+    assert_eq!(record_status, StatusCode::CREATED);
+    let (advance_status, advanced) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-stage"),
+        Some(json!({"next_stage": "10000", "reason": "second stage approved"})),
+    )
+    .await;
+    assert_eq!(advance_status, StatusCode::OK);
+    assert_eq!(advanced["candidate_definition"]["canary_limit"], 10_000);
+    sqlx::query(
+        "UPDATE backfill_campaigns SET enqueued_count = 10000, completed_count = 9998, \
+         failed_count = 2 WHERE id = $1",
+    )
+    .bind(Uuid::parse_str(id).expect("UUID"))
+    .execute(&pool)
+    .await
+    .expect("simulate 10000-file canary outcomes");
+    let (record_status, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-results"),
+        Some(approved_canary(10_000)),
+    )
+    .await;
+    assert_eq!(record_status, StatusCode::CREATED);
+    let (full_status, full) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/backfills/{id}/canary-stage"),
+        Some(json!({"next_stage": "full", "reason": "full OCR authorized"})),
+    )
+    .await;
+    assert_eq!(full_status, StatusCode::OK);
+    assert!(full["candidate_definition"].get("canary_limit").is_none());
     let (results_status, results) = json_request(
         app,
         "GET",
@@ -200,7 +318,7 @@ async fn campaign_api_requires_explicit_prepare_and_resume_and_streams_audit_eve
     )
     .await;
     assert_eq!(results_status, StatusCode::OK);
-    assert_eq!(results.as_array().expect("canary results").len(), 1);
+    assert_eq!(results.as_array().expect("canary results").len(), 3);
 
     sqlx::query("DELETE FROM backfill_campaigns WHERE id = $1")
         .bind(Uuid::parse_str(id).expect("UUID"))

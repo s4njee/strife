@@ -185,7 +185,7 @@ As a developer, I want an integration test for every HTTP route so that untested
 
 `health_api.rs` exercises the public `/api/health` and `/api/ready` aliases with a custom dependency checker, covering both all-healthy readiness and a degraded Tika dependency returning `503`. The public checker contract now exposes the future alias and a `StorageCheck::new` constructor so external integration tests and alternate checkers can implement it without reaching into private fields.
 
-`scripts/api-route-coverage.py` scans the production router declarations and compares all 67 registered method/path pairs with an explicit test-owner map. It generates `docs/development/api-route-coverage.md`, fails on an unassigned new route or a stale entry, and runs in CI through `make api-route-coverage-check`.
+`scripts/api-route-coverage.py` scans the production router declarations and compares all 68 registered method/path pairs with an explicit test-owner map. It generates `docs/development/api-route-coverage.md`, fails on an unassigned new route or a stale entry, and runs in CI through `make api-route-coverage-check`.
 
 **New files:**
 

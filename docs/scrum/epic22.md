@@ -86,7 +86,7 @@ As a maintainer, I want production-shaped validation from import through search 
 - [ ] Direct upload of the same fixture produces equivalent parsed and searchable results.
 - [ ] Restart tests interrupt parsing, attachment materialization, attachment text extraction, and index backfill, then verify idempotent recovery.
 - [ ] A preflight command scans the real archive read-only and reports file count, total bytes, MIME confidence, size percentiles, malformed candidates, duplicate estimates, and projected database/artifact disk use without exposing message content.
-- [ ] The rollout follows [`backfill.md`](../backfill.md): additive migration and foreground-only deploy first; then email canaries of 100, 1,000, and 10,000; then the full email body campaign; ordinary OCR only after email body indexing; attachment text and attachment OCR last.
+- [ ] The rollout follows the owner-approved sequence in [`backfill.md`](../backfill.md): additive migration and foreground-only deploy first; then ordinary OCR canaries and full OCR; then email canaries and the full email body campaign; attachment text and attachment OCR last.
 - [ ] Each canary records throughput, p50/p95 duration, CPU, memory, temperature, I/O wait, database/index growth, failures, and estimated completion time before the next stage is authorized.
 - [ ] The 10,000-message canary explicitly decides the email resource-class promotion from Story 22.2 — promote to `extractor` or hold at `heavy_cpu` — and records the measurement the decision rests on.
 - [ ] PostgreSQL and managed-storage backup requirements are documented before full backfill; parsed projections may be rebuilt, but canonical `.eml` originals must be included in backup and restore drills.

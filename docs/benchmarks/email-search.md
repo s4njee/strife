@@ -18,7 +18,7 @@ reconsidered.
 Story 19.5 sits in Epic 19, but the measurement it wants is rollout evidence,
 not development evidence. Benchmarking an index before the parser, ranking
 weights, and filter set are stable measures a moving target. The run belongs
-immediately before the Phase 5 email canaries in [`backfill.md`](../backfill.md),
+immediately before the Phase 7 email canaries in [`backfill.md`](../backfill.md),
 alongside Story 22.5's validation, where its thresholds actually gate a
 decision.
 

@@ -305,6 +305,23 @@ export async function actOnBackfill(
   return (await response.json()) as BackfillCampaign
 }
 
+export async function advanceOcrCanaryStage(
+  id: string,
+  nextStage: '1000' | '10000' | 'full',
+  reason: string,
+): Promise<BackfillCampaign> {
+  const response = await fetch(`/api/backfills/${id}/canary-stage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ next_stage: nextStage, reason }),
+  })
+  if (!response.ok)
+    throw new ApiClientError(
+      `Campaign canary advance failed (${response.status}).`,
+    )
+  return (await response.json()) as BackfillCampaign
+}
+
 export async function getBackfillMetrics(
   id: string,
   signal?: AbortSignal,

@@ -3362,6 +3362,116 @@ pub async fn prepare_backfill_campaign(
     Ok(campaign)
 }
 
+/// Advances a reviewed OCR canary to the next cumulative stage.
+///
+/// The campaign must be paused with no active work, and the current stage must
+/// have an approved canary result. `None` removes the limit after the approved
+/// 10,000-file stage and authorizes the full frozen candidate snapshot.
+///
+/// # Errors
+///
+/// Returns a database error when the campaign, jobs, or audit log cannot be
+/// read or updated atomically.
+pub async fn advance_ocr_backfill_canary(
+    pool: &PgPool,
+    id: Uuid,
+    next_limit: Option<i64>,
+    reason: Option<&str>,
+) -> Result<Option<BackfillCampaignRecord>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let campaign = sqlx::query_as::<_, BackfillCampaignRecord>(
+        "SELECT * FROM backfill_campaigns WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(campaign) = campaign else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let current_limit = campaign
+        .candidate_definition
+        .get("canary_limit")
+        .and_then(serde_json::Value::as_i64);
+    let Some(current_limit) = current_limit else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let allowed_stage = matches!(
+        (current_limit, next_limit),
+        (100, Some(1_000)) | (1_000, Some(10_000)) | (10_000, None)
+    );
+    let terminal_count = campaign
+        .completed_count
+        .saturating_add(campaign.failed_count)
+        .saturating_add(campaign.skipped_count);
+    if campaign.kind != BackfillKind::Ocr
+        || campaign.state != BackfillState::Paused
+        || !allowed_stage
+        || campaign.enqueued_count < current_limit
+        || terminal_count < current_limit
+    {
+        transaction.commit().await?;
+        return Ok(None);
+    }
+    let active_jobs = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM jobs WHERE campaign_id = $1 AND state IN ('pending', 'leased')",
+    )
+    .bind(id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let approved = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM backfill_campaign_events
+            WHERE campaign_id = $1 AND event_type = 'canary_result'
+              AND (details ->> 'stage')::bigint = $2
+              AND COALESCE((details ->> 'approved')::boolean, false)
+        )
+        ",
+    )
+    .bind(id)
+    .bind(current_limit)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if active_jobs != 0 || !approved {
+        transaction.commit().await?;
+        return Ok(None);
+    }
+    let updated = sqlx::query_as::<_, BackfillCampaignRecord>(
+        r"
+        UPDATE backfill_campaigns
+        SET candidate_definition = CASE
+                WHEN $2::bigint IS NULL THEN candidate_definition - 'canary_limit'
+                ELSE jsonb_set(candidate_definition, '{canary_limit}', to_jsonb($2::bigint), true)
+            END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+        ",
+    )
+    .bind(id)
+    .bind(next_limit)
+    .fetch_one(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r"
+        INSERT INTO backfill_campaign_events
+            (campaign_id, old_state, new_state, event_type, reason, details)
+        VALUES ($1, 'paused', 'paused', 'canary_advanced', $2,
+                jsonb_build_object('previous_limit', $3, 'next_limit', $4))
+        ",
+    )
+    .bind(id)
+    .bind(reason)
+    .bind(current_limit)
+    .bind(next_limit)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(Some(updated))
+}
+
 /// Applies an allowed campaign state transition and appends an audit event.
 ///
 /// # Errors

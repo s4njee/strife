@@ -8,6 +8,7 @@ import {
 } from 'solid-js'
 import {
   actOnBackfill,
+  advanceOcrCanaryStage,
   createOcrCampaign,
   getBackfillMetrics,
   getOcrPreflight,
@@ -31,6 +32,22 @@ const BATCH_SIZE = 100
 const MAX_QUEUED = 100
 const MAX_RUNNING = 1
 const INITIAL_CANARY_LIMIT = 100
+
+function campaignCanaryLimit(campaign: BackfillCampaign): number | null {
+  const value = campaign.candidate_definition.canary_limit
+  return typeof value === 'number' ? value : null
+}
+
+function nextCanaryStage(
+  limit: number,
+): { value: '1000' | '10000' | 'full'; label: string } | undefined {
+  if (limit === 100) return { value: '1000', label: 'Advance to 1,000 total' }
+  if (limit === 1_000)
+    return { value: '10000', label: 'Advance to 10,000 total' }
+  if (limit === 10_000)
+    return { value: 'full', label: 'Authorize full OCR campaign' }
+  return undefined
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1000) return `${bytes} B`
@@ -234,6 +251,38 @@ export function OcrStatusView() {
     }
   }
 
+  const advanceCanary = async (campaign: BackfillCampaign) => {
+    const limit = campaignCanaryLimit(campaign)
+    if (limit === null) return
+    const next = nextCanaryStage(limit)
+    if (!next) return
+    const reason = window.prompt(
+      `${next.label}?\n\nThe ${limit.toLocaleString()}-file result must already be recorded and approved. Enter the approval reason:`,
+    )
+    if (!reason?.trim()) return
+    if (
+      !window.confirm(
+        `${next.label}?\n\nThis changes the cumulative campaign cap. The campaign remains paused until you explicitly resume it.`,
+      )
+    )
+      return
+    setBusy(true)
+    setNotice(undefined)
+    try {
+      if (!staticPreview) {
+        await advanceOcrCanaryStage(campaign.id, next.value, reason.trim())
+        await refetchCampaigns()
+      }
+      setNotice(`${next.label}. Review the new cap, then resume when ready.`)
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : 'Canary advance failed.',
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <section class="workspace-view import-view ocr-view">
       <header>
@@ -403,6 +452,15 @@ export function OcrStatusView() {
                       running · {campaign().resource_class} · foreground
                       priority every {campaign().foreground_fairness} claims
                     </p>
+                    <Show when={campaignCanaryLimit(campaign())}>
+                      {(limit) => (
+                        <p class="ocr-campaign__limits">
+                          Cumulative canary cap: {limit().toLocaleString()}{' '}
+                          files. The campaign pauses automatically after the cap
+                          drains.
+                        </p>
+                      )}
+                    </Show>
                     <Show when={campaignMetrics()}>
                       {(metrics) => (
                         <p class="ocr-campaign__limits">
@@ -449,16 +507,63 @@ export function OcrStatusView() {
                     </Show>
                     <div class="folder-toolbar">
                       <Show when={campaign().state === 'paused'}>
-                        <button
-                          class="btn--primary"
-                          type="button"
-                          disabled={busy()}
-                          onClick={() =>
-                            void campaignAction(campaign(), 'resume')
-                          }
-                        >
-                          Resume
-                        </button>
+                        <>
+                          <button
+                            class="btn--primary"
+                            type="button"
+                            disabled={
+                              busy() ||
+                              (campaignCanaryLimit(campaign()) !== null &&
+                                campaign().enqueued_count >=
+                                  (campaignCanaryLimit(campaign()) as number))
+                            }
+                            title={
+                              campaignCanaryLimit(campaign()) !== null &&
+                              campaign().enqueued_count >=
+                                (campaignCanaryLimit(campaign()) as number)
+                                ? 'Record and approve this canary, then advance its cumulative cap.'
+                                : undefined
+                            }
+                            onClick={() =>
+                              void campaignAction(campaign(), 'resume')
+                            }
+                          >
+                            Resume
+                          </button>
+                          <Show
+                            when={
+                              campaignCanaryLimit(campaign()) !== null &&
+                              nextCanaryStage(
+                                campaignCanaryLimit(campaign()) as number,
+                              )
+                            }
+                          >
+                            {(next) => {
+                              const limit = () =>
+                                campaignCanaryLimit(campaign()) as number
+                              const approved = () =>
+                                canaryResults()?.some(
+                                  (result) =>
+                                    result.details.stage === limit() &&
+                                    result.details.approved,
+                                ) ?? false
+                              return (
+                                <button
+                                  type="button"
+                                  disabled={busy() || !approved()}
+                                  title={
+                                    approved()
+                                      ? undefined
+                                      : `Record and approve the ${limit().toLocaleString()}-file canary result first.`
+                                  }
+                                  onClick={() => void advanceCanary(campaign())}
+                                >
+                                  {next().label}
+                                </button>
+                              )
+                            }}
+                          </Show>
+                        </>
                       </Show>
                       <Show when={campaign().state === 'running'}>
                         <button

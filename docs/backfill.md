@@ -15,7 +15,7 @@ Strife will:
 5. Refill only a small bounded job window rather than enqueueing the full library.
 6. Admit expensive OCR/email/attachment work through a shared renewable CPU-resource lease.
 7. Run 100-, 1,000-, and 10,000-file canaries before a full campaign.
-8. Complete email body indexing before ordinary historical OCR; process attachment text and attachment OCR last.
+8. Run ordinary historical OCR before email body indexing by the project owner's explicit 2026-08-03 sequence decision; process attachment text and attachment OCR last.
 9. Pause automatically or manually when resource or health gates fail.
 
 No migration, startup hook, recovery task, or ordinary deployment may enqueue the historical library.
@@ -395,16 +395,32 @@ Before touching Orion:
 
 This phase introduces only the normal brief restart/drain interruption for each single-instance service. Durable jobs recover after worker restart; API/web remain independently restartable. It does not start historical CPU work.
 
-### Phase 5 — Email canaries
+### Phase 5 — Ordinary OCR canaries
 
-1. Create an email campaign from the reviewed preflight report in `paused` state.
+1. Create an OCR campaign from the reviewed preflight report in `paused` state.
+2. Confirm candidate count, snapshot, engine version, batch/queue/running limits, resource class, disk projection, and backup status.
+3. Start the exact 100-file cumulative canary; let it drain and auto-pause.
+4. Record correctness, failures, throughput, p50/p95 time, CPU, memory, temperature/throttling, I/O wait, database growth, and API latency, then explicitly approve or hold the result.
+5. Advance the same paused campaign to cumulative limits of 1,000 and 10,000 only after each preceding result is approved. The API refuses skipped stages, active jobs, or an unapproved result.
+6. Measure MIME families separately and adjust provisional limits downward when uncertain; do not increase concurrency during the canary used to establish a baseline.
+
+### Phase 6 — Full ordinary OCR
+
+1. After the approved 10,000-file result, remove the canary cap through the guarded stage-advance control; the campaign remains paused.
+2. Resume full OCR with one running job, at most 100 queued jobs, and one shared heavy-CPU slot.
+3. Keep every email and attachment campaign draft, paused, completed, cancelled, or failed; the database refuses another running/draining heavy campaign.
+4. Allow foreground work to preempt historical claims and pause on unexplained host or application regressions.
+5. Reconcile text status, failures, search index growth, temp-space behavior, and resource measurements at completion.
+
+### Phase 7 — Email canaries
+
+1. Create an email campaign from a new reviewed preflight after ordinary OCR is reconciled.
 2. Confirm candidate count, snapshot, parser version, batch/queue/running limits, resource class, disk projection, and backup status.
-3. Start a 100-message canary; let it drain completely and pause.
+3. Run 100-, 1,000-, and 10,000-message canaries, pausing and recording approval at each gate.
 4. Review correctness, failure/warning categories, throughput, p50/p95 time, CPU, memory, temperature/throttling, I/O wait, database/index growth, API latency, and search/render safety.
-5. Repeat with 1,000 and 10,000 messages only after explicit approval at each gate.
-6. Adjust provisional limits downward when uncertain; do not increase concurrency during the same canary used to establish a baseline.
+5. Do not authorize attachment text or attachment OCR as part of the body campaign.
 
-### Phase 6 — Full email body campaign
+### Phase 8 — Full email body campaign
 
 1. Resume the email campaign with the proven batch/queue settings.
 2. Keep `max_running=1` initially and retain the shared resource capacity of 1.
@@ -412,15 +428,7 @@ This phase introduces only the normal brief restart/drain interruption for each 
 4. Allow foreground work to preempt historical claims.
 5. Reconcile candidate/completed/failed/skipped counts and run search correctness/index-health checks before marking complete.
 
-### Phase 7 — Historical ordinary OCR
-
-1. Create the OCR campaign only after email body extraction/indexing is complete or deliberately paused long-term.
-2. Repeat 100-, 1,000-, and 10,000-file canaries, measuring each MIME family separately.
-3. Start full OCR with one running job and one shared heavy-CPU slot.
-4. Do not run email attachment OCR concurrently.
-5. Reconcile text status, failures, search index growth, temp-space behavior, and resource measurements at completion.
-
-### Phase 8 — Attachments
+### Phase 9 — Attachments
 
 Run in this order, each as a separate canary-gated campaign:
 
@@ -430,7 +438,7 @@ Run in this order, each as a separate canary-gated campaign:
 
 Attachment OCR uses the same OCR and `heavy_cpu` permits as ordinary OCR. It never increases total Tesseract concurrency implicitly.
 
-### Phase 9 — Closeout
+### Phase 10 — Closeout
 
 - Record final counts, versions, failures, throughput, database/index/artifact growth, resource limits, and elapsed time.
 - Update Orion performance documentation with measured settings.

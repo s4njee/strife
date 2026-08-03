@@ -69,6 +69,12 @@ struct CanaryResultRequest {
 }
 
 #[derive(Deserialize)]
+struct AdvanceCanaryRequest {
+    next_stage: String,
+    reason: String,
+}
+
+#[derive(Deserialize)]
 struct EventQuery {
     campaign_id: Option<Uuid>,
 }
@@ -131,6 +137,10 @@ pub fn router(pool: PgPool) -> Router {
         .route(
             "/api/backfills/{id}/canary-results",
             get(canary_results).post(record_canary_result),
+        )
+        .route(
+            "/api/backfills/{id}/canary-stage",
+            post(advance_canary_stage),
         )
         .route("/api/backfills/{id}/prepare", post(prepare))
         .route("/api/backfills/{id}/actions", post(action))
@@ -347,6 +357,39 @@ async fn record_canary_result(
             ApiError::Conflict("Pause the campaign before recording canary results".into())
         })?;
     Ok((StatusCode::CREATED, Json(result.into())))
+}
+
+async fn advance_canary_stage(
+    State(pool): State<PgPool>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<AdvanceCanaryRequest>,
+) -> Result<Json<CampaignResponse>, ApiError> {
+    let next_limit = match request.next_stage.as_str() {
+        "1000" => Some(1_000),
+        "10000" => Some(10_000),
+        "full" => None,
+        _ => {
+            return Err(ApiError::Unprocessable(
+                "Canary stage must be 1000, 10000, or full".into(),
+            ));
+        }
+    };
+    let reason = request.reason.trim();
+    if reason.is_empty() || reason.len() > 500 {
+        return Err(ApiError::Unprocessable(
+            "A bounded approval reason is required".into(),
+        ));
+    }
+    strife_db::advance_ocr_backfill_canary(&pool, id, next_limit, Some(reason))
+        .await
+        .map_err(|error| ApiError::internal(error, ROUTE, id))?
+        .map(CampaignResponse::from)
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::Conflict(
+                "Campaign must be paused and drained with an approved current canary".into(),
+            )
+        })
 }
 
 async fn events(

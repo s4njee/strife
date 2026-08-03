@@ -24,6 +24,7 @@ ROUTE_TESTS = {
     "GET /api/backfills/{id}/metrics": "backfills_api.rs",
     "GET /api/backfills/{id}/canary-results": "backfills_api.rs",
     "POST /api/backfills/{id}/canary-results": "backfills_api.rs",
+    "POST /api/backfills/{id}/canary-stage": "backfills_api.rs",
     "POST /api/backfills/{id}/prepare": "backfills_api.rs",
     "POST /api/backfills/{id}/actions": "backfills_api.rs",
     "GET /api/email/status": "email_api.rs",

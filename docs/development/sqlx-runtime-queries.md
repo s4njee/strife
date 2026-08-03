@@ -106,124 +106,129 @@ committing its reason rather than silently bypassing offline checking.
 | `crates/db/src/lib.rs:3311` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
 | `crates/db/src/lib.rs:3330` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
 | `crates/db/src/lib.rs:3345` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:3377` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:3409` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:3424` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3442` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:3454` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:3467` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3488` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3512` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3549` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3587` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3612` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3636` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3693` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3748` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3781` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3792` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3811` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3842` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3899` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:3909` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:3923` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3944` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3961` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:3988` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:4019` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4034` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4066` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4079` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4101` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4129` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4160` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4181` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4200` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4209` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4233` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:4287` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:4301` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:4323` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:4373` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4453` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4467` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4500` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4518` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4535` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4563` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4589` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4613` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4657` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4690` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4709` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4733` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4758` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4784` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4813` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4839` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4870` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:4891` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:4914` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:4927` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:5172` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5210` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5244` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5275` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5353` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:5373` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:5417` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5638` | dynamic SQL | The statement text is assembled at runtime; SQLx macros require a literal. |
-| `crates/db/src/lib.rs:5667` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5708` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:5737` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:5763` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
-| `crates/db/src/lib.rs:5770` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:5784` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
-| `crates/db/src/lib.rs:5788` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
-| `crates/db/src/lib.rs:5797` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
-| `crates/db/src/lib.rs:5804` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:5818` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
-| `crates/db/src/lib.rs:5822` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
-| `crates/db/src/lib.rs:5857` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5884` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5911` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:5944` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:6100` | dynamic SQL | The statement text is assembled at runtime; SQLx macros require a literal. |
-| `crates/db/src/lib.rs:6118` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6160` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6215` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6286` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6340` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:6377` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6422` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:6448` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:6534` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6575` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6588` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6602` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6607` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6652` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6708` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6772` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:6799` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6805` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6813` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6825` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6840` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:6872` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3382` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3417` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:3423` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:3441` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3457` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:3487` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:3519` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:3534` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3552` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:3564` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:3577` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3598` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3622` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3660` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3698` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3723` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3747` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3804` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3859` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3892` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3903` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3922` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:3953` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4010` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4020` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:4034` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4055` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4072` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4099` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:4130` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4145` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4177` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4190` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4212` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4240` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4271` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4292` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4311` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4320` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4344` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:4398` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:4412` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:4434` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:4484` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4564` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4578` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4611` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4629` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:4646` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4674` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4700` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4724` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4768` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4801` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4820` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4844` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4869` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4895` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4924` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4950` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:4981` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:5002` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:5025` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5038` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:5283` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5321` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5355` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5386` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5464` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:5484` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:5528` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5749` | dynamic SQL | The statement text is assembled at runtime; SQLx macros require a literal. |
+| `crates/db/src/lib.rs:5778` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5819` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:5848` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:5874` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
+| `crates/db/src/lib.rs:5881` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:5895` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
+| `crates/db/src/lib.rs:5899` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
+| `crates/db/src/lib.rs:5908` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
+| `crates/db/src/lib.rs:5915` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:5929` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
+| `crates/db/src/lib.rs:5933` | transaction control | This is transaction protocol, not a row query SQLx can describe and cache. |
+| `crates/db/src/lib.rs:5968` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:5995` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6022` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6055` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:6211` | dynamic SQL | The statement text is assembled at runtime; SQLx macros require a literal. |
+| `crates/db/src/lib.rs:6229` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6271` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6326` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6397` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6451` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:6488` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6533` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:6559` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:6645` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6686` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:6699` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:6713` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:6718` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6763` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:6819` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6883` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
 | `crates/db/src/lib.rs:6910` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6949` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6979` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:6992` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:7022` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:7036` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:7054` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:7077` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:7101` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:7128` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
-| `crates/db/src/lib.rs:7158` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
-| `crates/db/src/lib.rs:7176` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:7203` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
-| `crates/db/src/lib.rs:7230` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6916` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:6924` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:6936` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:6951` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:6983` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:7021` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:7060` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:7090` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:7103` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:7133` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:7147` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:7165` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:7188` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:7212` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:7239` | executor binding | The statement participates in a transaction/helper binding path that uses custom enum parameters or runtime executor composition; convert with its owning DB module. |
+| `crates/db/src/lib.rs:7269` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
+| `crates/db/src/lib.rs:7287` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:7314` | scalar mapping | The scalar is a custom PostgreSQL enum or comes from a CTE/aggregate whose nullability needs an explicit SQLx override. |
+| `crates/db/src/lib.rs:7341` | row mapping | The shared FromRow contract includes custom PostgreSQL enums, tsvector, tuple output, or synthetic fields and needs an explicit projection before macro conversion. |
 
-**Total runtime-checked exceptions: 218.**
+**Total runtime-checked exceptions: 223.**
