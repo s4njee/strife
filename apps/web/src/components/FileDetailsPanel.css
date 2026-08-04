@@ -79,14 +79,13 @@
   margin: var(--space-4) var(--space-4) 0;
   border-radius: 8px;
   border: 1px solid var(--color-border-row);
-  background:
-    repeating-linear-gradient(
-      135deg,
-      var(--color-surface-raised),
-      var(--color-surface-raised) 8px,
-      var(--color-surface) 8px,
-      var(--color-surface) 16px
-    );
+  background: repeating-linear-gradient(
+    135deg,
+    var(--color-surface-raised),
+    var(--color-surface-raised) 8px,
+    var(--color-surface) 8px,
+    var(--color-surface) 16px
+  );
   overflow: hidden;
   display: grid;
   place-items: center;

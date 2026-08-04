@@ -468,7 +468,9 @@ function FolderContents(props: { folderId: string }) {
             items={items()}
             loading={children.loading}
             error={
-              children.error instanceof Error ? children.error.message : undefined
+              children.error instanceof Error
+                ? children.error.message
+                : undefined
             }
             onRetry={() => void refetch()}
             sortColumn={sortColumn()}

@@ -20,7 +20,7 @@ export function getFileIconInfo(
     }
   }
 
-  const ext = name ? name.split('.').pop()?.toLowerCase() ?? '' : ''
+  const ext = name ? (name.split('.').pop()?.toLowerCase() ?? '') : ''
 
   switch (ext) {
     case 'pdf':
