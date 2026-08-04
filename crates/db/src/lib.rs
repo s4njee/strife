@@ -3990,7 +3990,13 @@ pub async fn claim_job(
                     SELECT 1
                     FROM backfill_campaigns c
                     WHERE c.id = jobs.campaign_id
-                      AND c.state = 'running'
+                      -- Draining stops enqueueing, not working. A campaign
+                      -- drains the moment its candidate set is exhausted,
+                      -- which is when the last batch was enqueued rather than
+                      -- finished, so jobs from it are still pending. Excluding
+                      -- draining here stranded them permanently: nothing could
+                      -- claim them, and no transition leads back to running.
+                      AND c.state IN ('running', 'draining')
                       AND (SELECT count(*) FROM jobs active
                            WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running
                 )
@@ -4066,7 +4072,9 @@ pub async fn claim_job_with_resource_lease(
         JOIN backfill_campaigns c ON c.id = jobs.campaign_id
         WHERE jobs.job_type = $1 AND jobs.state = 'pending'
           AND jobs.origin = 'backfill'
-          AND c.state = 'running'
+          -- Same reason as the single-type claim path: a draining campaign's
+          -- already-enqueued work must still be claimable.
+          AND c.state IN ('running', 'draining')
           AND $2 >= c.foreground_fairness
           AND (SELECT count(*) FROM jobs active
                WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running

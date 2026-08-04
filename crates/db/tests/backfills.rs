@@ -297,3 +297,106 @@ async fn claims_respect_pause_fairness_and_shared_resource_capacity() {
         .await
         .expect("clean up campaign");
 }
+
+/// A campaign drains the moment its candidate set is *exhausted*, which is when
+/// the last batch was enqueued — not when it finished. Jobs from that batch are
+/// still pending, and `backfill.md` says draining lets them finish. Excluding
+/// draining from the claim paths stranded them permanently: nothing could claim
+/// them, and no transition leads back to running.
+#[tokio::test]
+async fn a_draining_campaign_still_yields_its_pending_work() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL integration test");
+        return;
+    };
+    sqlx::query("DELETE FROM nodes WHERE name LIKE 'drain-claim-%'")
+        .execute(&pool)
+        .await
+        .expect("clean stale nodes");
+    sqlx::query(
+        "DELETE FROM backfill_campaigns WHERE created_by_version = 'drain-claim' AND kind = 'attachment_text'",
+    )
+    .execute(&pool)
+    .await
+    .expect("clean stale campaigns");
+
+    let mut settings = request();
+    settings.kind = BackfillKind::AttachmentText;
+    settings.resource_class = JobResourceClass::Extractor;
+    settings.foreground_fairness = 1;
+    settings.created_by_version = "drain-claim".to_owned();
+    let campaign = create_backfill_campaign(&pool, &settings)
+        .await
+        .expect("create campaign");
+    prepare_backfill_campaign(&pool, campaign.id, 1, Utc::now(), None)
+        .await
+        .expect("prepare");
+
+    let node_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
+        .bind(node_id)
+        .bind(ROOT_NODE_ID)
+        .bind(format!("drain-claim-{node_id}"))
+        .execute(&pool)
+        .await
+        .expect("create node");
+    let job = enqueue_job_with_context(
+        &pool,
+        JobType::PreviewGeneration,
+        node_id,
+        -100,
+        JobOrigin::Backfill,
+        Some(campaign.id),
+        JobResourceClass::Extractor,
+    )
+    .await
+    .expect("enqueue backfill")
+    .expect("new backfill job");
+
+    // Give the backfill its fairness budget so the claim turns only on
+    // campaign state, which is what this test is about.
+    sqlx::query(
+        "INSERT INTO job_claim_fairness (job_type, foreground_claims_since_backfill)
+         VALUES ('preview_generation', 100)
+         ON CONFLICT (job_type) DO UPDATE SET foreground_claims_since_backfill = 100",
+    )
+    .execute(&pool)
+    .await
+    .expect("satisfy fairness budget");
+
+    // The candidate set is exhausted while this job is still pending. The
+    // state is set directly rather than through `transition_backfill_campaign`
+    // because reaching `running` first goes through the shared heavy-campaign
+    // guard, which depends on unrelated campaigns left in this shared
+    // development database by other tests. What is under test is the claim
+    // query's treatment of `draining`, not the transition rules.
+    sqlx::query("UPDATE backfill_campaigns SET state = 'draining' WHERE id = $1")
+        .bind(campaign.id)
+        .execute(&pool)
+        .await
+        .expect("drain");
+
+    let claimed = claim_job_with_resource_lease(
+        &pool,
+        JobType::PreviewGeneration,
+        "worker-draining",
+        Duration::minutes(1),
+    )
+    .await
+    .expect("claim from draining campaign")
+    .expect("a draining campaign stranded its pending job");
+    assert_eq!(claimed.id, job.id);
+    assert_eq!(claimed.campaign_id, Some(campaign.id));
+    complete_job(&pool, claimed.id).await.expect("complete");
+
+    sqlx::query("DELETE FROM nodes WHERE id = $1")
+        .bind(node_id)
+        .execute(&pool)
+        .await
+        .expect("clean up node");
+    sqlx::query("DELETE FROM backfill_campaigns WHERE id = $1")
+        .bind(campaign.id)
+        .execute(&pool)
+        .await
+        .expect("clean up campaign");
+}
