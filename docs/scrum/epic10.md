@@ -114,4 +114,6 @@ Unit tests cover the compatibility default, a relative override, an empty invali
 - `docs/scrum/epic10.md`
 - `scrum.md`
 
+**Completion verification (2026-08-04):** The complete serial Rust workspace test suite and warning-denied workspace Clippy passed. Focused database verification proved both partial queue indexes and retained active-job uniqueness, all six retention invariants, and the configurable import-root default, override, invalid-value, missing-directory, regular-file, and readable-directory cases. Migration 28 and its down migration contain the paired index create/drop operations, while the split scrum mirror retains every checked acceptance criterion and implementation report.
+
 ---
