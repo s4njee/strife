@@ -355,6 +355,14 @@ Added the cross-pipeline guard the criterion requires: `transition_backfill_camp
 
 Two defects surfaced during testing. **A paused campaign could still enqueue work**: only the cursor update was state-guarded, so a refill against a paused campaign queued jobs while the cursor stood still, and a later resume then skipped those nodes because they had active jobs. Both the email and OCR refill functions now re-read campaign state inside their transaction. **An existing API test shared the dev database** and began failing against the new mutual-exclusion guard because of campaigns left running by an earlier test run; the test now quiesces competing heavy campaigns before asserting its own resume.
 
+**Correction (2026-08-04): the candidate-selection criterion above was marked complete before the code satisfied it.** The campaign, its preflight, and the `missing` reprocess scope all selected *every* finalized active file, with no email test of any kind. The reasoning in the first paragraph — that a MIME pre-filter would hide most of the archive, so the handler should sniff instead — is correct for foreground enqueue, where the cost is one cheap sniff per uploaded file. It was wrong to carry into the campaign, where the same permissiveness spends a `heavy_cpu` job, and therefore the single shared admission permit, proving that each PDF in the library is not a message.
+
+Measured against the reference archive on Orion, selection returned 678,783 candidates against 563,033 actual messages: 115,750 jobs, roughly a sixth of the campaign, would have been spent on files that could never parse — while blocking OCR, which draws on the same permit.
+
+All three queries now require `n.name ILIKE '%.eml' OR f.mime_type = 'message/rfc822'`. Both arms are load-bearing and neither is sufficient alone. Content sniffing does not identify this archive's mail at all — its 563,033 messages are detected as `text/plain` (371,926), `text/x-diff` (155,612, list mail whose body is a patch), and `text/html` (26,397), with **not one** as `message/rfc822` — so a MIME-only rule would select nothing. The MIME arm still earns its place: 55 extensionless messages are found only that way. The predicate is duplicated across the three queries rather than composed, so each stays a static literal and none moves into the dynamic-SQL class in the runtime query inventory.
+
+This narrows *which files are considered*, not *which parse*. The handler's byte-sniffing fallback is unchanged and remains what makes a `text/plain`-detected `.eml` parse correctly.
+
 The test criterion is left open on one item: **watched-folder import is not separately covered**. Both finalization paths call the same helper and direct upload is asserted end to end, but `finalize_import` has no equivalent test of its own. Everything else in the list — inert deployment, explicit campaign start, pause/resume from the cursor, low-water refill, all four reprocess scopes, bounded batches, and active-job suppression — is covered by thirteen integration tests.
 
 **New files:**
@@ -367,6 +375,7 @@ The test criterion is left open on one item: **watched-folder import is not sepa
 - `crates/api/tests/backfills_api.rs`
 - `crates/db/src/lib.rs`
 - `crates/worker/src/backfill.rs`
+- `docs/email.md`
 - `crates/worker/src/lib.rs`
 - `docs/email.md`
 

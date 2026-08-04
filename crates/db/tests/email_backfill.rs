@@ -174,6 +174,102 @@ async fn finalizing_an_upload_enqueues_a_foreground_email_job(pool: PgPool) {
     assert_eq!(ocr, 1, "the email enqueue displaced the OCR enqueue");
 }
 
+/// Seeds a finalized file with an explicit name and sniffed MIME.
+///
+/// `seed_file` always produces the ideal case — a `.eml` name *and* a
+/// `message/rfc822` type. Real archives rarely look like that, so candidate
+/// selection needs files that disagree with it.
+async fn seed_named_file(pool: &PgPool, name: &str, mime: &str) -> Uuid {
+    let node_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
+        .bind(node_id)
+        .bind(ROOT_NODE_ID)
+        .bind(format!("{node_id}-{name}"))
+        .execute(pool)
+        .await
+        .expect("create node");
+    let file = create_file_object(pool, Uuid::new_v4(), 1024, Some(mime), None)
+        .await
+        .expect("create file object");
+    finalize_file_object(pool, file.id, node_id)
+        .await
+        .expect("finalize file object");
+    node_id
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn only_email_shaped_files_become_candidates(pool: PgPool) {
+    // Selection used to be "every finalized active file", so a campaign
+    // enqueued the whole library and burned the single heavy_cpu permit
+    // proving that PDFs are not email.
+    let campaign = running_campaign(&pool).await;
+
+    // A message is identified by name even when content sniffing calls it
+    // something else. On the reference archive every one of the 563,033
+    // messages is detected as text/plain, text/html, or text/x-diff, and not
+    // one as message/rfc822 — a MIME-only rule would select nothing at all.
+    let sniffed_plain = seed_named_file(&pool, "list-post.eml", "text/plain").await;
+    let sniffed_diff = seed_named_file(&pool, "kernel-patch.eml", "text/x-diff").await;
+    let sniffed_html = seed_named_file(&pool, "newsletter.eml", "text/html").await;
+    // And by MIME when the name carries no extension at all.
+    let typed_only = seed_named_file(&pool, "cur/1460000000.M1P2", "message/rfc822").await;
+
+    let scan = seed_named_file(&pool, "scan.pdf", "application/pdf").await;
+    let photo = seed_named_file(&pool, "holiday.jpg", "image/jpeg").await;
+    // A loose attachment extracted beside the archive: a real diff, not a
+    // message. The name is what separates it from `kernel-patch.eml` above.
+    let loose = seed_named_file(&pool, "0001-fix-oops.patch", "text/x-diff").await;
+
+    let (enqueued, _) = enqueue_email_backfill_batch(&pool, &campaign, Some(PARSER), 100)
+        .await
+        .expect("refill");
+
+    let targets = campaign_targets(&pool, campaign.id).await;
+    for (node_id, label) in [
+        (sniffed_plain, "text/plain .eml"),
+        (sniffed_diff, "text/x-diff .eml"),
+        (sniffed_html, "text/html .eml"),
+        (typed_only, "extensionless message/rfc822"),
+    ] {
+        assert!(targets.contains(&node_id), "{label} was not enqueued");
+    }
+    for (node_id, label) in [
+        (scan, "a PDF"),
+        (photo, "a JPEG"),
+        (loose, "a loose .patch attachment"),
+    ] {
+        assert!(!targets.contains(&node_id), "{label} was enqueued as email");
+    }
+    assert_eq!(enqueued, 4, "unexpected candidate count: {targets:?}");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn preflight_and_repair_agree_with_the_campaign_on_what_is_email(pool: PgPool) {
+    // Three independent queries enumerate candidates. If they disagree, an
+    // operator sizes a campaign against one number and gets another.
+    let message = seed_named_file(&pool, "thread.eml", "text/plain").await;
+    let scan = seed_named_file(&pool, "invoice.pdf", "application/pdf").await;
+
+    let report = email_preflight_report(&pool, Utc::now() + Duration::minutes(5), Some(PARSER))
+        .await
+        .expect("preflight");
+    assert_eq!(report.candidates, 1, "preflight counted the PDF");
+
+    let enqueued = enqueue_email_reprocessing(&pool, &EmailReprocessScope::Missing, 100)
+        .await
+        .expect("missing scope");
+    assert_eq!(enqueued, 1, "the missing scope enqueued the PDF");
+
+    let targets = sqlx::query_scalar::<_, Uuid>(
+        "SELECT target_node_id FROM jobs WHERE job_type = 'email_extraction'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("job targets");
+    assert!(targets.contains(&message));
+    assert!(!targets.contains(&scan));
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn unprepared_campaign_never_enumerates(pool: PgPool) {
     seed_file(&pool, "inert", 1024).await;

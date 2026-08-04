@@ -2656,6 +2656,9 @@ pub async fn email_preflight_report(
         JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
         LEFT JOIN email_messages e ON e.node_id = n.id
         WHERE n.kind = 'file' AND n.lifecycle_state = 'active'
+          -- Must match `enqueue_email_backfill_batch` exactly; a preflight that
+          -- counts files the campaign will not enqueue is worse than none.
+          AND (n.name ILIKE '%.eml' OR f.mime_type = 'message/rfc822')
           AND n.created_at < $1
           AND (e.node_id IS NULL OR e.parser_version IS DISTINCT FROM $2)
         ",
@@ -2736,6 +2739,14 @@ pub async fn enqueue_email_backfill_batch(
         JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
         LEFT JOIN email_messages e ON e.node_id = n.id
         WHERE n.kind = 'file' AND n.lifecycle_state = 'active'
+          -- Only email-shaped files. Without this the campaign enqueues the
+          -- whole library and spends the single heavy_cpu permit proving that
+          -- PDFs are not email: on the reference archive that is 115,750 of
+          -- 678,783 candidates. Sniffed MIME cannot carry this test on its own
+          -- because a real `.eml` is detected from its body as text/plain,
+          -- text/html, or text/x-diff far more often than as message/rfc822 —
+          -- the handler's own byte-sniffing fallback is what makes those parse.
+          AND (n.name ILIKE '%.eml' OR f.mime_type = 'message/rfc822')
           AND n.created_at < $1
           AND (e.node_id IS NULL OR e.parser_version IS DISTINCT FROM $2)
           AND ($3::timestamptz IS NULL OR (n.created_at, n.id) > ($3, $4))
@@ -2808,6 +2819,36 @@ pub async fn enqueue_email_reprocessing(
     scope: &EmailReprocessScope,
     limit: u32,
 ) -> Result<u64, sqlx::Error> {
+    let node_ids = email_reprocess_candidates(pool, scope, limit).await?;
+    let mut enqueued = 0;
+    for node_id in node_ids {
+        if enqueue_job_with_context(
+            pool,
+            JobType::EmailExtraction,
+            node_id,
+            -50,
+            JobOrigin::Repair,
+            None,
+            JobResourceClass::HeavyCpu,
+        )
+        .await?
+        .is_some()
+        {
+            enqueued += 1;
+        }
+    }
+    Ok(enqueued)
+}
+
+/// Resolves one reprocess scope to a bounded set of node ids.
+///
+/// Split from `enqueue_email_reprocessing` so the scope-to-SQL mapping stays
+/// readable as scopes are added; the caller owns the enqueue policy.
+async fn email_reprocess_candidates(
+    pool: &PgPool,
+    scope: &EmailReprocessScope,
+    limit: u32,
+) -> Result<Vec<Uuid>, sqlx::Error> {
     let limit = i64::from(limit.clamp(1, 100));
     // Active work is excluded inside each candidate query, before the limit is
     // applied. Filtering afterwards would let a batch report zero while
@@ -2857,6 +2898,10 @@ pub async fn enqueue_email_reprocessing(
                 JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
                 LEFT JOIN email_messages e ON e.node_id = n.id
                 WHERE n.kind = 'file' AND n.lifecycle_state = 'active' AND e.node_id IS NULL
+                  -- Same email-shaped test as the campaign. `Missing` is the
+                  -- only scope that enumerates files rather than existing
+                  -- projections, so it is the only one that can pick up a PDF.
+                  AND (n.name ILIKE '%.eml' OR f.mime_type = 'message/rfc822')
                   AND NOT EXISTS (
                       SELECT 1 FROM jobs j
                       WHERE j.target_node_id = n.id AND j.job_type = 'email_extraction'
@@ -2891,24 +2936,7 @@ pub async fn enqueue_email_reprocessing(
             .await?
         }
     };
-    let mut enqueued = 0;
-    for node_id in node_ids {
-        if enqueue_job_with_context(
-            pool,
-            JobType::EmailExtraction,
-            node_id,
-            -50,
-            JobOrigin::Repair,
-            None,
-            JobResourceClass::HeavyCpu,
-        )
-        .await?
-        .is_some()
-        {
-            enqueued += 1;
-        }
-    }
-    Ok(enqueued)
+    Ok(node_ids)
 }
 
 /// One MIME family bucket in the read-only OCR preflight report.
