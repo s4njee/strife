@@ -1,0 +1,137 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH RECURSIVE candidates AS (\n            -- Only a file OCR has touched can contribute to a rollup. Deriving\n            -- the set from these two indexed reads keeps the query\n            -- proportional to the OCR corpus rather than to the library: the\n            -- previous version sequentially scanned every row in `nodes` on\n            -- every expansion, and then discarded all but one folder's\n            -- children.\n            SELECT node_id AS id FROM document_text\n            UNION\n            SELECT target_node_id FROM jobs\n            WHERE job_type = 'ocr' AND state IN ('pending', 'leased')\n        ),\n        file_status AS (\n            SELECT\n                n.id,\n                n.parent_id,\n                n.name,\n                COALESCE(dt.updated_at, n.updated_at) AS updated_at,\n                CASE\n                    WHEN active.state = 'leased' THEN 'running'\n                    WHEN active.state = 'pending' THEN 'pending'\n                    WHEN dt.status = 'completed' AND dt.source = 'embedded' THEN 'skipped'\n                    ELSE dt.status::text\n                END AS status,\n                dt.source::text AS source,\n                dt.page_count,\n                dt.mean_confidence,\n                dt.char_count\n            FROM candidates\n            JOIN nodes n ON n.id = candidates.id\n            LEFT JOIN document_text dt ON dt.node_id = n.id\n            LEFT JOIN LATERAL (\n                SELECT state\n                FROM jobs\n                WHERE target_node_id = n.id\n                  AND job_type = 'ocr'\n                  AND state IN ('pending', 'leased')\n                ORDER BY CASE WHEN state = 'leased' THEN 0 ELSE 1 END, created_at, id\n                LIMIT 1\n            ) active ON TRUE\n            WHERE n.kind = 'file'\n              AND n.lifecycle_state = 'active'\n        ),\n        folder_direct AS (\n            -- Aggregate before recursing. Carrying one subtotal per folder up\n            -- the tree moves thousands of rows where carrying one row per file\n            -- moved hundreds of thousands.\n            SELECT\n                parent_id AS folder_id,\n                count(*) AS total_files,\n                count(*) FILTER (WHERE status = 'pending') AS pending,\n                count(*) FILTER (WHERE status = 'running') AS running,\n                count(*) FILTER (WHERE status = 'completed') AS completed,\n                count(*) FILTER (WHERE status = 'failed') AS failed,\n                count(*) FILTER (WHERE status = 'skipped') AS skipped,\n                count(*) FILTER (WHERE status = 'unsupported') AS unsupported\n            FROM file_status\n            WHERE parent_id IS NOT NULL\n            GROUP BY parent_id\n        ),\n        ancestry AS (\n            SELECT folder_id, total_files, pending, running, completed,\n                   failed, skipped, unsupported\n            FROM folder_direct\n            UNION ALL\n            -- The parent lookup is a correlated primary-key subquery rather\n            -- than a join. A join lets the planner hash the whole of `nodes`\n            -- once per recursion level, which on a thirteen-level tree meant\n            -- thirteen full-table hashes and dominated the query.\n            SELECT\n                (SELECT parent.parent_id FROM nodes parent WHERE parent.id = a.folder_id),\n                a.total_files, a.pending, a.running, a.completed,\n                a.failed, a.skipped, a.unsupported\n            FROM ancestry a\n            WHERE (SELECT parent.parent_id FROM nodes parent WHERE parent.id = a.folder_id)\n                  IS NOT NULL\n        ),\n        folder_counts AS (\n            SELECT\n                folder_id,\n                sum(total_files)::bigint AS total_files,\n                sum(pending)::bigint AS pending,\n                sum(running)::bigint AS running,\n                sum(completed)::bigint AS completed,\n                sum(failed)::bigint AS failed,\n                sum(skipped)::bigint AS skipped,\n                sum(unsupported)::bigint AS unsupported\n            FROM ancestry\n            GROUP BY folder_id\n        ),\n        tree_nodes AS (\n            SELECT\n                child.id,\n                child.parent_id,\n                child.name,\n                'folder'::text AS kind,\n                NULL::text AS status,\n                NULL::text AS source,\n                NULL::integer AS page_count,\n                NULL::real AS mean_confidence,\n                NULL::integer AS char_count,\n                child.updated_at,\n                counts.total_files,\n                counts.pending,\n                counts.running,\n                counts.completed,\n                counts.failed,\n                counts.skipped,\n                counts.unsupported\n            FROM nodes child\n            JOIN folder_counts counts ON counts.folder_id = child.id\n            WHERE child.parent_id = $1\n              AND child.kind = 'folder'\n              AND child.lifecycle_state = 'active'\n            UNION ALL\n            SELECT\n                file.id,\n                file.parent_id,\n                file.name,\n                'file'::text,\n                file.status,\n                file.source,\n                file.page_count,\n                file.mean_confidence,\n                file.char_count,\n                file.updated_at,\n                1::bigint,\n                CASE WHEN file.status = 'pending' THEN 1 ELSE 0 END,\n                CASE WHEN file.status = 'running' THEN 1 ELSE 0 END,\n                CASE WHEN file.status = 'completed' THEN 1 ELSE 0 END,\n                CASE WHEN file.status = 'failed' THEN 1 ELSE 0 END,\n                CASE WHEN file.status = 'skipped' THEN 1 ELSE 0 END,\n                CASE WHEN file.status = 'unsupported' THEN 1 ELSE 0 END\n            FROM file_status file\n            WHERE file.parent_id = $1\n        )\n        SELECT\n            id AS \"id!\",\n            parent_id,\n            name AS \"name!\",\n            kind AS \"kind!\",\n            status,\n            source,\n            page_count,\n            mean_confidence,\n            char_count,\n            updated_at AS \"updated_at!\",\n            total_files AS \"total_files!\",\n            pending AS \"pending!\",\n            running AS \"running!\",\n            completed AS \"completed!\",\n            failed AS \"failed!\",\n            skipped AS \"skipped!\",\n            unsupported AS \"unsupported!\"\n        FROM tree_nodes\n        ORDER BY (kind = 'folder') DESC, lower(name), id\n        LIMIT $2 OFFSET $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "parent_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "source",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "page_count",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "mean_confidence",
+        "type_info": "Float4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "char_count",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "total_files!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "pending!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "running!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "completed!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "failed!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "skipped!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "unsupported!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d7cac4ac2ba055036a57573d1a2c39dddc94542d9391296940f3c7e57408fe4a"
+}

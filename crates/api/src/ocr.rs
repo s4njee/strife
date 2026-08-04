@@ -132,7 +132,19 @@ async fn tree(
     let offset = query.offset.unwrap_or_default();
     let mut rows = sqlx::query!(
         r#"
-        WITH RECURSIVE file_status AS (
+        WITH RECURSIVE candidates AS (
+            -- Only a file OCR has touched can contribute to a rollup. Deriving
+            -- the set from these two indexed reads keeps the query
+            -- proportional to the OCR corpus rather than to the library: the
+            -- previous version sequentially scanned every row in `nodes` on
+            -- every expansion, and then discarded all but one folder's
+            -- children.
+            SELECT node_id AS id FROM document_text
+            UNION
+            SELECT target_node_id FROM jobs
+            WHERE job_type = 'ocr' AND state IN ('pending', 'leased')
+        ),
+        file_status AS (
             SELECT
                 n.id,
                 n.parent_id,
@@ -148,7 +160,8 @@ async fn tree(
                 dt.page_count,
                 dt.mean_confidence,
                 dt.char_count
-            FROM nodes n
+            FROM candidates
+            JOIN nodes n ON n.id = candidates.id
             LEFT JOIN document_text dt ON dt.node_id = n.id
             LEFT JOIN LATERAL (
                 SELECT state
@@ -161,21 +174,13 @@ async fn tree(
             ) active ON TRUE
             WHERE n.kind = 'file'
               AND n.lifecycle_state = 'active'
-              AND (dt.node_id IS NOT NULL OR active.state IS NOT NULL)
         ),
-        ancestry AS (
-            SELECT parent_id AS folder_id, status
-            FROM file_status
-            WHERE parent_id IS NOT NULL
-            UNION ALL
-            SELECT parent.parent_id, ancestry.status
-            FROM ancestry
-            JOIN nodes parent ON parent.id = ancestry.folder_id
-            WHERE parent.parent_id IS NOT NULL
-        ),
-        folder_counts AS (
+        folder_direct AS (
+            -- Aggregate before recursing. Carrying one subtotal per folder up
+            -- the tree moves thousands of rows where carrying one row per file
+            -- moved hundreds of thousands.
             SELECT
-                folder_id,
+                parent_id AS folder_id,
                 count(*) AS total_files,
                 count(*) FILTER (WHERE status = 'pending') AS pending,
                 count(*) FILTER (WHERE status = 'running') AS running,
@@ -183,6 +188,37 @@ async fn tree(
                 count(*) FILTER (WHERE status = 'failed') AS failed,
                 count(*) FILTER (WHERE status = 'skipped') AS skipped,
                 count(*) FILTER (WHERE status = 'unsupported') AS unsupported
+            FROM file_status
+            WHERE parent_id IS NOT NULL
+            GROUP BY parent_id
+        ),
+        ancestry AS (
+            SELECT folder_id, total_files, pending, running, completed,
+                   failed, skipped, unsupported
+            FROM folder_direct
+            UNION ALL
+            -- The parent lookup is a correlated primary-key subquery rather
+            -- than a join. A join lets the planner hash the whole of `nodes`
+            -- once per recursion level, which on a thirteen-level tree meant
+            -- thirteen full-table hashes and dominated the query.
+            SELECT
+                (SELECT parent.parent_id FROM nodes parent WHERE parent.id = a.folder_id),
+                a.total_files, a.pending, a.running, a.completed,
+                a.failed, a.skipped, a.unsupported
+            FROM ancestry a
+            WHERE (SELECT parent.parent_id FROM nodes parent WHERE parent.id = a.folder_id)
+                  IS NOT NULL
+        ),
+        folder_counts AS (
+            SELECT
+                folder_id,
+                sum(total_files)::bigint AS total_files,
+                sum(pending)::bigint AS pending,
+                sum(running)::bigint AS running,
+                sum(completed)::bigint AS completed,
+                sum(failed)::bigint AS failed,
+                sum(skipped)::bigint AS skipped,
+                sum(unsupported)::bigint AS unsupported
             FROM ancestry
             GROUP BY folder_id
         ),

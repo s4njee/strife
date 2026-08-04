@@ -306,3 +306,162 @@ async fn status_search_text_reprocess_and_sse_contracts() {
     }
     let _ = tokio::fs::remove_dir_all(storage_root).await;
 }
+
+/// Rollups must survive more than one level and more than one status.
+///
+/// The tree query aggregates each folder's own files and then propagates those
+/// subtotals up the ancestor chain, rather than carrying one row per file to
+/// the root. Anything shallower than a grandparent, or single-status, cannot
+/// tell a correct propagation from one that drops or double-counts a level.
+async fn folder(pool: &PgPool, parent: Uuid, name: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'folder')")
+        .bind(id)
+        .bind(parent)
+        .bind(format!("{name}-{id}"))
+        .execute(pool)
+        .await
+        .expect("create folder");
+    id
+}
+
+async fn file_with_status(
+    pool: &PgPool,
+    parent: Uuid,
+    name: &str,
+    status: DocumentTextStatus,
+    source: DocumentTextSource,
+) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'file')")
+        .bind(id)
+        .bind(parent)
+        .bind(format!("{name}-{id}"))
+        .execute(pool)
+        .await
+        .expect("create file");
+    replace_document_text(
+        pool,
+        &UpsertDocumentText {
+            node_id: id,
+            source,
+            status,
+            language: "eng",
+            engine_name: "tesseract",
+            engine_version: "5.5-api",
+            page_count: Some(1),
+            mean_confidence: Some(80.0),
+            char_count: 10,
+            warnings: &[],
+            duration_ms: Some(1),
+        },
+        &[],
+    )
+    .await
+    .expect("store text");
+    id
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn tree_rollups_accumulate_through_every_ancestor_level() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("DATABASE_URL is unset; skipping PostgreSQL integration test");
+        return;
+    };
+
+    // root / top / middle / leaf, with files at three different depths so a
+    // level that fails to propagate shows up as a specific missing count.
+    let top = folder(&pool, ROOT_NODE_ID, "rollup-top").await;
+    let middle = folder(&pool, top, "rollup-middle").await;
+    let leaf = folder(&pool, middle, "rollup-leaf").await;
+
+    file_with_status(
+        &pool,
+        top,
+        "at-top",
+        DocumentTextStatus::Completed,
+        DocumentTextSource::Ocr,
+    )
+    .await;
+    file_with_status(
+        &pool,
+        middle,
+        "at-middle",
+        DocumentTextStatus::Failed,
+        DocumentTextSource::Ocr,
+    )
+    .await;
+    file_with_status(
+        &pool,
+        leaf,
+        "at-leaf-ocr",
+        DocumentTextStatus::Completed,
+        DocumentTextSource::Ocr,
+    )
+    .await;
+    // `embedded` text reports as skipped rather than completed.
+    file_with_status(
+        &pool,
+        leaf,
+        "at-leaf-embedded",
+        DocumentTextStatus::Completed,
+        DocumentTextSource::Embedded,
+    )
+    .await;
+
+    let app = strife_api::ocr::router(pool.clone());
+
+    let (_, top_view) = request(app.clone(), &format!("/api/ocr/tree?parent_id={top}")).await;
+    let middle_row = top_view["items"]
+        .as_array()
+        .expect("top items")
+        .iter()
+        .find(|item| item["id"] == middle.to_string())
+        .expect("middle folder listed under top");
+    // middle's own failure, plus both of leaf's files.
+    assert_eq!(middle_row["total_files"], 3, "{middle_row}");
+    assert_eq!(middle_row["completed"], 1, "{middle_row}");
+    assert_eq!(middle_row["failed"], 1, "{middle_row}");
+    assert_eq!(middle_row["skipped"], 1, "{middle_row}");
+
+    let (_, middle_view) = request(app.clone(), &format!("/api/ocr/tree?parent_id={middle}")).await;
+    let leaf_row = middle_view["items"]
+        .as_array()
+        .expect("middle items")
+        .iter()
+        .find(|item| item["id"] == leaf.to_string())
+        .expect("leaf folder listed under middle");
+    assert_eq!(leaf_row["total_files"], 2, "{leaf_row}");
+    assert_eq!(leaf_row["completed"], 1, "{leaf_row}");
+    assert_eq!(leaf_row["skipped"], 1, "{leaf_row}");
+    assert_eq!(leaf_row["failed"], 0, "{leaf_row}");
+
+    let (_, root_view) = request(app, &format!("/api/ocr/tree?parent_id={ROOT_NODE_ID}")).await;
+    let top_row = root_view["items"]
+        .as_array()
+        .expect("root items")
+        .iter()
+        .find(|item| item["id"] == top.to_string())
+        .expect("top folder listed under root");
+    // Every file in the subtree, counted once each.
+    assert_eq!(top_row["total_files"], 4, "{top_row}");
+    assert_eq!(top_row["completed"], 2, "{top_row}");
+    assert_eq!(top_row["failed"], 1, "{top_row}");
+    assert_eq!(top_row["skipped"], 1, "{top_row}");
+
+    // Deepest first: `nodes_parent_id_fkey` refuses to drop a folder that
+    // still has children.
+    for id in [leaf, middle, top] {
+        sqlx::query("DELETE FROM nodes WHERE parent_id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("clean up folder contents");
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("clean up folder");
+    }
+}
