@@ -60,8 +60,10 @@ checkout.
    `/opt/strife-releases/<revision>`, and point `/opt/strife-current` at it.
 3. Write `POSTGRES_PASSWORD` to `/etc/strife/postgres.env`; write
    `STRIFE_IMAGE_TAG`, `STRIFE_REVISION`, and `BACKFILL_ENABLED=false` to
-   `/etc/strife/revision.env`. Turning the gate on never resumes a paused
-   campaign by itself.
+   `/etc/strife/revision.env`. Optional `WORKER_CONCURRENCY`,
+   `OCR_CONCURRENCY`, and `HEAVY_CPU_CONCURRENCY` values in the same file tune
+   an operator-approved rollout without editing Compose. Turning the gate on
+   never resumes a paused campaign by itself.
 4. Build or load the four images for that revision, then install the unit:
 
    ```sh
