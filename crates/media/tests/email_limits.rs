@@ -302,3 +302,97 @@ fn a_truncated_message_fails_without_panicking() {
         let _ = parse_email(source, limits());
     }
 }
+
+/// A NUL anywhere in a message must not reach the database.
+///
+/// NUL is valid UTF-8, so it survives every decode and validation step in the
+/// parser and only fails at the `PostgreSQL` insert, which rejects the entire
+/// statement with `invalid byte sequence for encoding "UTF8": 0x00`. On the
+/// Orion archive this failed roughly one message in 650 — not in the body
+/// alone, which is why this covers the header, subject, and filename paths that
+/// never pass through body normalization.
+#[test]
+fn nul_bytes_are_removed_from_every_persisted_field() {
+    let raw = "From: \"a\0da\" <ada@example.test>\r\n\
+         To: bob@example.test\r\n\
+         Subject: quarterly\0 report\r\n\
+         X-Odd-Header: value\0with\0nuls\r\n\
+         Date: Mon, 1 Jan 2018 00:00:00 +0000\r\n\
+         Message-ID: <nul@example.test>\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: multipart/mixed; boundary=b\r\n\r\n\
+         --b\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\r\n\
+         body text with a \0 in it\r\n\
+         --b\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Content-Disposition: attachment; filename=\"re\0port.bin\"\r\n\r\n\
+         payload\r\n\
+         --b--\r\n";
+
+    let parsed = parse_email(raw.as_bytes(), limits()).expect("a NUL must not fail the parse");
+
+    // Whatever survives, none of it may carry a NUL into PostgreSQL.
+    let mut checked = vec![
+        parsed.body_text.clone(),
+        parsed.preview_text.clone(),
+        parsed.content_hash.clone(),
+    ];
+    checked.extend(parsed.subject.clone());
+    checked.extend(parsed.normalized_subject.clone());
+    checked.extend(parsed.body_html.clone());
+    checked.extend(parsed.labels.iter().cloned());
+    checked.extend(parsed.warnings.iter().cloned());
+    for address in &parsed.addresses {
+        checked.push(address.address.clone());
+        checked.extend(address.display_name.clone());
+    }
+    for header in &parsed.headers {
+        checked.push(header.name.clone());
+        checked.push(header.value.clone());
+    }
+    for attachment in &parsed.attachments {
+        checked.push(attachment.part_path.clone());
+        checked.push(attachment.media_type.clone());
+        checked.extend(attachment.filename.clone());
+        checked.extend(attachment.disposition.clone());
+    }
+    for value in &checked {
+        assert!(
+            !value.contains('\0'),
+            "a NUL survived into a persisted field: {value:?}"
+        );
+    }
+
+    // The surrounding text is kept; only the NUL is dropped.
+    assert!(
+        parsed.body_text.contains("body text with a"),
+        "{:?}",
+        parsed.body_text
+    );
+    assert_eq!(parsed.subject.as_deref(), Some("quarterly report"));
+    assert!(
+        parsed.warnings.iter().any(|w| w.contains("NUL")),
+        "removal must be reported: {:?}",
+        parsed.warnings
+    );
+}
+
+/// The stored hash must be derivable from the stored text.
+#[test]
+fn the_content_hash_is_computed_after_nul_removal() {
+    let with_nul = "From: ada@example.test\r\nTo: bob@example.test\r\n\
+         Subject: same\r\nDate: Mon, 1 Jan 2018 00:00:00 +0000\r\n\
+         Message-ID: <a@example.test>\r\n\r\nidentical\0 body\r\n";
+    let without_nul = "From: ada@example.test\r\nTo: bob@example.test\r\n\
+         Subject: same\r\nDate: Mon, 1 Jan 2018 00:00:00 +0000\r\n\
+         Message-ID: <b@example.test>\r\n\r\nidentical body\r\n";
+
+    let dirty = parse_email(with_nul.as_bytes(), limits()).expect("parse with NUL");
+    let clean = parse_email(without_nul.as_bytes(), limits()).expect("parse without NUL");
+
+    // Hashing before removal would make these differ, and a message would then
+    // carry a hash that cannot be reproduced from what was actually stored.
+    assert_eq!(dirty.body_text, clean.body_text);
+    assert_eq!(dirty.content_hash, clean.content_hash);
+}

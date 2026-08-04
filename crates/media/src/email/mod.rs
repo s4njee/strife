@@ -104,6 +104,78 @@ pub struct ParsedEmail {
     pub parser_version: &'static str,
 }
 
+/// Removes NUL characters from a string, reporting whether any were present.
+fn remove_nul(value: &mut String) -> bool {
+    if !value.contains('\0') {
+        return false;
+    }
+    value.retain(|character| character != '\0');
+    true
+}
+
+fn remove_nul_opt(value: Option<&mut String>) -> bool {
+    value.is_some_and(remove_nul)
+}
+
+impl ParsedEmail {
+    /// Strips NUL characters from every field that is persisted.
+    ///
+    /// A NUL is perfectly valid UTF-8 and so survives every decode and
+    /// validation step in the parser, but `PostgreSQL` cannot store one in a
+    /// `text` column at all — it rejects the whole statement with `invalid byte
+    /// sequence for encoding "UTF8": 0x00`. Left alone, one stray byte
+    /// anywhere in a message fails the entire projection insert, and the
+    /// message is recorded as a failed job rather than an archived mail.
+    ///
+    /// This is deliberately a sweep over the whole struct rather than a fix in
+    /// `normalize_text`: header values, labels, attachment filenames, and
+    /// addresses never pass through body normalization, and any one of them
+    /// reaching the database with a NUL fails the insert just as completely.
+    ///
+    /// Returns whether anything was removed, so the caller can warn.
+    fn remove_nul_bytes(&mut self) -> bool {
+        let mut removed = false;
+        removed |= remove_nul_opt(self.message_id.as_mut());
+        removed |= remove_nul_opt(self.normalized_message_id.as_mut());
+        removed |= remove_nul_opt(self.in_reply_to.as_mut());
+        removed |= remove_nul_opt(self.subject.as_mut());
+        removed |= remove_nul_opt(self.normalized_subject.as_mut());
+        removed |= remove_nul_opt(self.provider_thread_id.as_mut());
+        removed |= remove_nul_opt(self.body_html.as_mut());
+        removed |= remove_nul(&mut self.body_text);
+        removed |= remove_nul(&mut self.preview_text);
+        for reference in &mut self.references {
+            removed |= remove_nul(reference);
+        }
+        for label in &mut self.labels {
+            removed |= remove_nul(label);
+        }
+        for warning in &mut self.warnings {
+            removed |= remove_nul(warning);
+        }
+        for address in &mut self.addresses {
+            removed |= remove_nul(&mut address.address);
+            removed |= remove_nul_opt(address.display_name.as_mut());
+        }
+        for header in &mut self.headers {
+            removed |= remove_nul(&mut header.name);
+            removed |= remove_nul(&mut header.value);
+        }
+        for attachment in &mut self.attachments {
+            removed |= remove_nul(&mut attachment.part_path);
+            removed |= remove_nul(&mut attachment.media_type);
+            removed |= remove_nul_opt(attachment.filename.as_mut());
+            removed |= remove_nul_opt(attachment.disposition.as_mut());
+            removed |= remove_nul_opt(attachment.content_id.as_mut());
+            removed |= remove_nul_opt(attachment.transfer_encoding.as_mut());
+            for warning in &mut attachment.warnings {
+                removed |= remove_nul(warning);
+            }
+        }
+        removed
+    }
+}
+
 /// Bounds applied while parsing one message.
 ///
 /// Defaults are provisional starting values; Story 22.2 profiles them on Orion
@@ -355,13 +427,12 @@ fn parse_email_inner(
         .filter_map(mail_parser::Received::date)
         .find_map(|date| to_utc(&date));
 
-    let content_hash = canonical_hash(&addresses, normalized_subject.as_deref(), &body_text);
     let parts = attachment_limits.map_or_else(Vec::new, |bounds| {
         collect_attachment_parts(&message, &paths, bounds, &mut warnings)
     });
     warnings.truncate(limits.max_warnings);
 
-    let email = ParsedEmail {
+    let mut email = ParsedEmail {
         message_id,
         normalized_message_id,
         in_reply_to: first_id(message.in_reply_to()),
@@ -377,12 +448,28 @@ fn parse_email_inner(
         body_text,
         body_html,
         preview_text,
-        content_hash,
+        // Set below, deliberately after NUL removal, so the stored hash is
+        // reproducible from the stored text rather than from bytes that were
+        // dropped on the way to the database.
+        content_hash: String::new(),
         attachments,
         warnings,
         parser_name: EMAIL_PARSER_NAME,
         parser_version: EMAIL_PARSER_VERSION,
     };
+    if email.remove_nul_bytes() {
+        // Worth surfacing rather than silently repairing: the stored message
+        // no longer matches its original byte-for-byte.
+        email
+            .warnings
+            .push("removed NUL bytes that PostgreSQL text cannot store".to_owned());
+        email.warnings.truncate(limits.max_warnings);
+    }
+    email.content_hash = canonical_hash(
+        &email.addresses,
+        email.normalized_subject.as_deref(),
+        &email.body_text,
+    );
     Ok(ParsedEmailWithParts { email, parts })
 }
 
