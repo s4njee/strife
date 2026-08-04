@@ -118,14 +118,16 @@ pub async fn normalize_ocr_input(
     tokio::fs::create_dir(&root)
         .await
         .context("create managed OCR page directory")?;
-    let result = rasterize(source, mime, &root, limits).await;
-    match result {
-        Ok(pages) => Ok(NormalizedOcrInput { root, pages }),
-        Err(error) => {
-            let _ = tokio::fs::remove_dir_all(root).await;
-            Err(error)
-        }
-    }
+    // Own the directory before rasterization begins. The worker wraps the
+    // complete OCR operation in an outer timeout, so this future can be
+    // cancelled while `rasterize` is awaiting Poppler or ImageMagick. Building
+    // the guard only after that await leaked partially written pages.
+    let mut normalized = NormalizedOcrInput {
+        root,
+        pages: Vec::new(),
+    };
+    normalized.pages = rasterize(source, mime, &normalized.root, limits).await?;
+    Ok(normalized)
 }
 
 async fn rasterize(
@@ -447,9 +449,32 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        OcrNormalizationLimits, SUPPORTED_OCR_MIMES, extract_ocr, is_raw_mime,
+        NormalizedOcrInput, OcrNormalizationLimits, SUPPORTED_OCR_MIMES, extract_ocr, is_raw_mime,
         is_supported_ocr_mime, normalize_ocr_input, verify_tesseract,
     };
+
+    #[tokio::test]
+    async fn managed_ocr_pages_are_removed_when_the_operation_is_cancelled() {
+        let root = std::env::temp_dir().join(format!("strife-ocr-cancelled-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create managed OCR directory");
+        fs::write(root.join("partial-page.png"), b"partial").expect("write partial page");
+        let normalized = NormalizedOcrInput {
+            root: root.clone(),
+            pages: Vec::new(),
+        };
+
+        let cancelled = tokio::time::timeout(Duration::from_millis(10), async move {
+            let _normalized = normalized;
+            std::future::pending::<()>().await;
+        })
+        .await;
+
+        assert!(cancelled.is_err(), "fixture operation must be cancelled");
+        assert!(
+            !root.exists(),
+            "cancelling normalization must remove partial raster pages"
+        );
+    }
 
     #[test]
     fn every_raw_mime_is_a_supported_ocr_input() {
