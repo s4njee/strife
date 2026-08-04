@@ -14,6 +14,18 @@ vi.mock('../components/FileDetailsPanel', () => ({
     <aside aria-label="File details">{props.item.name}</aside>
   ),
 }))
+vi.mock('../components/PreviewModal', () => ({
+  demoImage: 'data:image/svg+xml,demo',
+  PreviewModal: (props: {
+    item: { name: string }
+    files: { name: string }[]
+  }) => (
+    <div role="dialog" aria-label="Preview">
+      {props.item.name}
+      <span data-testid="preview-siblings">{props.files.length}</span>
+    </div>
+  ),
+}))
 
 const rootId = '00000000-0000-0000-0000-000000000001'
 const folderId = '00000000-0000-0000-0000-000000000101'
@@ -88,5 +100,46 @@ describe('OcrDocumentsView', () => {
         'Scanned book.pdf',
       ),
     )
+  })
+
+  it('opens a preview on double click and leaves single click selecting', async () => {
+    const user = userEvent.setup()
+    render(() => <OcrDocumentsView />)
+
+    await user.click(await screen.findByRole('button', { name: /Books/ }))
+    const file = await screen.findByText('Scanned book.pdf')
+
+    // A single click still opens the metadata panel, not the preview.
+    await user.click(file)
+    await waitFor(() =>
+      expect(screen.getByLabelText('File details')).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('dialog', { name: 'Preview' })).toBeNull()
+
+    await user.dblClick(file)
+    const preview = await screen.findByRole('dialog', { name: 'Preview' })
+    expect(preview).toHaveTextContent('Scanned book.pdf')
+    // The previewed file's own folder is what the modal steps through.
+    expect(screen.getByTestId('preview-siblings')).toHaveTextContent('1')
+  })
+
+  it('opens a preview on Enter, and a folder row expands instead', async () => {
+    const user = userEvent.setup()
+    render(() => <OcrDocumentsView />)
+
+    // Enter on a folder expands it rather than previewing it.
+    const folder = await screen.findByRole('button', { name: /Books/ })
+    folder.focus()
+    await user.keyboard('{Enter}')
+    const file = await screen.findByText('Scanned book.pdf')
+    expect(screen.queryByRole('dialog', { name: 'Preview' })).toBeNull()
+
+    const fileRow = file.closest('button')
+    expect(fileRow).not.toBeNull()
+    fileRow?.focus()
+    await user.keyboard('{Enter}')
+    expect(
+      await screen.findByRole('dialog', { name: 'Preview' }),
+    ).toHaveTextContent('Scanned book.pdf')
   })
 })

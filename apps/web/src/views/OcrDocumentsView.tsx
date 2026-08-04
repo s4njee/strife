@@ -4,24 +4,38 @@ import type { FileDetails, FolderItem, OcrTreeNode } from '../api/types'
 import { FileDetailsPanel } from '../components/FileDetailsPanel'
 import { FileIcon } from '../components/FileIcon'
 import { OcrTabs } from '../components/OcrTabs'
+import { demoImage, PreviewModal } from '../components/PreviewModal'
 import './OcrDocumentsView.css'
 
 const ROOT_FOLDER_ID = '00000000-0000-0000-0000-000000000001'
 const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
 
+/// The tree carries OCR state; the preview and details panel both speak the
+/// ordinary folder item shape, so translate once here rather than in each.
+function toFolderItem(node: OcrTreeNode): FolderItem {
+  return {
+    id: node.id,
+    name: node.name,
+    kind: 'file',
+    size_bytes: null,
+    created_at: node.updated_at,
+    updated_at: node.updated_at,
+  }
+}
+
 export function OcrDocumentsView() {
   const [selected, setSelected] = createSignal<OcrTreeNode>()
+  const [previewing, setPreviewing] = createSignal<FolderItem>()
+  // Siblings of the previewed file, so the modal's next/previous controls walk
+  // the folder the user opened rather than nothing at all.
+  const [previewSiblings, setPreviewSiblings] = createSignal<FolderItem[]>([])
   const selectedItem = (): FolderItem | undefined => {
     const file = selected()
-    if (!file) return undefined
-    return {
-      id: file.id,
-      name: file.name,
-      kind: 'file',
-      size_bytes: null,
-      created_at: file.updated_at,
-      updated_at: file.updated_at,
-    }
+    return file ? toFolderItem(file) : undefined
+  }
+  const openPreview = (node: OcrTreeNode, siblings: FolderItem[]) => {
+    setPreviewSiblings(siblings)
+    setPreviewing(toFolderItem(node))
   }
 
   return (
@@ -50,6 +64,7 @@ export function OcrDocumentsView() {
             parentId={ROOT_FOLDER_ID}
             depth={0}
             onSelect={setSelected}
+            onPreview={openPreview}
             selectedId={() => selected()?.id}
             root
           />
@@ -65,6 +80,18 @@ export function OcrDocumentsView() {
           )}
         </Show>
       </div>
+      <Show when={previewing()}>
+        {(item) => (
+          <PreviewModal
+            item={item()}
+            files={previewSiblings()}
+            staticDetails={staticPreview ? previewDetails(item()) : undefined}
+            staticSource={staticPreview ? demoImage : undefined}
+            onNavigate={setPreviewing}
+            onClose={() => setPreviewing(undefined)}
+          />
+        )}
+      </Show>
     </section>
   )
 }
@@ -73,6 +100,7 @@ function TreeBranch(props: {
   parentId: string
   depth: number
   onSelect: (node: OcrTreeNode) => void
+  onPreview: (node: OcrTreeNode, siblings: FolderItem[]) => void
   selectedId: () => string | undefined
   root?: boolean
 }) {
@@ -122,6 +150,12 @@ function TreeBranch(props: {
             node={node}
             depth={props.depth}
             onSelect={props.onSelect}
+            onPreview={props.onPreview}
+            siblings={() =>
+              items()
+                .filter((candidate) => candidate.kind === 'file')
+                .map(toFolderItem)
+            }
             selectedId={props.selectedId}
           />
         )}
@@ -159,10 +193,20 @@ function TreeNode(props: {
   node: OcrTreeNode
   depth: number
   onSelect: (node: OcrTreeNode) => void
+  onPreview: (node: OcrTreeNode, siblings: FolderItem[]) => void
+  /// Files alongside this row, so the preview can step through the folder.
+  siblings: () => FolderItem[]
   selectedId: () => string | undefined
 }) {
   const [open, setOpen] = createSignal(false)
   const folder = () => props.node.kind === 'folder'
+  const activate = () => {
+    if (folder()) {
+      setOpen((value) => !value)
+    } else {
+      props.onPreview(props.node, props.siblings())
+    }
+  }
   return (
     <li
       class="ocr-tree__item"
@@ -180,9 +224,20 @@ function TreeNode(props: {
           'is-selected': props.selectedId() === props.node.id,
         }}
         style={{ '--ocr-tree-depth': String(props.depth) }}
+        title={folder() ? undefined : 'Double-click or press Enter to open'}
         onClick={() =>
           folder() ? setOpen((value) => !value) : props.onSelect(props.node)
         }
+        onDblClick={activate}
+        onKeyDown={(event) => {
+          // A button fires click on both Enter and Space, so the two cannot be
+          // told apart without intercepting the key. Enter opens the file —
+          // matching the file table — while Space keeps its selecting default.
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            activate()
+          }
+        }}
       >
         <span class="ocr-tree__toggle" aria-hidden="true">
           {folder() ? (open() ? '⌄' : '›') : ''}
@@ -198,6 +253,7 @@ function TreeNode(props: {
           parentId={props.node.id}
           depth={props.depth + 1}
           onSelect={props.onSelect}
+          onPreview={props.onPreview}
           selectedId={props.selectedId}
         />
       </Show>
