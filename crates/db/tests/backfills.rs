@@ -323,7 +323,9 @@ async fn a_draining_campaign_still_yields_its_pending_work() {
     let mut settings = request();
     settings.kind = BackfillKind::AttachmentText;
     settings.resource_class = JobResourceClass::Extractor;
-    settings.foreground_fairness = 1;
+    // Unreachable by design: no counter value satisfies this, so the
+    // fairness-gated path can never be the one that claims the job.
+    settings.foreground_fairness = i32::MAX;
     settings.created_by_version = "drain-claim".to_owned();
     let campaign = create_backfill_campaign(&pool, &settings)
         .await
@@ -353,16 +355,16 @@ async fn a_draining_campaign_still_yields_its_pending_work() {
     .expect("enqueue backfill")
     .expect("new backfill job");
 
-    // Give the backfill its fairness budget so the claim turns only on
-    // campaign state, which is what this test is about.
-    sqlx::query(
-        "INSERT INTO job_claim_fairness (job_type, foreground_claims_since_backfill)
-         VALUES ('preview_generation', 100)
-         ON CONFLICT (job_type) DO UPDATE SET foreground_claims_since_backfill = 100",
-    )
-    .execute(&pool)
-    .await
-    .expect("satisfy fairness budget");
+    // The campaign's fairness requirement is set unreachably high (below, at
+    // construction) rather than by zeroing the shared counter. There are three
+    // campaign-state gates in the claim path, and satisfying the budget
+    // exercises only the first — which is how an incomplete fix passed a green
+    // test. A real drain has no foreground work of the type left, so the budget
+    // never advances and the unfairness fallback is the only path that can
+    // claim the tail. `job_claim_fairness` is global and mutated by tests
+    // running concurrently against this shared database, so pinning the
+    // requirement on the campaign is the only deterministic way to force the
+    // claim down that fallback.
 
     // The candidate set is exhausted while this job is still pending. The
     // state is set directly rather than through `transition_backfill_campaign`

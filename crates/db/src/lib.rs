@@ -4111,7 +4111,12 @@ pub async fn claim_job_with_resource_lease(
             FROM jobs
             JOIN backfill_campaigns c ON c.id = jobs.campaign_id
             WHERE jobs.job_type = $1 AND jobs.state = 'pending'
-              AND jobs.origin = 'backfill' AND c.state = 'running'
+              AND jobs.origin = 'backfill'
+              -- Third of the three campaign-state gates, and the one that
+              -- matters most for a drain: with no foreground work of this type
+              -- the fairness budget never advances, so this fallback is the
+              -- only path that claims the tail.
+              AND c.state IN ('running', 'draining')
               AND (SELECT count(*) FROM jobs active
                    WHERE active.campaign_id = c.id AND active.state = 'leased') < c.max_running
             ORDER BY jobs.priority DESC, jobs.created_at, jobs.id
