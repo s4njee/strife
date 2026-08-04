@@ -45,7 +45,7 @@ x-runtime-environment: &runtime-environment
   JOB_PURGE_BATCH: "500"
   RUST_LOG: info
   RUN_MIGRATIONS: "false"
-  BACKFILL_ENABLED: "false"
+  BACKFILL_ENABLED: ${BACKFILL_ENABLED:-false}
 
 x-hardened: &hardened
   restart: unless-stopped

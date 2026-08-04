@@ -43,7 +43,7 @@ the repository.
 /srv/strife/storage         canonical originals and derived storage
 /srv/strife/import          configured import inbox
 /etc/strife/postgres.env    POSTGRES_PASSWORD (root-readable only)
-/etc/strife/revision.env    immutable image tag and revision
+/etc/strife/revision.env    immutable image tag/revision and backfill gate
 ```
 
 Create the secret files with mode `0600`. Repository ignore rules reject every
@@ -56,7 +56,9 @@ checkout.
    UID/GID `10001`; PostgreSQL owns its own dataset inside the container.
 2. Clone the repository at `/opt/strife` and check out a reviewed immutable tag.
 3. Write `POSTGRES_PASSWORD` to `/etc/strife/postgres.env`; write
-   `STRIFE_IMAGE_TAG` and `STRIFE_REVISION` to `/etc/strife/revision.env`.
+   `STRIFE_IMAGE_TAG`, `STRIFE_REVISION`, and `BACKFILL_ENABLED=false` to
+   `/etc/strife/revision.env`. Turning the gate on never resumes a paused
+   campaign by itself.
 4. Build or load the four images for that revision, then install the unit:
 
    ```sh
@@ -73,7 +75,8 @@ checkout.
    backup and originals snapshot described in `docs/backfill.md`.
 2. Fetch and check out the reviewed tag, build/load its immutable images, and
    update `/etc/strife/revision.env`.
-3. Keep `BACKFILL_ENABLED=false`, pause any campaign, and let leased work drain.
+3. Keep `BACKFILL_ENABLED=false` in `/etc/strife/revision.env`, pause any
+   campaign, and let leased work drain.
 4. Run the one-shot `migrate` service, then reload the stack:
 
    ```sh
