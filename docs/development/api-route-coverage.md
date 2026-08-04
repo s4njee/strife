@@ -58,9 +58,10 @@ fails when a registered method/path has no explicit test owner.
 | `DELETE /api/nodes/{id}/permanent` | `nodes.rs:31` | `nodes_api.rs`, `edge_cases.rs` |
 | `POST /api/nodes/{id}/restore` | `nodes.rs:30` | `nodes_api.rs` |
 | `POST /api/nodes/{id}/trash` | `nodes.rs:28` | `nodes_api.rs` |
-| `GET /api/ocr/events` | `ocr.rs:80` | `ocr_api.rs` |
-| `GET /api/ocr/preflight` | `ocr.rs:79` | `ocr_api.rs` |
-| `GET /api/ocr/status` | `ocr.rs:78` | `ocr_api.rs` |
+| `GET /api/ocr/events` | `ocr.rs:116` | `ocr_api.rs` |
+| `GET /api/ocr/preflight` | `ocr.rs:115` | `ocr_api.rs` |
+| `GET /api/ocr/status` | `ocr.rs:113` | `ocr_api.rs` |
+| `GET /api/ocr/tree` | `ocr.rs:114` | `ocr_api.rs` |
 | `GET /api/ready` | `health.rs:112` | `health_api.rs`, `health.rs unit tests` |
 | `GET /api/search` | `search.rs:43` | `ocr_api.rs`, `error_contract.rs` |
 | `GET /api/storage/usage` | `storage_usage.rs:21` | `error_contract.rs` |
@@ -74,4 +75,4 @@ fails when a registered method/path has no explicit test owner.
 | `GET /health` | `health.rs:109` | `health_api.rs`, `health.rs unit tests` |
 | `GET /ready` | `health.rs:110` | `health_api.rs`, `health.rs unit tests` |
 
-**Total:** 68 registered method/path pairs.
+**Total:** 69 registered method/path pairs.

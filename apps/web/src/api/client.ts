@@ -30,6 +30,7 @@ import type {
   FileText,
   OcrPreflight,
   OcrStatus,
+  OcrTreeResponse,
   TextSearchResponse,
 } from './types'
 
@@ -195,6 +196,22 @@ export async function getOcrStatus(signal?: AbortSignal): Promise<OcrStatus> {
   if (!response.ok)
     throw new ApiClientError(`OCR status failed (${response.status}).`)
   return (await response.json()) as OcrStatus
+}
+
+export async function getOcrTree(
+  parentId: string,
+  offset = 0,
+  signal?: AbortSignal,
+): Promise<OcrTreeResponse> {
+  const params = new URLSearchParams({ parent_id: parentId })
+  if (offset > 0) params.set('offset', String(offset))
+  const response = await fetch(`/api/ocr/tree?${params.toString()}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok)
+    throw new ApiClientError(`OCR documents failed (${response.status}).`)
+  return (await response.json()) as OcrTreeResponse
 }
 
 export async function reprocessOcr(options: {

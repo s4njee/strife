@@ -201,6 +201,47 @@ Test coverage now includes the previously missing restart and foreground-isolati
 
 ---
 
+### Story 16.7 — OCR Status and Documents Subtabs
+
+As a user, I want OCR status and OCR documents separated into subtabs so that monitoring work and browsing its files are both clear. **Estimated: 5 points.**
+
+**Acceptance Criteria:**
+
+- [x] The existing sidebar keeps one OCR destination; the OCR area provides Status and Documents subtabs with distinct `/ocr` and `/ocr/documents` routes.
+- [x] Status preserves the existing counts, campaign controls, and live console without moving or weakening operational behavior.
+- [x] Documents presents the real library folder hierarchy and includes only active files with stored OCR state or queued/running OCR work.
+- [x] Folder rows load lazily and summarize descendant totals by pending, running, completed, failed, skipped, and unsupported state.
+- [x] File rows show OCR status, page count, and mean confidence; selecting a file opens the existing details panel and extracted-text controls.
+- [x] Each folder level is paginated and capped server-side so a large archive never becomes one unbounded response or DOM tree.
+- [x] The document browser works in static preview mode and provides loading, empty, retry, and load-more states.
+- [x] API integration coverage proves nested folders, aggregate counts, file status/source, and pagination; a frontend test proves lazy expansion and file selection.
+
+**Implementation report:** Added a shared OCR subtab bar while preserving `/ocr` as the existing Status page and registering `/ocr/documents` as a lazy file browser. `GET /api/ocr/tree` derives one requested hierarchy level from active document-text records and active OCR jobs, returns direct files plus only folders containing relevant descendants, summarizes every status recursively, sorts folders before files, and paginates at 100 rows by default with a hard 200-row cap. The browser expands folders on demand, shows status/page/confidence data, opens the established file-details and extracted-text panel, and ships deterministic preview data. The checked SQLx query, API route ledger, PostgreSQL integration contract, focused Solid interaction test, frontend build, lint, formatting, and API checks pass.
+
+**New files:**
+
+- `.sqlx/query-ab8b17fe6c3f2efe7bcff0e7a4c68a5b90c69a0b46da3f34f3925ba1519ec867.json`
+- `apps/web/src/components/OcrTabs.css`
+- `apps/web/src/components/OcrTabs.tsx`
+- `apps/web/src/views/OcrDocumentsView.css`
+- `apps/web/src/views/OcrDocumentsView.test.tsx`
+- `apps/web/src/views/OcrDocumentsView.tsx`
+
+**Modified files:**
+
+- `apps/web/src/api/client.ts`
+- `apps/web/src/api/types.ts`
+- `apps/web/src/index.tsx`
+- `apps/web/src/views/OcrStatusView.tsx`
+- `crates/api/src/ocr.rs`
+- `crates/api/tests/ocr_api.rs`
+- `docs/development/api-route-coverage.md`
+- `docs/ocr.md`
+- `docs/scrum/epic16.md`
+- `scripts/api-route-coverage.py`
+
+---
+
 ## Summary
 
 | Epic                                         | Milestone | Stories | Estimated Points |
@@ -208,8 +249,8 @@ Test coverage now includes the previously missing restart and foreground-isolati
 | 13 — OCR Decisions & Text Storage Foundation | M13       | 4       | 15               |
 | 14 — OCR Engine & Worker Pipeline            | M14       | 6       | 32               |
 | 15 — Document Text Search                    | M15       | 3       | 15               |
-| 16 — OCR Status & Text UI                    | M16       | 6       | 23               |
-| **OCR Total**                                |           | **19**  | **85**           |
+| 16 — OCR Status & Text UI                    | M16       | 7       | 28               |
+| **OCR Total**                                |           | **20**  | **90**           |
 
 > [!TIP]
 > At the ~30 points/sprint velocity assumed in [`scrum.md`](../../scrum.md), this is roughly **3 sprints** of work on top of the 105 stories already planned there. Story 16.6 is the production backfill amendment required by the later email plan.

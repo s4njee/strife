@@ -25,6 +25,7 @@ import type {
 } from '../api/types'
 import './ImportStatusView.css'
 import './OcrStatusView.css'
+import { OcrTabs } from '../components/OcrTabs'
 
 const staticPreview = import.meta.env.VITE_STATIC_PREVIEW === 'true'
 
@@ -292,6 +293,8 @@ export function OcrStatusView() {
           Extracted document text and live recognition activity.
         </p>
       </header>
+
+      <OcrTabs />
 
       <Show when={notice()}>
         {(message) => (

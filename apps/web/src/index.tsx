@@ -7,6 +7,7 @@ import App from './App.tsx'
 import { ImportStatusView } from './views/ImportStatusView'
 import { ErrorsView } from './views/ErrorsView'
 import { OcrStatusView } from './views/OcrStatusView'
+import { OcrDocumentsView } from './views/OcrDocumentsView'
 import { ConsoleView } from './views/ConsoleView'
 import { EmailView } from './views/EmailView'
 import { ThemeProvider } from './theme/ThemeProvider'
@@ -34,6 +35,7 @@ render(
         <Route path="/console" component={ConsoleView} />
         <Route path="/email" component={EmailView} />
         <Route path="/ocr" component={OcrStatusView} />
+        <Route path="/ocr/documents" component={OcrDocumentsView} />
         <Route path="/errors" component={ErrorsView} />
         <Route path="/trash" component={TrashView} />
       </Router>

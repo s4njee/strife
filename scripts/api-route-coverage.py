@@ -71,6 +71,7 @@ ROUTE_TESTS = {
     "PUT /api/nodes/{id}/favorite": "nodes_api.rs",
     "DELETE /api/nodes/{id}/favorite": "nodes_api.rs",
     "GET /api/ocr/status": "ocr_api.rs",
+    "GET /api/ocr/tree": "ocr_api.rs",
     "GET /api/ocr/preflight": "ocr_api.rs",
     "GET /api/ocr/events": "ocr_api.rs",
     "GET /api/search": "ocr_api.rs; error_contract.rs",

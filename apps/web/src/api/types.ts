@@ -187,6 +187,34 @@ export interface OcrStatus {
   language: string | null
 }
 
+export type OcrDocumentStatus =
+  'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'unsupported'
+
+export interface OcrTreeNode {
+  id: string
+  parent_id: string | null
+  name: string
+  kind: 'folder' | 'file'
+  status: OcrDocumentStatus | null
+  source: 'embedded' | 'ocr' | null
+  page_count: number | null
+  mean_confidence: number | null
+  char_count: number | null
+  updated_at: string
+  total_files: number
+  pending: number
+  running: number
+  completed: number
+  failed: number
+  skipped: number
+  unsupported: number
+}
+
+export interface OcrTreeResponse {
+  items: OcrTreeNode[]
+  next_offset: number | null
+}
+
 export interface OcrEvent {
   id: number
   node_id: string | null

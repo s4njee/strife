@@ -107,6 +107,25 @@ async fn status_search_text_reprocess_and_sse_contracts() {
         &["ordinary sibling page", &first_unique_page],
     )
     .await;
+    let tree_root = Uuid::new_v4();
+    let tree_child = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO nodes (id, parent_id, name, kind) VALUES ($1, $2, $3, 'folder'), ($4, $1, $5, 'folder')",
+    )
+    .bind(tree_root)
+    .bind(ROOT_NODE_ID)
+    .bind(format!("ocr-tree-root-{tree_root}"))
+    .bind(tree_child)
+    .bind("Scanned books")
+    .execute(&pool)
+    .await
+    .expect("create OCR tree folders");
+    sqlx::query("UPDATE nodes SET parent_id = $2 WHERE id = $1")
+        .bind(first)
+        .bind(tree_root)
+        .execute(&pool)
+        .await
+        .expect("move first OCR file into tree root");
     sqlx::query(
         "INSERT INTO file_objects (id, node_id, storage_key, byte_size, upload_state) \
          VALUES ($1, $2, $3, 1, 'finalized')",
@@ -123,6 +142,12 @@ async fn status_search_text_reprocess_and_sse_contracts() {
         &[&format!("{unique_term} in another document")],
     )
     .await;
+    sqlx::query("UPDATE nodes SET parent_id = $2 WHERE id = $1")
+        .bind(second)
+        .bind(tree_child)
+        .execute(&pool)
+        .await
+        .expect("move second OCR file into nested tree folder");
     let trashed = create_text_file(
         &pool,
         &format!("ocr-api-trash-{}.pdf", Uuid::new_v4()),
@@ -141,6 +166,33 @@ async fn status_search_text_reprocess_and_sse_contracts() {
     assert_eq!(status_code, StatusCode::OK);
     assert_eq!(status["engine_version"], "5.5-api");
     assert!(status["counts"]["completed"].as_i64().unwrap_or_default() >= 3);
+
+    let (_, tree_page) = request(
+        app.clone(),
+        &format!("/api/ocr/tree?parent_id={tree_root}&limit=1"),
+    )
+    .await;
+    assert_eq!(tree_page["items"].as_array().expect("tree items").len(), 1);
+    assert_eq!(tree_page["items"][0]["kind"], "folder");
+    assert_eq!(tree_page["items"][0]["name"], "Scanned books");
+    assert_eq!(tree_page["items"][0]["total_files"], 1);
+    assert_eq!(tree_page["items"][0]["completed"], 1);
+    assert_eq!(tree_page["next_offset"], 1);
+    let (_, second_tree_page) = request(
+        app.clone(),
+        &format!("/api/ocr/tree?parent_id={tree_root}&limit=1&offset=1"),
+    )
+    .await;
+    assert_eq!(second_tree_page["items"][0]["id"], first.to_string());
+    assert_eq!(second_tree_page["items"][0]["status"], "completed");
+    assert_eq!(second_tree_page["items"][0]["source"], "ocr");
+    assert_eq!(second_tree_page["next_offset"], Value::Null);
+    let (_, nested_tree_page) = request(
+        app.clone(),
+        &format!("/api/ocr/tree?parent_id={tree_child}"),
+    )
+    .await;
+    assert_eq!(nested_tree_page["items"][0]["id"], second.to_string());
 
     let (empty_code, empty) = request(app.clone(), "/api/search?q=%20%20").await;
     assert_eq!(empty_code, StatusCode::BAD_REQUEST);
@@ -244,6 +296,13 @@ async fn status_search_text_reprocess_and_sse_contracts() {
             .execute(&pool)
             .await
             .expect("clean up OCR API node");
+    }
+    for folder_id in [tree_child, tree_root] {
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(folder_id)
+            .execute(&pool)
+            .await
+            .expect("clean up OCR tree folder");
     }
     let _ = tokio::fs::remove_dir_all(storage_root).await;
 }

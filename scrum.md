@@ -2660,11 +2660,11 @@ As a developer, I want SQL verified against the schema at build time so that typ
 - [x] A `make sqlx-prepare` target (or equivalent documented command) exists so contributors can refresh the offline cache after adding a migration.
 - [x] Tests: the full workspace test suite passes unchanged.
 
-**Implementation report:** The current tree has outgrown the story's 88-query survey: the generated inventory now contains 223 runtime-checked exceptions after the OCR, email, backfill, and repair work. Fourteen statically typed API queries use checked macros, including all three storage `SUM(...)::BIGINT` aggregates, job and search counts, SSE cursors, file metadata and stream projections, text paging, and existence checks. PostgreSQL cannot prove several aggregate expressions non-null, so those queries use explicit SQLx `!` overrides; this makes the intended Rust type part of the checked query instead of a runtime assumption.
+**Implementation report:** The current tree has outgrown the story's 88-query survey: the generated inventory now contains 223 runtime-checked exceptions after the OCR, email, backfill, and repair work. Fifteen statically typed API queries use checked macros, including all three storage `SUM(...)::BIGINT` aggregates, job and search counts, SSE cursors, the OCR document tree, file metadata and stream projections, text paging, and existence checks. PostgreSQL cannot prove several aggregate expressions non-null, so those queries use explicit SQLx `!` overrides; this makes the intended Rust type part of the checked query instead of a runtime assumption.
 
 ADR 0010 records the boundary discovered during conversion. SQLx cannot directly infer Strife's custom PostgreSQL enums, `tsvector`, shared `FromRow` records, synthetic response fields, dynamic statements, and many CTE projections. The project does not use SQLx's unchecked macros to paper over that boundary. Instead, all 223 runtime exceptions are individually listed in a generated inventory with a reason class. CI regenerates the inventory and fails on drift, so a new runtime query cannot silently bypass review. Story 12.1's domain module split owns converting each group with explicit projections rather than mixing a type-contract rewrite into its pure file move.
 
-The offline cache now contains 14 entries and passes `cargo sqlx prepare --check --workspace -- --all-targets`. `make sqlx-prepare` migrates before refreshing; `make sqlx-check` rejects stale cache data. CI installs the pinned SQLx CLI, migrates PostgreSQL, checks the cache and runtime inventory, and runs a temporary deliberately wrong `TEXT`-to-`i64` macro assignment that must fail with a Rust type mismatch. Offline workspace Clippy, compile, and the full workspace test suite all pass.
+The offline cache now contains 15 entries and passes `cargo sqlx prepare --check --workspace -- --all-targets`. `make sqlx-prepare` migrates before refreshing; `make sqlx-check` rejects stale cache data. CI installs the pinned SQLx CLI, migrates PostgreSQL, checks the cache and runtime inventory, and runs a temporary deliberately wrong `TEXT`-to-`i64` macro assignment that must fail with a Rust type mismatch. Offline workspace Clippy, compile, and the full workspace test suite all pass.
 
 **New files:**
 
@@ -2689,7 +2689,7 @@ The offline cache now contains 14 entries and passes `cargo sqlx prepare --check
 - `docs/scrum/epic8.md`
 - `scrum.md`
 
-**Completion verification (2026-08-04):** The 68-route ownership generator and 223-entry runtime-query inventory regenerated without diff. The 14-entry offline SQLx cache passed `cargo sqlx prepare --check --workspace -- --all-targets`, and the deliberate wrong-result-type guard failed compilation as required. Warning-denied workspace Clippy and the complete serial Rust workspace test suite passed, including the unified error contract, internal-cause logging, request tracing and request-id, storage/job/admin/favorites coverage, and healthy/degraded readiness tests.
+**Completion verification (2026-08-04):** The 69-route ownership generator and 223-entry runtime-query inventory regenerated without diff. The 15-entry offline SQLx cache passed `cargo sqlx prepare --check --workspace -- --all-targets`, and the deliberate wrong-result-type guard failed compilation as required. Warning-denied workspace Clippy and the complete serial Rust workspace test suite passed, including the unified error contract, internal-cause logging, request tracing and request-id, storage/job/admin/favorites coverage, and healthy/degraded readiness tests.
 
 ---
 
