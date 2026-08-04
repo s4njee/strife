@@ -8,12 +8,12 @@ RequiresMountsFor=/srv/strife
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/strife
+WorkingDirectory=/opt/strife-current
 Environment=STRIFE_IMAGE_TAG=main
 EnvironmentFile=/etc/strife/revision.env
-ExecStart=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife/docker-compose.prod.yml up -d --wait --no-build
-ExecReload=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife/docker-compose.prod.yml up -d --wait --no-build
-ExecStop=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife/docker-compose.prod.yml down
+ExecStart=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife-current/docker-compose.prod.yml up -d --wait --no-build
+ExecReload=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife-current/docker-compose.prod.yml up -d --wait --no-build
+ExecStop=/usr/bin/docker compose --env-file /etc/strife/postgres.env -f /opt/strife-current/docker-compose.prod.yml down
 TimeoutStartSec=10min
 TimeoutStopSec=12min
 

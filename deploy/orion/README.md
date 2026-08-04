@@ -38,7 +38,9 @@ the repository.
 ## Host layout and secrets
 
 ```text
-/opt/strife                 checked-out deployment revision
+/opt/strife                 preserved operator/development checkout
+/opt/strife-releases/<rev>  immutable clean deployment worktree
+/opt/strife-current         symlink to the active immutable release
 /srv/strife/postgres        PostgreSQL dataset (16 KiB record size)
 /srv/strife/storage         canonical originals and derived storage
 /srv/strife/import          configured import inbox
@@ -54,7 +56,8 @@ checkout.
 
 1. Create the datasets/directories above and grant storage/import ownership to
    UID/GID `10001`; PostgreSQL owns its own dataset inside the container.
-2. Clone the repository at `/opt/strife` and check out a reviewed immutable tag.
+2. Clone the repository at `/opt/strife`, create a clean reviewed worktree under
+   `/opt/strife-releases/<revision>`, and point `/opt/strife-current` at it.
 3. Write `POSTGRES_PASSWORD` to `/etc/strife/postgres.env`; write
    `STRIFE_IMAGE_TAG`, `STRIFE_REVISION`, and `BACKFILL_ENABLED=false` to
    `/etc/strife/revision.env`. Turning the gate on never resumes a paused
