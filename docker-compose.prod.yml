@@ -23,7 +23,7 @@ x-runtime-environment: &runtime-environment
   # per-family caps inside a process, not the archive-wide limit. All default to
   # 1 on Orion: four cores are shared with Postgres, Tika, and the API.
   OCR_CONCURRENCY: ${OCR_CONCURRENCY:-1}
-  EMAIL_PARSE_CONCURRENCY: "1"
+  EMAIL_PARSE_CONCURRENCY: ${EMAIL_PARSE_CONCURRENCY:-1}
   ATTACHMENT_EXTRACTION_CONCURRENCY: "1"
   HEAVY_CPU_CONCURRENCY: ${HEAVY_CPU_CONCURRENCY:-1}
   # Provisional email parser limits. Profiled on Orion before being treated as

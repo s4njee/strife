@@ -2736,8 +2736,6 @@ pub async fn enqueue_email_backfill_batch(
         r"
         SELECT n.id, n.created_at
         FROM nodes n
-        JOIN file_objects f ON f.node_id = n.id AND f.upload_state = 'finalized'
-        LEFT JOIN email_messages e ON e.node_id = n.id
         WHERE n.kind = 'file' AND n.lifecycle_state = 'active'
           -- Only email-shaped files. Without this the campaign enqueues the
           -- whole library and spends the single heavy_cpu permit proving that
@@ -2746,10 +2744,23 @@ pub async fn enqueue_email_backfill_batch(
           -- because a real `.eml` is detected from its body as text/plain,
           -- text/html, or text/x-diff far more often than as message/rfc822 —
           -- the handler's own byte-sniffing fallback is what makes those parse.
-          AND (n.name ILIKE '%.eml' OR f.mime_type = 'message/rfc822')
           AND n.created_at < $1
-          AND (e.node_id IS NULL OR e.parser_version IS DISTINCT FROM $2)
           AND ($3::timestamptz IS NULL OR (n.created_at, n.id) > ($3, $4))
+          -- Each per-node check is a correlated EXISTS so the planner keeps
+          -- nodes_backfill_created_at_idx as the driving ordered index walk and
+          -- stops after the batch. The previous hash-join shape made the whole
+          -- node library a parallel scan plus sort (the bound row-comparison
+          -- cursor defeats the cardinality estimate), measured at 40-80s per
+          -- refill pass against the live archive.
+          AND EXISTS (
+              SELECT 1 FROM file_objects f
+              WHERE f.node_id = n.id AND f.upload_state = 'finalized'
+                AND (n.name ILIKE '%.eml' OR f.mime_type = 'message/rfc822')
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM email_messages e
+              WHERE e.node_id = n.id AND e.parser_version IS NOT DISTINCT FROM $2
+          )
           AND NOT EXISTS (
               SELECT 1 FROM jobs j
               WHERE j.target_node_id = n.id AND j.job_type = 'email_extraction'
@@ -3640,6 +3651,11 @@ pub async fn list_backfill_campaign_events_after(
 
 /// Computes how many candidates a kind-specific scheduler may enqueue.
 ///
+/// `queued` counts only jobs of the campaign's own kind (see the `CASE` on
+/// `kind`): downstream jobs a provider spawns share the campaign id but do not
+/// consume its `max_queued` budget, so a backed-up downstream stage cannot
+/// starve the refill.
+///
 /// # Errors
 ///
 /// Returns a database error when campaign queue depth cannot be queried.
@@ -3649,26 +3665,43 @@ pub async fn get_backfill_refill_window(
 ) -> Result<Option<BackfillRefillWindow>, sqlx::Error> {
     sqlx::query_as(
         r"
-        SELECT c.id AS campaign_id, c.batch_size,
-               count(j.id) FILTER (WHERE j.state IN ('pending', 'leased')) AS queued,
-               LEAST(
-                   c.batch_size::bigint,
-                   GREATEST(c.max_queued::bigint - count(j.id) FILTER (
+        WITH campaign AS (
+            SELECT c.id, c.batch_size, c.max_queued, c.enqueued_count,
+                   c.candidate_definition,
+                   count(j.id) FILTER (
+                       -- Only the campaign's own enqueued jobs count against
+                       -- max_queued. Downstream work a provider spawns while
+                       -- processing (e.g. attachment extraction for an email
+                       -- campaign) shares the campaign id; counting it would
+                       -- let a slow downstream stage consume the whole queue
+                       -- budget and starve the campaign's refill.
                        WHERE j.state IN ('pending', 'leased')
-                   ), 0),
+                         AND j.job_type = (CASE c.kind
+                             WHEN 'email' THEN 'email_extraction'
+                             WHEN 'ocr' THEN 'ocr'
+                             WHEN 'attachment_text' THEN 'attachment_extraction'
+                             WHEN 'attachment_ocr' THEN 'attachment_extraction'
+                         END)::job_type
+                   ) AS queued
+            FROM backfill_campaigns c
+            LEFT JOIN jobs j ON j.campaign_id = c.id
+            WHERE c.id = $1 AND c.state = 'running'
+            GROUP BY c.id
+        )
+        SELECT id AS campaign_id, batch_size, queued,
+               LEAST(
+                   batch_size::bigint,
+                   GREATEST(max_queued::bigint - queued, 0),
                    GREATEST(
                        COALESCE(
-                           NULLIF(c.candidate_definition ->> 'canary_limit', '')::bigint
-                               - c.enqueued_count,
-                           c.batch_size::bigint
+                           NULLIF(candidate_definition ->> 'canary_limit', '')::bigint
+                               - enqueued_count,
+                           batch_size::bigint
                        ),
                        0
                    )
                ) AS allowance
-        FROM backfill_campaigns c
-        LEFT JOIN jobs j ON j.campaign_id = c.id
-        WHERE c.id = $1 AND c.state = 'running'
-        GROUP BY c.id
+        FROM campaign
         ",
     )
     .bind(campaign_id)

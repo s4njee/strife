@@ -173,7 +173,7 @@ The scheduler is a durable coordinator, not a loop that enumerates all candidate
 
 For each running campaign:
 
-1. Read current pending and leased jobs for the campaign using indexed counts.
+1. Read current pending and leased jobs for the campaign using indexed counts. Only jobs of the campaign's own kind count against `max_queued`; downstream jobs a provider spawns while processing (e.g. attachment extraction under an email campaign) share the campaign id but do not consume its refill budget, so a slow downstream stage cannot starve the refill.
 2. If the active count is at or above `max_queued`, do nothing.
 3. Calculate the refill allowance as the lesser of `batch_size` and remaining queue capacity.
 4. Select eligible active nodes after the durable tuple cursor and before `snapshot_before`.
